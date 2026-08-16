@@ -16,7 +16,7 @@ columns:
 # new issue, not a rename. Everything else is optional.
 issues:
   - title: Set up the board from YAML
-    labels: [Doing]
+    labels: [Review]
     description: |
       Multi-line descriptions work. Markdown is fine here.
     assignee: root

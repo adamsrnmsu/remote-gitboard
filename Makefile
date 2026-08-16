@@ -16,7 +16,7 @@ PROJECT    ?=
 SPEC       ?=
 GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help install link unlink up wait down reset logs seed show plan apply test fmt lint clean
+.PHONY: help install activate link unlink up wait down reset logs seed show plan apply test fmt lint clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -28,6 +28,18 @@ $(VENV)/bin/pytest: pyproject.toml
 	@echo "installed into $(VENV)"
 
 install: $(VENV)/bin/pytest  ## create .venv and install everything
+
+activate:  ## open a subshell with .venv active (exit to leave)
+	@test -x $(VENV)/bin/python || { \
+	  echo "no $(VENV) here — run: make install" >&2; \
+	  exit 1; }
+	@echo "$(VENV) active — python, pytest, ruff, gitboard are on PATH."
+	@echo "Type 'exit' to leave. (make cannot change your current shell, so"
+	@echo "this is a subshell; 'source $(VENV)/bin/activate' does it in place.)"
+	@VIRTUAL_ENV="$(CURDIR)/$(VENV)" \
+	 PATH="$(CURDIR)/$(VENV)/bin:$$PATH" \
+	 PYTHONPATH="$(CURDIR)/src" \
+	 $$SHELL
 
 link: install  ## put a `gitboard` command in ~/.local/bin (points back here)
 	@mkdir -p $(HOME)/.local/bin

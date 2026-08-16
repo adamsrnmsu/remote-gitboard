@@ -6,11 +6,20 @@ label', so the column mapping has to be reassembled from board.lists +
 project.issues.
 """
 
+from datetime import date
+
 from rich.text import Text
 from rich.tree import Tree
 
 from gitboard import client
 from gitboard.log import out
+
+
+def is_overdue(issue, today=None):
+    """ISO dates compare correctly as strings, so no parsing is needed."""
+    return bool(issue.due_date) and issue.due_date < (
+        today or date.today().isoformat()
+    )
 
 
 def board_columns(project, board):
@@ -28,7 +37,20 @@ def board_columns(project, board):
 
     cols = [("Backlog", backlog)]
     cols += [(n, [i for i in opened if n in i.labels]) for n in names]
-    return cols
+    return [(name, sorted(issues, key=_urgency)) for name, issues in cols]
+
+
+def _urgency(issue):
+    """Overdue first, then soonest due, then newest.
+
+    Deterministic — the API's own order is not — and it means a truncated
+    column shows the issues you would have gone looking for.
+    """
+    return (
+        not is_overdue(issue),
+        issue.due_date or "9999-12-31",
+        -issue.iid,
+    )
 
 
 def fetch(path, board_name=None):
@@ -75,27 +97,86 @@ def issue_line(issue, column):
         ),
     )
     if issue.due_date:
-        line.append(f"  due {issue.due_date}", "yellow")
+        overdue = is_overdue(issue)
+        line.append(
+            f"  {'overdue' if overdue else 'due'} {issue.due_date}",
+            "bold red" if overdue else "yellow",
+        )
     if extra := [x for x in issue.labels if x != column]:
         line.append(f"  {' '.join(extra)}", "magenta")
     return line
 
 
-def print_rich(project, board):
-    """The human rendering. A tree — no repeated headers, no truncation."""
+def summarise(columns):
+    """Totals over the distinct issues on the board.
+
+    Distinct matters: an issue labelled for two columns appears in both, so
+    summing per-column counts would double-count it.
+    """
+    seen = {}
+    for _, issues in columns:
+        for issue in issues:
+            seen[issue.iid] = issue
+    issues = list(seen.values())
+    return {
+        "issues": len(issues),
+        "unassigned": sum(1 for i in issues if not i.assignee),
+        "overdue": sum(1 for i in issues if is_overdue(i)),
+    }
+
+
+def print_rich(project, board, spec_path=None, limit=5):
+    """The human rendering.
+
+    Long columns are truncated: a 200-issue board should still fit on a
+    screen, and the point of the overview is shape, not every title. `limit=0`
+    prints everything. The footer names the YAML that defines the board, so
+    the next step after looking is obvious.
+    """
+    columns = board_columns(project, board)
     tree = Tree(
         Text.assemble(
             (project.path_with_namespace, "bold"), " — ", (board.name, "bold cyan")
         ),
         guide_style="muted",
     )
-    for name, issues in board_columns(project, board):
-        node = tree.add(Text(f"{name} ({len(issues)})", "col"))
-        for issue in issues:
+    hidden = 0
+    for name, issues in columns:
+        flagged = sum(1 for i in issues if is_overdue(i))
+        header = Text(f"{name} ({len(issues)})", "col")
+        if flagged:
+            header.append(f"  {flagged} overdue", "bold red")
+        node = tree.add(header)
+
+        shown = issues if limit == 0 else issues[:limit]
+        for issue in shown:
             node.add(issue_line(issue, name))
         if not issues:
             node.add(Text("empty", "muted"))
+        if rest := len(issues) - len(shown):
+            hidden += rest
+            node.add(Text(f"… {rest} more", "muted"))
+
     console = out()
     console.print()
     console.print(tree)
+
+    totals = summarise(columns)
+    line = Text()
+    line.append(f"{totals['issues']} issues", "bold")
+    line.append(f" · {totals['unassigned']} unassigned", "muted")
+    if totals["overdue"]:
+        line.append(f" · {totals['overdue']} overdue", "bold red")
+    console.print(line)
+
+    if hidden:
+        console.print(Text(f"{hidden} issue(s) hidden — pass --all", "muted"))
+    if spec_path:
+        console.print(
+            Text.assemble(
+                ("defined by ", "muted"),
+                (str(spec_path), "cyan"),
+                (" — edit it, then `gitboard plan`", "muted"),
+            )
+        )
     console.print()

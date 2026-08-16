@@ -1,5 +1,6 @@
 """Tests for the config singleton and client.py's error mapping."""
 
+import os
 import types
 
 import pytest
@@ -203,7 +204,32 @@ def test_file_supplies_defaults(monkeypatch, tmp_path):
     monkeypatch.delenv("GITLAB_URL", raising=False)
     path = write(tmp_path, 'project = "grp/proj"\nspec = "b.yaml"\nboard = "Dev"\n')
     cfg = config.configure(config_path=path)
-    assert (cfg.project, cfg.spec, cfg.board) == ("grp/proj", "b.yaml", "Dev")
+    assert (cfg.project, cfg.board) == ("grp/proj", "Dev")
+    assert cfg.spec == str(tmp_path.resolve() / "b.yaml")
+
+
+def test_relative_spec_resolves_against_the_config_not_the_cwd(tmp_path):
+    """Running from boards/ used to look for boards/boards/test.yaml."""
+    path = write(tmp_path, 'spec = "boards/test.yaml"\n')
+    sub = tmp_path / "boards"
+    sub.mkdir()
+    os.chdir(sub)
+    config.reset()
+    assert config.configure(config_path=path).spec == str(
+        (tmp_path / "boards" / "test.yaml").resolve()
+    )
+
+
+def test_an_absolute_spec_is_left_alone(tmp_path):
+    path = write(tmp_path, 'spec = "/somewhere/b.yaml"\n')
+    assert config.configure(config_path=path).spec == "/somewhere/b.yaml"
+
+
+def test_a_spec_flag_is_not_rewritten(tmp_path):
+    """An explicit path on the command line is relative to the cwd."""
+    path = write(tmp_path, 'spec = "boards/test.yaml"\n')
+    cfg = config.configure(config_path=path)
+    assert cfg.spec.endswith("boards/test.yaml")
 
 
 def test_a_token_in_the_file_is_ignored_with_a_warning(monkeypatch, tmp_path):

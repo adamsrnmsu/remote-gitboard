@@ -120,3 +120,60 @@ def test_issue_line_omits_the_column_its_own_label():
     line = board.issue_line(FakeIssue(1, ["Doing", "urgent"], title="x"), "Doing")
     text = line.plain
     assert "urgent" in text and "Doing" not in text
+
+
+# --- urgency, totals, truncation -------------------------------------------
+
+
+def test_overdue_is_strictly_before_today():
+    assert board.is_overdue(FakeIssue(1, [], due_date="2026-01-01"), today="2026-06-01")
+    assert not board.is_overdue(
+        FakeIssue(1, [], due_date="2026-12-01"), today="2026-06-01"
+    )
+
+
+def test_due_today_is_not_overdue():
+    """Off-by-one here would nag about everything due today."""
+    assert not board.is_overdue(
+        FakeIssue(1, [], due_date="2026-06-01"), today="2026-06-01"
+    )
+
+
+def test_no_due_date_is_never_overdue():
+    assert not board.is_overdue(FakeIssue(1, []))
+
+
+def test_columns_put_overdue_first():
+    """A truncated column must show what you would have gone looking for."""
+    issues = [
+        FakeIssue(1, ["Doing"]),
+        FakeIssue(2, ["Doing"], due_date="2000-01-01"),
+        FakeIssue(3, ["Doing"]),
+    ]
+    cols = columns(issues, [FakeList("Doing", 1)])
+    assert [i.iid for i in cols[1][1]][0] == 2
+
+
+def test_columns_are_ordered_deterministically():
+    """The API's own order is not stable; two calls must not differ."""
+    issues = [FakeIssue(3, []), FakeIssue(1, []), FakeIssue(2, [])]
+    first = [i.iid for i in columns(issues, [])[0][1]]
+    second = [i.iid for i in columns(list(reversed(issues)), [])[0][1]]
+    assert first == second == [3, 2, 1]
+
+
+def test_summarise_does_not_double_count_multi_column_issues():
+    """An issue in two columns is one issue, not two."""
+    issue = FakeIssue(1, ["Doing", "Blocked"])
+    cols = columns([issue], [FakeList("Doing", 1), FakeList("Blocked", 2)])
+    assert board.summarise(cols)["issues"] == 1
+
+
+def test_summarise_counts_unassigned_and_overdue():
+    issues = [
+        FakeIssue(1, [], assignee={"username": "ana"}),
+        FakeIssue(2, []),
+        FakeIssue(3, [], due_date="2000-01-01"),
+    ]
+    totals = board.summarise(columns(issues, []))
+    assert (totals["issues"], totals["unassigned"], totals["overdue"]) == (3, 2, 1)

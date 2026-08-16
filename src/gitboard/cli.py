@@ -14,13 +14,22 @@ The CLI. Everything else in the package is a module it calls:
     gitboard apply boards/test.yaml
 """
 
+import os
+from pathlib import Path
+
 import typer
 from rich.table import Table
 
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import client
-from gitboard.config import ConfigError, candidate_paths, configure, get_config
+from gitboard.config import (
+    FILENAME,
+    ConfigError,
+    candidate_paths,
+    configure,
+    get_config,
+)
 from gitboard.log import err, get_logger, out, set_verbose
 
 app = typer.Typer(
@@ -79,15 +88,34 @@ def main(
     log.debug("url=%s config=%s", cfg.url, cfg.source or "<none>")
 
 
+EXAMPLE = {
+    "spec": ('spec = "boards/team.yaml"', "gitboard apply boards/team.yaml"),
+    "project": ('project = "group/project"', "gitboard show group/project"),
+}
+
+
 def _need(value, key, what):
-    """Fall back to the config file, or explain what's missing."""
+    """Fall back to the config file, or say exactly how to supply it.
+
+    The old message listed every path it searched and left the reader to work
+    out what to do with that. Lead with the two fixes instead; the search path
+    is the least useful part and goes last.
+    """
     if value:
         return value
-    if fallback := getattr(get_config(), key, None):
+    cfg = get_config()
+    if fallback := getattr(cfg, key, None):
         return fallback
+
+    line, inline = EXAMPLE[key]
+    found = f"config in use: {cfg.source}" if cfg.source else "no config file found"
+    where = cfg.source or (candidate_paths()[0])
     raise ConfigError(
-        f"no {what} given and no '{key}' in a config file "
-        f"(tried {', '.join(str(p) for p in candidate_paths())})"
+        f"no {what} given.\n"
+        f"  Pass it directly:   {inline}\n"
+        f"  Or set a default:   echo '{line}' >> {where}\n"
+        f"  ({found}; searched ./{FILENAME} upwards, then "
+        f"~/.config/gitboard/config.toml)"
     )
 
 
@@ -100,6 +128,37 @@ def _run(fn):
         raise typer.Exit(1) from e
 
 
+def _shortest(path):
+    """Relative to the cwd when that is shorter — absolute paths are noise."""
+    rel = os.path.relpath(str(path), Path.cwd())
+    return rel if not rel.startswith("..") else str(path)
+
+
+def find_spec(project_path):
+    """The boards/*.yaml that defines this project, if one is sitting around.
+
+    Config first; otherwise scan boards/ next to the config or the cwd. Purely
+    for the "go look here" footer, so any failure just means no footer.
+    """
+    cfg = get_config()
+    for candidate in filter(None, [cfg.spec]):
+        try:
+            if apply_mod.load(candidate)["project"] == project_path:
+                return _shortest(candidate)
+        except (apply_mod.SpecError, KeyError):
+            pass
+
+    roots = [p.parent for p in [cfg.source] if p] + [Path.cwd()]
+    for root in roots:
+        for path in sorted((root / "boards").glob("*.yaml")):
+            try:
+                if apply_mod.load(str(path))["project"] == project_path:
+                    return _shortest(path)
+            except (apply_mod.SpecError, KeyError):
+                continue
+    return None
+
+
 @app.command()
 def show(
     project: str | None = typer.Argument(None, help="group/project"),
@@ -107,17 +166,27 @@ def show(
     markdown: bool = typer.Option(
         False, "--markdown", "-m", help="Stable markdown, for piping or the AI pass."
     ),
+    all_issues: bool = typer.Option(
+        False, "--all", "-a", help="Do not truncate long columns."
+    ),
+    limit: int = typer.Option(
+        5, "--limit", "-n", help="Issues shown per column. 0 for no limit."
+    ),
 ):
     """Print an issue board, grouped into its columns."""
 
     def go():
-        project_obj, board_obj = board_mod.fetch(
-            _need(project, "project", "project"), board_name or get_config().board
-        )
+        path = _need(project, "project", "project")
+        project_obj, board_obj = board_mod.fetch(path, board_name or get_config().board)
         if markdown:
             print(board_mod.as_markdown(project_obj, board_obj))
         else:
-            board_mod.print_rich(project_obj, board_obj)
+            board_mod.print_rich(
+                project_obj,
+                board_obj,
+                spec_path=find_spec(path),
+                limit=0 if all_issues else limit,
+            )
 
     _run(go)
 

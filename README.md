@@ -123,6 +123,7 @@ sudo rm /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v1
 
 ```bash
 make install             # one-time setup: venv + dependencies
+make activate            # subshell with .venv active (exit to leave)
 
 gitboard show group/project              # the board, as a tree
 gitboard show group/project "Dev Board"  # a named board
@@ -132,6 +133,12 @@ gitboard apply boards/test.yaml          # write it
 gitboard config                          # what URL and token it resolved
 gitboard --help
 ```
+
+`show` truncates long columns to 5 issues each and sorts overdue work to the
+top, so a 200-issue board still fits on a screen and the truncation never
+hides the part you were looking for. `--all` prints everything, `-n N` sets
+the per-column limit. The footer counts issues, unassigned, and overdue, and
+names the YAML file that defines the board.
 
 `--url`, `--read-token`, and `--write-token` override `GITLAB_URL`,
 `GITLAB_READ_TOKEN`, and `GITLAB_WRITE_TOKEN` per invocation;

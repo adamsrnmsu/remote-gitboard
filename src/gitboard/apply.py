@@ -21,8 +21,15 @@ class SpecError(Exception):
 
 
 def load(path):
-    with open(path) as f:
-        spec = yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            spec = yaml.safe_load(f)
+    except FileNotFoundError as e:
+        raise SpecError(f"no such board file: {path}") from e
+    except OSError as e:
+        raise SpecError(f"cannot read {path}: {e.strerror}") from e
+    except yaml.YAMLError as e:
+        raise SpecError(f"{path}: {e}") from e
     if not isinstance(spec, dict):
         raise SpecError(f"{path}: expected a mapping at the top level")
     for key in ("project", "board"):
@@ -77,8 +84,17 @@ def ensure_project(gl, path, create):
             raise
         ns, _, name = path.rpartition("/")
         payload = {"name": name, "path": name, "initialize_with_readme": True}
-        if ns and ns != gl.user.username:
-            payload["namespace_id"] = gl.namespaces.get(ns).id
+        if ns:
+            # Resolve the namespace directly rather than comparing against
+            # gl.user.username: gl.user is None until gl.auth() has run, and
+            # namespaces.get works for a user's own namespace as well as a
+            # group's.
+            try:
+                payload["namespace_id"] = gl.namespaces.get(ns).id
+            except Exception as e:
+                raise SpecError(
+                    f"cannot create {path!r}: no namespace {ns!r} you can write to"
+                ) from e
         log.debug("creating project %s", path)
         return gl.projects.create(payload)
 

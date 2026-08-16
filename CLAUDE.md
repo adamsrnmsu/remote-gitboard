@@ -73,6 +73,17 @@ Deliberate, not bugs: an issue with labels from two lists appears in both
 columns (the web UI does the same, no tiebreak invented); `Backlog` is
 synthesised for issues with no list label.
 
+`board_columns` sorts by `_urgency` (overdue, then soonest due, then newest).
+The API's order is not stable, and a truncated column has to show what the
+reader would have gone looking for. `summarise` de-duplicates by iid — a
+two-column issue is one issue, and summing per-column counts double-counts it.
+`show` truncates to 5 per column by default; `--all` / `-n` override.
+
+Config paths (`gitboard.toml`) and `.env` both walk up from the cwd. When only
+`.env` did, running from `boards/` silently lost the repo config. A relative
+`spec` in a config file resolves against **that file's** directory, not the
+cwd, for the same reason.
+
 ## apply.py invariants
 
 The YAML is the source of truth. Two normalisations exist because their

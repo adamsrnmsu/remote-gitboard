@@ -19,7 +19,7 @@ The config file is TOML, read with stdlib tomllib — no dependency. Searched
 in this order, first hit wins:
 
     1. --config PATH, or $GITBOARD_CONFIG
-    2. ./gitboard.toml
+    2. ./gitboard.toml, then each parent directory
     3. ~/.config/gitboard/config.toml  ($XDG_CONFIG_HOME honoured)
 
 Tokens deliberately do not come from `gitboard.toml`. A `token` key there is
@@ -142,12 +142,19 @@ def load_env_file():
 
 
 def candidate_paths(explicit=None):
-    """Where a config file may live, highest priority first."""
+    """Where a config file may live, highest priority first.
+
+    Walks up from the cwd the way git finds its root, so `gitboard` works from
+    a subdirectory. This matches how .env is found — when the two disagreed,
+    running from boards/ silently lost the repo's gitboard.toml.
+    """
     if explicit := explicit or os.environ.get("GITBOARD_CONFIG"):
         return [Path(explicit).expanduser()]
+    here = Path.cwd()
+    paths = [d / FILENAME for d in (here, *here.parents)]
     xdg = os.environ.get("XDG_CONFIG_HOME")
     user_dir = Path(xdg).expanduser() if xdg else Path.home() / ".config"
-    return [Path.cwd() / FILENAME, user_dir / "gitboard" / "config.toml"]
+    return [*paths, user_dir / "gitboard" / "config.toml"]
 
 
 def load_file(explicit=None):
@@ -238,12 +245,19 @@ def get_config() -> Config:
     else:
         token_source = "keychain"
 
+    spec = pick("spec")
+    if spec and source and not os.path.isabs(spec) and not _overrides.get("spec"):
+        # A path in gitboard.toml is relative to that file, not to wherever
+        # you happen to be standing. Running from boards/ used to look for
+        # boards/boards/test.yaml.
+        spec = str((source.parent / spec).resolve())
+
     return Config(
         url=pick("url", "GITLAB_URL", DEFAULT_URL),
         verbose=bool(_overrides.get("verbose", False)),
         project=pick("project"),
         board=pick("board"),
-        spec=pick("spec"),
+        spec=spec,
         source=source,
         env_source=env_source,
         warnings=tuple(warnings),
