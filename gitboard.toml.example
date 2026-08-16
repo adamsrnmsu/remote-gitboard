@@ -2,20 +2,23 @@
 #
 # Searched in order, first hit wins:
 #   1. --config PATH, or $GITBOARD_CONFIG
-#   2. ./gitboard.toml          (per-project — this file)
-#   3. ~/.config/gitboard/config.toml   (per-user)
+#   2. ./gitboard.toml, then each parent directory  (per-project — this file)
+#   3. ~/.config/gitboard/config.toml               (per-user)
 #
-# Precedence:  --flag  >  environment  >  this file  >  built-in default
+# Precedence:  --flag  >  environment  >  .env  >  this file  >  default
 #
 # There is deliberately no `token` key. A PAT belongs in the macOS keychain
-# (`security add-generic-password -a "$USER" -s gitlab-token -w '<PAT>'`),
-# in GITLAB_TOKEN, or behind --token. A token key here is ignored with a
-# warning, because config files get committed by accident and keychains don't.
+#   security add-generic-password -a "$USER" -s gitlab-read-token  -w '<PAT>'
+#   security add-generic-password -a "$USER" -s gitlab-write-token -w '<PAT>'
+# in GITLAB_READ_TOKEN / GITLAB_WRITE_TOKEN, in .env, or behind --read-token /
+# --write-token. A token key here is ignored with a warning, because config
+# files get committed by accident and keychains don't.
 
 url = "http://localhost:8929"
 
 # Defaults, so the arguments become optional:
-project = "root/demo"    # ./gitboard.py show
-spec = "boards/demo.yaml"  # ./gitboard.py plan / apply
+project = "root/demo"      # gitboard show
+spec = "boards/demo.yaml"  # gitboard plan / apply
+                           # relative to THIS file, not your cwd
 
-# board = "Dev Board"    # only needed if a project has more than one board
+# board = "Dev Board"      # only needed if a project has more than one board
