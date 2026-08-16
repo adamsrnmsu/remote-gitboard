@@ -134,6 +134,33 @@ One entry point, `./gitboard.py`:
 `-v` turns on debug logging. Logs and progress go to **stderr**, the board
 goes to **stdout**, so `--markdown | less` stays clean.
 
+### Credentials in .env
+
+The lazy option, and fine for a local instance. `.env` is already gitignored
+and already exists for docker compose:
+
+```bash
+# .env
+GITLAB_URL=http://localhost:8929
+GITLAB_TOKEN=glpat-seedseedseedseedseed
+```
+
+Then everything works with no exports and no keychain:
+
+```bash
+./gitboard.py show test/test
+```
+
+Found in the current directory, then next to the scripts — so it works when
+you run `~/path/to/gitboard.py` from somewhere else. A real exported variable
+still wins over it, and `./gitboard.py config` reports which of the four
+sources the token actually came from.
+
+`.env` is the one file allowed to hold a token, because it is gitignored and
+never meant to be shared. `gitboard.toml` still refuses one. For a work
+instance the keychain is better — `.env` sits in the repo, and a stray
+`cp -r` or a backup takes the token with it.
+
 ### Config file
 
 So you stop exporting `GITLAB_URL` in every shell:
@@ -161,8 +188,9 @@ Searched in order, first hit wins:
 2. `./gitboard.toml` — per project
 3. `~/.config/gitboard/config.toml` — per user (`$XDG_CONFIG_HOME` honoured)
 
-Precedence is **`--flag` > environment > file > default**, so the file sets
-your normal instance and a flag still overrides it for one command.
+Precedence is **`--flag` > environment > `.env` > `gitboard.toml` > default**,
+so the file sets your normal instance and a flag still overrides it for one
+command.
 
 **There is no `token` key.** A PAT belongs in the keychain, in `GITLAB_TOKEN`,
 or behind `--token`; a `token` key in the file is ignored with a warning,
@@ -207,6 +235,10 @@ moves. Suggestions are copyable, never applied.
 - **[rich](https://rich.readthedocs.io/)** — the tree, tables, spinners, and
   log handler. It detects a pipe and drops colour automatically, so there is
   no `--no-color` flag to maintain.
+- **[python-dotenv](https://github.com/theskumar/python-dotenv)** — reads
+  `.env`. Hand-rolling this is ten lines that quietly mishandle quotes and
+  `export` prefixes, and `.env` is shared with docker compose, so matching
+  compose's interpretation matters more than saving a dependency.
 
 Nothing else was added. `pydantic` for four config fields, `structlog` on top
 of a logger with one handler, or `click` alongside typer would all be weight

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["python-gitlab", "pyyaml", "typer", "rich"]
+# dependencies = ["python-gitlab", "pyyaml", "typer", "rich", "python-dotenv"]
 # ///
 """gitboard — read a GitLab issue board, or define one in YAML.
 
@@ -174,14 +174,14 @@ def config():
     table.add_column("", style="muted")
     table.add_column("")
     table.add_row("config file", str(cfg.source) if cfg.source else "[muted]none[/]")
+    table.add_row(".env", str(cfg.env_source) if cfg.env_source else "[muted]none[/]")
     table.add_row("url", cfg.url)
     table.add_row("verbose", str(cfg.verbose))
     for key in ("project", "board", "spec"):
         table.add_row(key, getattr(cfg, key) or "[muted]unset[/]")
     try:
-        source = "--token/GITLAB_TOKEN" if cfg.token_override else "keychain"
         cfg.token()
-        table.add_row("token", f"[added]found[/] [muted]({source})[/]")
+        table.add_row("token", f"[added]found[/] [muted]({cfg.token_source})[/]")
     except ConfigError:
         table.add_row("token", "[logging.level.error]not found[/]")
     out().print(table)

@@ -7,7 +7,13 @@ and never has to thread arguments through.
 
 Precedence, highest first:
 
-    --flag  >  environment  >  config file  >  built-in default
+    --flag  >  environment  >  .env file  >  config file  >  built-in default
+
+`.env` is just environment variables that live in a file, so it sits directly
+below the real environment: a real export always wins over it. It is the one
+place a token may be stored, because it is gitignored and already exists for
+docker compose. `gitboard.toml` still refuses tokens — it is meant to be
+shared, `.env` is not.
 
 The config file is TOML, read with stdlib tomllib — no dependency. Searched
 in this order, first hit wins:
@@ -16,9 +22,8 @@ in this order, first hit wins:
     2. ./gitboard.toml
     3. ~/.config/gitboard/config.toml  ($XDG_CONFIG_HOME honoured)
 
-Tokens deliberately do not come from the file. The keychain is a better place
-for a credential than a dotfile you might commit, so a `token` key is ignored
-with a warning rather than honoured.
+Tokens deliberately do not come from `gitboard.toml`. A `token` key there is
+ignored with a warning — put it in `.env` or the keychain instead.
 
 Token lookup stays lazy: `Config.token()` is only resolved when something
 actually needs to talk to GitLab, so `gitboard --help` never touches the
@@ -32,9 +37,13 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 DEFAULT_URL = "https://gitlab.com"
 KEYCHAIN_SERVICE = "gitlab-token"
 FILENAME = "gitboard.toml"
+ENV_FILENAME = ".env"
+HERE = Path(__file__).resolve().parent
 KNOWN_KEYS = {"url", "project", "board", "spec"}
 
 _overrides: dict[str, object] = {}
@@ -51,8 +60,10 @@ class Config:
     project: str | None = None  # default for `show`
     board: str | None = None  # default board name
     spec: str | None = None  # default for `plan` / `apply`
-    source: Path | None = None  # which file these came from, if any
+    source: Path | None = None  # which toml file these came from, if any
+    env_source: Path | None = None  # which .env file was read, if any
     warnings: tuple[str, ...] = ()
+    token_source: str = "keychain"  # which of the four sources supplied it
     token_override: str | None = None
     _token: str | None = field(default=None, repr=False)
 
@@ -76,6 +87,26 @@ def _from_keychain() -> str:
             f"  {add} '<PAT>'"
         )
     return out.stdout.strip()
+
+
+def env_file_paths():
+    """cwd first, then next to the scripts — so running from elsewhere works."""
+    seen, paths = set(), []
+    for path in (Path.cwd() / ENV_FILENAME, HERE / ENV_FILENAME):
+        if path not in seen:
+            seen.add(path)
+            paths.append(path)
+    return paths
+
+
+@lru_cache(maxsize=1)
+def load_env_file():
+    """(values, path). Never touches os.environ — precedence stays explicit."""
+    for path in env_file_paths():
+        if path.is_file():
+            values = {k: v for k, v in dotenv_values(path).items() if v}
+            return values, path
+    return {}, None
 
 
 def candidate_paths(explicit=None):
@@ -135,14 +166,27 @@ def configure(*, url=None, token=None, verbose=None, config_path=None) -> "Confi
 @lru_cache(maxsize=1)
 def get_config() -> Config:
     values, source, warnings = load_file(_overrides.get("config_path"))
+    env_values, env_source = load_env_file()
 
     def pick(key, env_var=None, default=None):
-        """flag > env > file > default."""
+        """flag > environment > .env > gitboard.toml > default."""
         if (override := _overrides.get(key)) is not None:
             return override
-        if env_var and (env := os.environ.get(env_var)):
-            return env
+        if env_var:
+            if env := os.environ.get(env_var):
+                return env
+            if env := env_values.get(env_var):
+                return env
         return values.get(key, default)
+
+    if _overrides.get("token"):
+        token_source = "--token"
+    elif os.environ.get("GITLAB_TOKEN"):
+        token_source = "environment"
+    elif env_values.get("GITLAB_TOKEN"):
+        token_source = str(env_source)
+    else:
+        token_source = "keychain"
 
     return Config(
         url=pick("url", "GITLAB_URL", DEFAULT_URL),
@@ -151,12 +195,15 @@ def get_config() -> Config:
         board=pick("board"),
         spec=pick("spec"),
         source=source,
+        env_source=env_source,
         warnings=tuple(warnings),
-        token_override=_overrides.get("token") or os.environ.get("GITLAB_TOKEN"),
+        token_source=token_source,
+        token_override=pick("token", "GITLAB_TOKEN"),
     )
 
 
 def reset() -> None:
-    """Drop overrides and the cached instance. For tests."""
+    """Drop overrides and the cached instances. For tests."""
     _overrides.clear()
     get_config.cache_clear()
+    load_env_file.cache_clear()

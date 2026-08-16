@@ -27,12 +27,16 @@ exists only for editor autocomplete; the scripts ignore it.
   **lazy** (`Config.token()`), so `--help` never touches the keychain. Tests
   must call `config.reset()` — the singleton outlives a test otherwise, and
   they must `delenv("GITLAB_URL")` because the Makefile exports it.
-  Precedence is **flag > env > TOML file > default**; the file is searched at
+  Precedence is **flag > env > `.env` > TOML file > default**; the file is searched at
   `--config`/`$GITBOARD_CONFIG`, then `./gitboard.toml`, then
   `~/.config/gitboard/config.toml`. It can set `url`, `project`, `board`,
   `spec` — `project`/`spec` make the CLI arguments optional. A `token` key is
-  deliberately **ignored with a warning**: credentials belong in the keychain,
-  not a file that can be committed. `tomllib` is stdlib, so no dependency.
+  deliberately **ignored with a warning**: credentials belong in `.env` or the
+  keychain, not a file meant to be shared. `tomllib` is stdlib, so no
+  dependency there; `.env` uses python-dotenv (cwd, then `config.HERE`).
+  Tests must isolate `config.HERE` and `XDG_CONFIG_HOME` or the repo's own
+  `.env` and the developer's user config leak in — the autouse fixture in
+  `tests/test_config.py` does this, and twelve tests failed before it did.
 - `log.py` — console + logger singletons. **`out()` is stdout, `err()` is
   stderr.** The board goes to stdout; logs, spinners, and change tables go to
   stderr. `show -m | less` must stay clean, so nothing else may write stdout.

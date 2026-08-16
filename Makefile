@@ -9,7 +9,8 @@ export GITLAB_URL
 
 # pytest imports the modules, so it needs their deps. uvx builds this env
 # on the fly and caches it; nothing is installed into the repo.
-PYTEST = uvx --with pyyaml --with rich --with typer --with python-gitlab pytest
+PYTEST = uvx --with pyyaml --with rich --with typer --with python-gitlab \
+                --with python-dotenv pytest
 
 .PHONY: help up wait down reset logs seed show plan apply test fmt lint venv clean
 
@@ -56,7 +57,7 @@ lint:  ## lint, --fix to apply the safe fixes
 	uvx ruff check .
 
 venv:  ## .venv for editor autocomplete only
-	uv venv && uv pip install python-gitlab pyyaml typer rich
+	uv venv && uv pip install python-gitlab pyyaml typer rich python-dotenv
 
 .env:
 	@echo "no .env — cp .env.example .env and set GITLAB_ROOT_PASSWORD" >&2; exit 1
