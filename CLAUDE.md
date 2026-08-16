@@ -26,8 +26,8 @@ seconds after install, with the file present and readable, its target
 existing, and `site` listing it in the directory. Root cause unknown. Every
 make target therefore runs `PYTHONPATH=src .venv/bin/python -m gitboard.cli`,
 which names `src` directly and makes edits live with no reinstall.
-`pipx install .` copies the package and is also fine. Do not "simplify" the
-PYTHONPATH away.
+`make link` writes a `~/.local/bin/gitboard` wrapper doing the same. Do not
+"simplify" the PYTHONPATH away.
 
 ## Architecture
 

@@ -283,8 +283,10 @@ gitboard = "gitboard.cli:app"
   that way rather than with `pip install -e .`.
 - **Point your editor at `.venv/bin/python`** for autocomplete. You never need
   to activate it.
-- **`pipx install .`** if you want a `gitboard` command outside this repo.
-  It copies the package, so re-run it after changing the code.
+- **`make link`** if you want a `gitboard` command outside this repo — a
+  wrapper in `~/.local/bin` pointing back here. No second install to keep in
+  sync, and nothing beyond pip is needed. (`pipx install .` also works, if you
+  would rather have a fully independent copy.)
 - **Versions are not pinned.** There is no lockfile; the dependency set is five
   well-behaved packages. If you ever need reproducibility,
   `.venv/bin/pip freeze > requirements.txt` is the whole story.
