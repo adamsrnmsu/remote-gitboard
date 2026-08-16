@@ -11,10 +11,48 @@ PROJECT    ?=
 SPEC       ?=
 GITBOARD    = PYTHONPATH=src uv run gitboard
 
-.PHONY: help up wait down reset logs seed show plan apply test fmt lint sync repair clean
+.PHONY: help uv up wait down reset logs seed show plan apply test fmt lint sync repair clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
+
+uv:  ## install uv if it is missing, then explain how it is used here
+	@if command -v uv >/dev/null 2>&1; then \
+	  echo "uv is already installed — $$(uv --version)"; \
+	elif command -v brew >/dev/null 2>&1; then \
+	  echo "uv not found — installing with Homebrew"; brew install uv; \
+	else \
+	  echo "uv not found — installing with the official script"; \
+	  echo "  (https://astral.sh/uv/install.sh — installs to ~/.local/bin, no sudo)"; \
+	  curl -LsSf https://astral.sh/uv/install.sh | sh; \
+	fi
+	@command -v uv >/dev/null 2>&1 || { \
+	  echo ""; \
+	  echo "uv installed but not on PATH yet."; \
+	  echo 'Open a new shell, or: export PATH="$$HOME/.local/bin:$$PATH"'; \
+	  exit 1; }
+	@printf '%s\n' \
+	  "" \
+	  "uv replaces pip + venv + pipx. Nothing here is ever pip-installed." \
+	  "" \
+	  "  Run this project" \
+	  "    uv tool install .        \`gitboard\` on your PATH; re-run after code changes" \
+	  "    uv run gitboard show     run from the repo without installing" \
+	  "    make show                same, but immune to the .pth issue (see: make repair)" \
+	  "" \
+	  "  Environment" \
+	  "    uv sync                  make .venv match pyproject.toml + uv.lock" \
+	  "    uv add <pkg>             add a dependency and update uv.lock" \
+	  "    uv remove <pkg>          drop one" \
+	  "    uv lock --upgrade        refresh pinned versions" \
+	  "" \
+	  "  Tools you do not want as dependencies" \
+	  "    uvx ruff check .         run a tool in a throwaway cached env" \
+	  "" \
+	  "uv owns .venv in this directory — you never activate it; \`uv run\` and" \
+	  "\`make\` use it for you. uv.lock is committed, so the environment is" \
+	  "reproducible. Point your editor at .venv/bin/python for autocomplete." \
+	  ""
 
 up: .env  ## start the local GitLab container
 	docker compose up -d

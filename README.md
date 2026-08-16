@@ -124,6 +124,7 @@ sudo rm /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v1
 Install it once, then it is just `gitboard`:
 
 ```bash
+make uv                  # installs uv if missing, and explains it
 uv tool install .        # puts `gitboard` on your PATH; re-run after code changes
 
 gitboard show group/project              # the board, as a tree
