@@ -1,0 +1,23 @@
+# The demo board seed.py used to hardcode. `./apply.py boards/demo.yaml`
+project: root/demo
+board: Dev Board
+create_project: true      # make the project if it doesn't exist
+
+columns:                  # board lists, in order. Each is a label.
+  - name: Doing
+    color: "#428bca"
+  - name: Blocked
+    color: "#d9534f"
+  - name: Review
+    color: "#5cb85c"
+
+issues:
+  - title: Wire up board reader
+    labels: [Doing]
+  - title: Decide on MCP server
+    labels: [Doing, Blocked]
+  - title: Token rotation policy
+  - title: Draft README
+    labels: [Review]
+  - title: Figure out SSO constraints at work
+    labels: [Blocked]

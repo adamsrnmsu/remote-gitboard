@@ -3,10 +3,11 @@
 # editor's autocomplete, not for running them.
 
 PROJECT    ?= root/demo
+SPEC       ?= boards/demo.yaml
 GITLAB_URL ?= http://localhost:8929
 export GITLAB_URL
 
-.PHONY: help up wait down reset logs seed board test selftest fmt lint venv clean
+.PHONY: help up wait down reset logs seed board plan apply test selftest fmt lint venv clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -35,8 +36,14 @@ seed: wait  ## mint a PAT and seed the demo board
 board:  ## print a board: make board PROJECT=group/project
 	./board.py $(PROJECT)
 
+plan:  ## preview YAML changes: make plan SPEC=boards/test.yaml
+	./apply.py $(SPEC) --dry-run
+
+apply:  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
+	./apply.py $(SPEC)
+
 test: selftest  ## full suite: pytest + the dep-free selftest
-	uvx pytest -q
+	uvx --with pyyaml pytest -q
 
 selftest:  ## column-bucketing check that runs with nothing installed
 	./board.py --selftest

@@ -1,32 +1,30 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# dependencies = ["python-gitlab"]
+# dependencies = ["python-gitlab", "pyyaml"]
 # ///
-"""Mint a root PAT on the local GitLab container and seed a demo board.
+"""Mint a root PAT on the local GitLab container, then apply boards/demo.yaml.
 
-    ./seed.py            # create everything, print the token
+    ./seed.py            # mint a token and seed the demo board
     ./seed.py --token    # just mint and print a token, seed nothing
 
 Only for the throwaway instance in docker-compose.yml. It shells into the
 container as root; never point it at anything you care about.
+
+The board contents live in boards/demo.yaml and are applied by apply.py —
+this file owns nothing but the token, which is the one thing the REST API
+cannot bootstrap for itself.
 """
 
+import os
 import subprocess
 import sys
 
 URL = "http://localhost:8929"
+SPEC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "boards", "demo.yaml")
 TOKEN_NAME = "gitboard-seed"
 # Fixed so re-seeding doesn't invalidate your keychain entry. Safe only
 # because this instance is disposable and bound to localhost.
 TOKEN = "glpat-" + "seed" * 5
-COLUMNS = [("Doing", "#428bca"), ("Blocked", "#d9534f"), ("Review", "#5cb85c")]
-ISSUES = [
-    ("Wire up board reader", ["Doing"]),
-    ("Decide on MCP server", ["Doing", "Blocked"]),
-    ("Token rotation policy", []),
-    ("Draft README", ["Review"]),
-    ("Figure out SSO constraints at work", ["Blocked"]),
-]
 
 # PATs can only be read at creation, so mint one with a value we choose.
 RUBY = f"""
@@ -67,48 +65,27 @@ def mint(token):
     return token
 
 
-def seed(gl):
-    project = next(
-        (p for p in gl.projects.list(owned=True, all=True) if p.path == "demo"), None
-    )
-    if project:
-        print("project 'demo' already exists — leaving it alone")
-        return project
-    project = gl.projects.create(
-        {"name": "demo", "path": "demo", "initialize_with_readme": True}
-    )
-
-    labels = {}
-    for name, color in COLUMNS:
-        labels[name] = project.labels.create({"name": name, "color": color})
-
-    board = project.boards.create({"name": "Dev Board"})
-    for name, _ in COLUMNS:
-        board.lists.create({"label_id": labels[name].id})
-
-    for title, names in ISSUES:
-        project.issues.create({"title": title, "labels": names})
-
-    return project
-
-
 def main():
-    import gitlab
-
     mint(TOKEN)
     if "--token" in sys.argv:
         print(TOKEN)
         return
 
-    gl = gitlab.Gitlab(URL, private_token=TOKEN)
-    project = seed(gl)
+    # Subprocess rather than import: board.URL is read at import time, so the
+    # env has to be set before apply.py's module body runs.
+    r = subprocess.run(
+        [os.path.join(os.path.dirname(SPEC), "..", "apply.py"), SPEC],
+        env={**os.environ, "GITLAB_URL": URL, "GITLAB_TOKEN": TOKEN},
+    )
+    if r.returncode:
+        sys.exit(r.returncode)
 
     print(f"""
-seeded {project.path_with_namespace} — {URL}/{project.path_with_namespace}/-/boards
+seeded root/demo — {URL}/root/demo/-/boards
 
   security add-generic-password -U -a "$USER" -s gitlab-token -w '{TOKEN}'
   export GITLAB_URL={URL}
-  ./board.py {project.path_with_namespace}
+  ./board.py root/demo
 """)
 
 

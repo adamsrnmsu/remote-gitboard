@@ -1,0 +1,32 @@
+# Edit this, then: ./apply.py boards/test.yaml --dry-run   (then without --dry-run)
+project: test/test
+board: Dev Board
+
+# Board columns, in this order. Each one is a GitLab label.
+# Backlog is not listed — board.py synthesises it for issues with no column label.
+columns:
+  - name: Doing
+    color: "#428bca"
+  - name: Blocked
+    color: "#d9534f"
+  - name: Review
+    color: "#5cb85c"
+
+# title is the identity — apply.py matches on it. Change a title and you get a
+# new issue, not a rename. Everything else is optional.
+issues:
+  - title: Set up the board from YAML
+    labels: [Doing]
+    description: |
+      Multi-line descriptions work. Markdown is fine here.
+    assignee: root
+
+  - title: Point board.py at the work instance
+    labels: [Blocked]
+    due_date: 2026-09-01
+
+  - title: Decide whether to add the MCP server
+    labels: [Doing, Review]     # two columns: shows up in both, like the web UI
+
+  - title: Rotate the PAT before it expires
+    # no labels -> lands in Backlog

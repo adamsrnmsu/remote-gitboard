@@ -137,9 +137,49 @@ Or use the script bare, for piping or a quick look:
 | File | Purpose |
 |---|---|
 | `board.py` | Dumps a board as markdown. The one gap no existing tool fills. |
+| `apply.py` | Makes a board match a YAML file. The only thing here that writes. |
+| `boards/*.yaml` | Board definitions — columns and issues, editable. |
 | `.claude/commands/board.md` | The `/board` prompt. Read-only instructions. |
 | `docker-compose.yml` | Disposable local GitLab CE for development. |
-| `seed.py` | Mints a PAT and seeds a demo board on that instance. |
+| `seed.py` | Mints a PAT, then applies `boards/demo.yaml`. |
+
+## Defining a board in YAML
+
+`board.py` reads; `apply.py` writes. Columns and issues live in a YAML file
+you edit and re-apply:
+
+```yaml
+project: test/test
+board: Dev Board
+columns:
+  - name: Doing
+    color: "#428bca"
+  - name: Blocked
+    color: "#d9534f"
+issues:
+  - title: Set up the board from YAML
+    labels: [Doing]
+    assignee: root
+  - title: Point board.py at the work instance
+    labels: [Blocked]
+    due_date: 2026-09-01
+  - title: Rotate the PAT      # no labels -> Backlog
+```
+
+```bash
+./apply.py boards/test.yaml --dry-run   # what would change
+./apply.py boards/test.yaml             # write it
+./board.py test/test                    # read it back
+```
+
+Idempotent — re-running writes only the drift. **Additive only:** nothing is
+deleted or closed, so removing an issue from the YAML leaves it on the board.
+Issues are matched by **title**, so editing a title creates a new issue rather
+than renaming the old one.
+
+This needs an `api`-scope token, not the `read_api` one `board.py` uses. Two
+gotchas worth knowing, both now handled: quote a `due_date` or don't, either
+works, and a `|` block description won't report a phantom change on every run.
 
 `./board.py --selftest` runs the column-bucketing check with no deps installed.
 
