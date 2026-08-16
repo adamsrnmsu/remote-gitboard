@@ -5,35 +5,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-make install                            # once: plain venv + pip, no uv
+make install                            # once: venv + dependencies
 make show PROJECT=group/project         # the board, as a rich tree
-uv run gitboard show group/project -m   # markdown — stable, parseable
-uv run gitboard plan boards/test.yaml   # diff YAML against GitLab
-uv run gitboard apply boards/test.yaml  # write it (--yes to skip the prompt)
+make plan SPEC=boards/test.yaml         # diff YAML against GitLab
+make apply SPEC=boards/test.yaml        # write it
+PYTHONPATH=src .venv/bin/python -m gitboard.cli show grp/proj -m   # markdown
 make test                               # full suite
-make lint / make fmt                    # ruff
+make lint / make fmt                    # ruff, from .venv
 make up seed                            # local GitLab + demo board
-make repair                             # fix ModuleNotFoundError: gitboard
 ```
 
 `make` alone lists targets.
 
-**Never use an editable install on this machine.** `pip install -e .` and
-`uv sync` both work through a `.pth` in `.venv` that adds `src/`; it stops
-being honoured ~8 seconds after install, with the file present and readable,
-its target existing, and `site` listing it. Reproduced identically with pip
-and uv — not a uv problem, root cause unknown. Every make target therefore
-runs `PYTHONPATH=src .venv/bin/python -m gitboard.cli`, which names `src`
-directly and makes edits live with no reinstall. `uv tool install .` /
-`pipx install .` copy the package and are also fine. Do not "simplify" the
+Plain venv + pip; **no uv anywhere** — it was removed deliberately, do not
+reintroduce it.
+
+**Never use an editable install on this machine.** `pip install -e .` works
+through a `.pth` in `.venv` that adds `src/`; it stops being honoured ~8
+seconds after install, with the file present and readable, its target
+existing, and `site` listing it in the directory. Root cause unknown. Every
+make target therefore runs `PYTHONPATH=src .venv/bin/python -m gitboard.cli`,
+which names `src` directly and makes edits live with no reinstall.
+`pipx install .` copies the package and is also fine. Do not "simplify" the
 PYTHONPATH away.
 
 ## Architecture
 
 `src/` layout, package `gitboard`, entry point `gitboard.cli:app` declared in
 `pyproject.toml`. `scripts/seed.py` is plain python3 (stdlib only) and shells
-out to the CLI — deliberately not `uv run --script`, because that exports a
-VIRTUAL_ENV which hijacks the nested `uv run gitboard`.
+out to `.venv/bin/python -m gitboard.cli`.
 
 Modules:
 
@@ -97,7 +97,7 @@ edits back to the YAML.
 
 The read-only guarantee for the AI pass is the token scope (`read_api`), not
 the prompt. `.claude/commands/board.md` restates it and restricts tools to
-`Bash(PYTHONPATH=src uv run gitboard show:*)` — note `show`, so the command
+`Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*)` — note `show`, so it
 cannot reach `apply`. If you add write capability for the AI, both
 have to change together; README "Adding writes later" has the steps.
 
@@ -106,5 +106,6 @@ Auth (read): `--read-token`, else `GITLAB_READ_TOKEN`, else keychain
 honoured as pre-rename fallbacks; the env var warns.
 Auth (write): `--write-token`, else `GITLAB_WRITE_TOKEN`, else keychain
 `gitlab-write-token`, else the read token.
-`GITLAB_URL` defaults to gitlab.com. `uv run gitboard config` shows what
+`GITLAB_URL` defaults to gitlab.com. `make show`'s sibling `config` command
+shows what
 resolved.

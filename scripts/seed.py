@@ -13,7 +13,8 @@ for itself.
 
 Plain python3 and no dependencies of its own. It calls .venv's python with
 PYTHONPATH=src rather than a console script, for the reason in the Makefile
-header: editable installs do not stay working on this machine.
+header: editable installs do not stay working on this machine. Run
+`make install` first.
 """
 
 import os
@@ -75,8 +76,14 @@ def main():
         return
 
     r = subprocess.run(
-        [os.path.join(ROOT, ".venv", "bin", "python"),
-         "-m", "gitboard.cli", "apply", SPEC, "--yes"],
+        [
+            os.path.join(ROOT, ".venv", "bin", "python"),
+            "-m",
+            "gitboard.cli",
+            "apply",
+            SPEC,
+            "--yes",
+        ],
         cwd=ROOT,
         env={
             **os.environ,

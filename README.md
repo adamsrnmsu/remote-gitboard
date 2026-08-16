@@ -122,7 +122,7 @@ sudo rm /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v1
 ## Use
 
 ```bash
-make install             # plain venv + pip; no uv required
+make install             # one-time setup: venv + dependencies
 
 gitboard show group/project              # the board, as a tree
 gitboard show group/project "Dev Board"  # a named board
@@ -259,47 +259,35 @@ Nothing else was added. `pydantic` for four config fields, `structlog` on top
 of a logger with one handler, or `click` alongside typer would all be weight
 without a job here.
 
-## How uv works
+## How the environment works
 
-Every script here starts with the same two lines:
+Plain Python tooling — a virtualenv and pip, nothing exotic.
 
-```python
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["python-gitlab", "pyyaml", "typer", "rich"]
-# ///
+```bash
+make install      # python3 -m venv .venv && pip install ".[dev]"
 ```
 
-That block is [PEP 723](https://peps.python.org/pep-0723/) inline metadata: a
-script declaring its own dependencies. When you run `gitboard`, uv reads
-it, builds a cached virtual environment containing exactly those packages,
-and runs the script inside it. First run downloads; later runs are instant and
-reuse the cache.
+`pyproject.toml` declares the dependencies, the dev extras (pytest, ruff), and
+the `gitboard` command:
 
-**What this means in practice:**
+```toml
+[project.scripts]
+gitboard = "gitboard.cli:app"
+```
 
-- There is nothing to install. No `pip install -r requirements.txt`, no
-  "activate the venv first". `gitboard show group/project` just works on
-  a machine that has uv and nothing else.
-- The environment is per-script and cached globally (`~/.cache/uv`), not in
-  this directory. Deleting the repo leaves no orphaned venv.
-- Dependencies are declared where they are used. `seed.py` has an empty
-  dependency list because it only shells out — so it starts faster and can't
-  break when a package it never imports changes.
-- `uvx pytest` is the same idea for a tool you want to *run* rather than
-  import: a throwaway cached environment, nothing installed into the project.
-  That is why `make test` and `make lint` need no setup step.
-
-**The `.venv` is not part of this.** `make venv` exists only so your editor's
-autocomplete and go-to-definition can find `typer` and `gitlab`. The scripts
-ignore it entirely — they use the uv-managed environment either way. If your
-editor is happy without it, you never need to run it.
-
-**Useful commands:**
-
-`pyproject.toml` here is config only — ruff and pytest settings. It declares
-no dependencies and builds no package, because the PEP 723 headers own that.
+- **`make install`** is idempotent and every other target depends on it, so
+  `make test` or `make show` sets the environment up on a clean checkout.
+- **Editing code needs no reinstall.** The targets run
+  `PYTHONPATH=src .venv/bin/python -m gitboard.cli`, so `src/` is always what
+  runs. See "Do not use an editable install here" above for why it is written
+  that way rather than with `pip install -e .`.
+- **Point your editor at `.venv/bin/python`** for autocomplete. You never need
+  to activate it.
+- **`pipx install .`** if you want a `gitboard` command outside this repo.
+  It copies the package, so re-run it after changing the code.
+- **Versions are not pinned.** There is no lockfile; the dependency set is five
+  well-behaved packages. If you ever need reproducibility,
+  `.venv/bin/pip freeze > requirements.txt` is the whole story.
 
 ## Defining a board in YAML
 
@@ -339,7 +327,7 @@ This needs an `api`-scope token, not the `read_api` one reading uses. Two
 gotchas worth knowing, both now handled: quote a `due_date` or don't, either
 works, and a `|` block description won't report a phantom change on every run.
 
-`make test` runs the suite (pytest via uvx — nothing to install).
+`make test` runs the suite.
 
 ## Why this is so small
 

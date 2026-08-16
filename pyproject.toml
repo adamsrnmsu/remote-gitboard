@@ -16,14 +16,14 @@ dependencies = [
 gitboard = "gitboard.cli:app"
 
 [project.optional-dependencies]
-dev = ["pytest"]
-
-[dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "ruff"]
 
 [build-system]
-requires = ["uv_build>=0.12,<0.13"]
-build-backend = "uv_build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitboard"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

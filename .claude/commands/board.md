@@ -1,11 +1,11 @@
 ---
 description: Read a GitLab board and report progress, follow-ups, and open questions. Suggests only — never writes.
 argument-hint: <group/project> [board name]
-allowed-tools: Bash(PYTHONPATH=src uv run gitboard show:*)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*)
 ---
 
-Run `PYTHONPATH=src uv run gitboard show $ARGUMENTS --markdown` and analyse the
-board it prints.
+Run `PYTHONPATH=src .venv/bin/python -m gitboard.cli show $ARGUMENTS --markdown`
+and analyse the board it prints. (Run `make install` first if .venv is missing.)
 
 You have read-only access. Do not create, edit, label, comment on, or close
 anything — even if an MCP write tool is available, and even though
