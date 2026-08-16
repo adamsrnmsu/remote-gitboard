@@ -70,7 +70,7 @@ def test_default_is_gitlab_com(monkeypatch):
 
 
 def test_env_token_wins_over_keychain(monkeypatch):
-    monkeypatch.setenv("GITLAB_TOKEN", "from-env")
+    monkeypatch.setenv("GITLAB_READ_TOKEN", "from-env")
     monkeypatch.setattr(
         config.subprocess, "run", lambda *a, **k: pytest.fail("keychain was consulted")
     )
@@ -78,7 +78,7 @@ def test_env_token_wins_over_keychain(monkeypatch):
 
 
 def test_keychain_is_the_fallback(monkeypatch):
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
     monkeypatch.setattr(
         config.subprocess,
         "run",
@@ -88,7 +88,7 @@ def test_keychain_is_the_fallback(monkeypatch):
 
 
 def test_missing_token_raises_an_actionable_error(monkeypatch):
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
     monkeypatch.setattr(
         config.subprocess,
         "run",
@@ -96,12 +96,12 @@ def test_missing_token_raises_an_actionable_error(monkeypatch):
     )
     with pytest.raises(config.ConfigError) as e:
         config.get_config().token()
-    assert "GITLAB_TOKEN" in str(e.value)
+    assert "GITLAB_READ_TOKEN" in str(e.value)
 
 
 def test_token_is_not_read_until_asked(monkeypatch):
     """`gitboard --help` must never hit the keychain."""
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
     monkeypatch.setattr(
         config.subprocess, "run", lambda *a, **k: pytest.fail("keychain was consulted")
     )
@@ -109,7 +109,7 @@ def test_token_is_not_read_until_asked(monkeypatch):
 
 
 def test_token_is_resolved_once(monkeypatch):
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
     calls = []
 
     def once(*a, **k):
@@ -209,7 +209,7 @@ def test_file_supplies_defaults(monkeypatch, tmp_path):
 
 def test_a_token_in_the_file_is_ignored_with_a_warning(monkeypatch, tmp_path):
     """Credentials belong in the keychain, not a file that can be committed."""
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
     monkeypatch.setattr(
         config.subprocess,
         "run",
@@ -280,7 +280,7 @@ def test_cwd_beats_user_config(monkeypatch, tmp_path):
 def env_file(monkeypatch, tmp_path):
     """A .env in a cwd with no gitboard.toml and no inherited env."""
     monkeypatch.delenv("GITLAB_URL", raising=False)
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
     monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.chdir(tmp_path)
@@ -301,7 +301,7 @@ def test_env_file_supplies_token(env_file, monkeypatch):
     monkeypatch.setattr(
         config.subprocess, "run", lambda *a, **k: pytest.fail("keychain was consulted")
     )
-    env_file("GITLAB_TOKEN=glpat-from-dotenv\n")
+    env_file("GITLAB_READ_TOKEN=glpat-from-dotenv\n")
     cfg = config.get_config()
     assert cfg.token() == "glpat-from-dotenv"
     assert cfg.token_source.endswith(".env")
@@ -366,7 +366,7 @@ def test_unrelated_env_keys_are_ignored(env_file):
 
 
 def test_write_token_is_separate_from_the_read_token(monkeypatch):
-    monkeypatch.setenv("GITLAB_TOKEN", "read-tok")
+    monkeypatch.setenv("GITLAB_READ_TOKEN", "read-tok")
     monkeypatch.setenv("GITLAB_WRITE_TOKEN", "write-tok")
     cfg = config.get_config()
     assert cfg.token() == "read-tok"
@@ -375,7 +375,7 @@ def test_write_token_is_separate_from_the_read_token(monkeypatch):
 
 def test_write_falls_back_to_the_read_token(monkeypatch):
     """A single api-scope token is a legitimate setup."""
-    monkeypatch.setenv("GITLAB_TOKEN", "only-tok")
+    monkeypatch.setenv("GITLAB_READ_TOKEN", "only-tok")
     monkeypatch.delenv("GITLAB_WRITE_TOKEN", raising=False)
     monkeypatch.setattr(
         config.subprocess,
@@ -388,7 +388,7 @@ def test_write_falls_back_to_the_read_token(monkeypatch):
 
 
 def test_write_token_from_env_file(env_file):
-    env_file("GITLAB_TOKEN=read-tok\nGITLAB_WRITE_TOKEN=write-tok\n")
+    env_file("GITLAB_READ_TOKEN=read-tok\nGITLAB_WRITE_TOKEN=write-tok\n")
     cfg = config.get_config()
     assert cfg.token(write=True) == "write-tok"
     assert cfg.write_token_source.endswith(".env")
@@ -400,7 +400,7 @@ def test_write_token_flag_beats_env(monkeypatch):
 
 
 def test_write_keychain_is_consulted_before_falling_back(monkeypatch):
-    monkeypatch.setenv("GITLAB_TOKEN", "read-tok")
+    monkeypatch.setenv("GITLAB_READ_TOKEN", "read-tok")
     monkeypatch.delenv("GITLAB_WRITE_TOKEN", raising=False)
     asked = []
 
@@ -445,3 +445,66 @@ def test_a_non_scope_error_is_not_mislabelled(monkeypatch):
     with pytest.raises(client.GitlabProblem) as e, client.write_errors():
         raise GitlabError(500)
     assert "scope" not in str(e.value)
+
+
+# --- the GITLAB_TOKEN -> GITLAB_READ_TOKEN rename --------------------------
+
+
+def test_legacy_env_var_still_works(monkeypatch):
+    """An export sitting in a shell must not silently fall through to the
+    keychain and read the wrong instance."""
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
+    monkeypatch.setenv("GITLAB_TOKEN", "legacy-tok")
+    monkeypatch.setattr(
+        config.subprocess, "run", lambda *a, **k: pytest.fail("keychain was consulted")
+    )
+    assert config.get_config().token() == "legacy-tok"
+
+
+def test_legacy_env_var_warns(monkeypatch):
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
+    monkeypatch.setenv("GITLAB_TOKEN", "legacy-tok")
+    cfg = config.get_config()
+    assert any("deprecated" in w for w in cfg.warnings)
+    assert "deprecated" in cfg.token_source
+
+
+def test_new_env_var_beats_legacy(monkeypatch):
+    monkeypatch.setenv("GITLAB_READ_TOKEN", "new-tok")
+    monkeypatch.setenv("GITLAB_TOKEN", "legacy-tok")
+    cfg = config.get_config()
+    assert cfg.token() == "new-tok"
+    assert not any("deprecated" in w for w in cfg.warnings)
+
+
+def test_new_keychain_service_is_preferred(monkeypatch):
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    asked = []
+
+    def keychain(cmd, **k):
+        service = cmd[cmd.index("-s") + 1]
+        asked.append(service)
+        ok = service == config.READ_KEYCHAIN_SERVICE
+        return types.SimpleNamespace(returncode=0 if ok else 1, stdout="new\n")
+
+    monkeypatch.setattr(config.subprocess, "run", keychain)
+    assert config.get_config().token() == "new"
+    assert asked == [config.READ_KEYCHAIN_SERVICE]
+
+
+def test_legacy_keychain_service_is_the_fallback(monkeypatch):
+    """A keychain item created before the rename must keep working."""
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    asked = []
+
+    def keychain(cmd, **k):
+        service = cmd[cmd.index("-s") + 1]
+        asked.append(service)
+        ok = service == config.LEGACY_KEYCHAIN_SERVICE
+        return types.SimpleNamespace(returncode=0 if ok else 1, stdout="legacy\n")
+
+    monkeypatch.setattr(config.subprocess, "run", keychain)
+    assert config.get_config().token() == "legacy"
+    assert asked == [config.READ_KEYCHAIN_SERVICE, config.LEGACY_KEYCHAIN_SERVICE]

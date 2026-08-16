@@ -86,7 +86,9 @@ the prompt. `.claude/commands/board.md` restates it and restricts tools to
 command cannot reach `apply`. If you add write capability for the AI, both
 have to change together; README "Adding writes later" has the steps.
 
-Auth (read): `--token`, else `GITLAB_TOKEN`, else keychain `gitlab-token`.
+Auth (read): `--read-token`, else `GITLAB_READ_TOKEN`, else keychain
+`gitlab-read-token`. `GITLAB_TOKEN` and the `gitlab-token` keychain item are
+honoured as pre-rename fallbacks; the env var warns.
 Auth (write): `--write-token`, else `GITLAB_WRITE_TOKEN`, else keychain
 `gitlab-write-token`, else the read token.
 `GITLAB_URL` defaults to gitlab.com. `./gitboard.py config` shows what

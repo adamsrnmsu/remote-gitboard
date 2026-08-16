@@ -45,7 +45,11 @@ def main(
         None, "--url", envvar="GITLAB_URL", help="GitLab instance URL."
     ),
     token: str | None = typer.Option(
-        None, "--token", envvar="GITLAB_TOKEN", help="Read PAT (read_api scope)."
+        None,
+        "--read-token",
+        "--token",
+        envvar="GITLAB_READ_TOKEN",
+        help="Read PAT (read_api scope).",
     ),
     write_token: str | None = typer.Option(
         None,

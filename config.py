@@ -40,8 +40,10 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 DEFAULT_URL = "https://gitlab.com"
-KEYCHAIN_SERVICE = "gitlab-token"
+READ_KEYCHAIN_SERVICE = "gitlab-read-token"
 WRITE_KEYCHAIN_SERVICE = "gitlab-write-token"
+LEGACY_KEYCHAIN_SERVICE = "gitlab-token"  # pre-rename name, still honoured
+LEGACY_ENV_VAR = "GITLAB_TOKEN"  # ditto — warned about, not broken
 FILENAME = "gitboard.toml"
 ENV_FILENAME = ".env"
 HERE = Path(__file__).resolve().parent
@@ -84,7 +86,9 @@ class Config:
         """
         if not write:
             if self._token is None:
-                self._token = self.token_override or _from_keychain(KEYCHAIN_SERVICE)
+                self._token = self.token_override or _from_keychain(
+                    READ_KEYCHAIN_SERVICE, also=LEGACY_KEYCHAIN_SERVICE
+                )
             return self._token
 
         if self._write_token is None:
@@ -94,21 +98,27 @@ class Config:
         return self._write_token
 
 
-def _from_keychain(service, fallback=None) -> str:
+def _keychain_lookup(service):
     out = subprocess.run(
         ["security", "find-generic-password", "-s", service, "-w"],
         capture_output=True,
         text=True,
     )
-    if out.returncode:
-        if fallback is not None:
-            return fallback()  # no dedicated write token; reuse the read one
-        add = f'security add-generic-password -a "$USER" -s {service} -w'
-        raise ConfigError(
-            "no token — set GITLAB_TOKEN, pass --token, or add a keychain item:\n"
-            f"  {add} '<PAT>'"
-        )
-    return out.stdout.strip()
+    return None if out.returncode else out.stdout.strip()
+
+
+def _from_keychain(service, also=None, fallback=None, env_var=None) -> str:
+    """`also` is a second service name to try — the pre-rename one."""
+    for name in (service, also):
+        if name and (found := _keychain_lookup(name)):
+            return found
+    if fallback is not None:
+        return fallback()  # no dedicated write token; reuse the read one
+    add = f'security add-generic-password -a "$USER" -s {service} -w'
+    raise ConfigError(
+        f"no token — set {env_var or 'GITLAB_READ_TOKEN'}, pass the matching "
+        f"flag, or add a keychain item:\n  {add} '<PAT>'"
+    )
 
 
 def env_file_paths():
@@ -214,11 +224,17 @@ def get_config() -> Config:
         write_token_source = None  # falls back to the read token
 
     if _overrides.get("token"):
-        token_source = "--token"
-    elif os.environ.get("GITLAB_TOKEN"):
+        token_source = "--read-token"
+    elif os.environ.get("GITLAB_READ_TOKEN"):
         token_source = "environment"
-    elif env_values.get("GITLAB_TOKEN"):
+    elif env_values.get("GITLAB_READ_TOKEN"):
         token_source = str(env_source)
+    elif os.environ.get(LEGACY_ENV_VAR) or env_values.get(LEGACY_ENV_VAR):
+        token_source = f"{LEGACY_ENV_VAR} (deprecated)"
+        warnings.append(
+            f"{LEGACY_ENV_VAR} is deprecated — rename it to GITLAB_READ_TOKEN "
+            "so it reads clearly next to GITLAB_WRITE_TOKEN"
+        )
     else:
         token_source = "keychain"
 
@@ -233,7 +249,8 @@ def get_config() -> Config:
         warnings=tuple(warnings),
         token_source=token_source,
         write_token_source=write_token_source,
-        token_override=pick("token", "GITLAB_TOKEN"),
+        token_override=pick("token", "GITLAB_READ_TOKEN")
+        or pick("token", LEGACY_ENV_VAR),
         write_token_override=pick("write_token", "GITLAB_WRITE_TOKEN"),
     )
 
