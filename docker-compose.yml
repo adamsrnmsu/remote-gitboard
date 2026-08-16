@@ -1,0 +1,44 @@
+name: gitboard-dev
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:19.2.2-ce.0
+    container_name: gitlab
+    restart: unless-stopped
+    hostname: localhost
+    shm_size: '256m'
+    ports:
+      - '8929:8929'   # HTTP — must equal the port in external_url
+      - '2224:22'     # SSH — 22 is taken by macOS Remote Login
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost:8929'
+        nginx['listen_port'] = 8929
+        nginx['listen_https'] = false
+        gitlab_rails['gitlab_shell_ssh_port'] = 2224
+        gitlab_rails['initial_root_password'] = '${GITLAB_ROOT_PASSWORD:?set it in .env}'
+
+        # Local-only trimming. GitLab CE assumes a server; this is a laptop.
+        # Drops steady-state RSS by roughly a third. Never use on a real instance.
+        puma['worker_processes'] = 2
+        sidekiq['max_concurrency'] = 9
+        prometheus_monitoring['enable'] = false
+        registry['enable'] = false
+        gitlab_kas['enable'] = false
+    volumes:
+      - config:/etc/gitlab
+      - logs:/var/log/gitlab
+      - data:/var/opt/gitlab
+    healthcheck:
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8929/-/health']
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 10m   # cold first boot really does take this long
+
+# Named, not bind-mounted: GitLab's data dir is chatty and macOS bind mounts
+# make it crawl. `docker compose down -v` is the reset button.
+volumes:
+  config:
+  logs:
+  data:
