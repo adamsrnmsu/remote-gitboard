@@ -25,7 +25,7 @@ from rich.table import Table
 import apply as apply_mod
 import board as board_mod
 import client
-from config import ConfigError, configure, get_config
+from config import ConfigError, candidate_paths, configure, get_config
 from log import err, get_logger, out, set_verbose
 
 app = typer.Typer(
@@ -48,11 +48,36 @@ def main(
         None, "--token", envvar="GITLAB_TOKEN", help="PAT. Defaults to the keychain."
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging."),
+    config_path: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        envvar="GITBOARD_CONFIG",
+        help="TOML config file. Default: ./gitboard.toml, then ~/.config/gitboard/.",
+    ),
 ):
     """Configure the singletons once, before any command runs."""
-    configure(url=url, token=token, verbose=verbose)
     set_verbose(verbose)
-    log.debug("url=%s", get_config().url)
+    try:
+        cfg = configure(url=url, token=token, verbose=verbose, config_path=config_path)
+    except ConfigError as e:
+        err().print(f"[logging.level.error]error[/] {e}")
+        raise typer.Exit(1) from e
+    for warning in cfg.warnings:
+        log.warning(warning)
+    log.debug("url=%s config=%s", cfg.url, cfg.source or "<none>")
+
+
+def _need(value, key, what):
+    """Fall back to the config file, or explain what's missing."""
+    if value:
+        return value
+    if fallback := getattr(get_config(), key, None):
+        return fallback
+    raise ConfigError(
+        f"no {what} given and no '{key}' in a config file "
+        f"(tried {', '.join(str(p) for p in candidate_paths())})"
+    )
 
 
 def _run(fn):
@@ -66,7 +91,7 @@ def _run(fn):
 
 @app.command()
 def show(
-    project: str = typer.Argument(..., help="group/project"),
+    project: str | None = typer.Argument(None, help="group/project"),
     board_name: str | None = typer.Argument(None, help="Board name, if several."),
     markdown: bool = typer.Option(
         False, "--markdown", "-m", help="Stable markdown, for piping or the AI pass."
@@ -75,7 +100,9 @@ def show(
     """Print an issue board, grouped into its columns."""
 
     def go():
-        project_obj, board_obj = board_mod.fetch(project, board_name)
+        project_obj, board_obj = board_mod.fetch(
+            _need(project, "project", "project"), board_name or get_config().board
+        )
         if markdown:
             print(board_mod.as_markdown(project_obj, board_obj))
         else:
@@ -85,11 +112,11 @@ def show(
 
 
 @app.command()
-def plan(spec: str = typer.Argument(..., help="Path to a board YAML file.")):
+def plan(spec: str | None = typer.Argument(None, help="Path to a board YAML file.")):
     """Show what apply would change. Never writes."""
 
     def go():
-        parsed = apply_mod.load(spec)
+        parsed = apply_mod.load(_need(spec, "spec", "spec file"))
         with err().status(f"reading {parsed['project']}…"):
             pending = apply_mod.plan(client.gitlab(), parsed)
         _print_changes(pending, f"pending against {get_config().url}")
@@ -99,13 +126,13 @@ def plan(spec: str = typer.Argument(..., help="Path to a board YAML file.")):
 
 @app.command()
 def apply(
-    spec: str = typer.Argument(..., help="Path to a board YAML file."),
+    spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
 ):
     """Make the board match the YAML. Writes — needs an api-scope token."""
 
     def go():
-        parsed = apply_mod.load(spec)
+        parsed = apply_mod.load(_need(spec, "spec", "spec file"))
         gl = client.gitlab()
         with err().status(f"reading {parsed['project']}…"):
             pending = apply_mod.plan(gl, parsed)
@@ -146,8 +173,11 @@ def config():
     table = Table(box=None)
     table.add_column("", style="muted")
     table.add_column("")
+    table.add_row("config file", str(cfg.source) if cfg.source else "[muted]none[/]")
     table.add_row("url", cfg.url)
     table.add_row("verbose", str(cfg.verbose))
+    for key in ("project", "board", "spec"):
+        table.add_row(key, getattr(cfg, key) or "[muted]unset[/]")
     try:
         source = "--token/GITLAB_TOKEN" if cfg.token_override else "keychain"
         cfg.token()

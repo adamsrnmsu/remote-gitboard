@@ -25,7 +25,14 @@ exists only for editor autocomplete; the scripts ignore it.
 - `config.py` — config singleton (`get_config()`, an `lru_cache(1)`).
   `configure()` applies CLI overrides and busts the cache. Token resolution is
   **lazy** (`Config.token()`), so `--help` never touches the keychain. Tests
-  must call `config.reset()` — the singleton outlives a test otherwise.
+  must call `config.reset()` — the singleton outlives a test otherwise, and
+  they must `delenv("GITLAB_URL")` because the Makefile exports it.
+  Precedence is **flag > env > TOML file > default**; the file is searched at
+  `--config`/`$GITBOARD_CONFIG`, then `./gitboard.toml`, then
+  `~/.config/gitboard/config.toml`. It can set `url`, `project`, `board`,
+  `spec` — `project`/`spec` make the CLI arguments optional. A `token` key is
+  deliberately **ignored with a warning**: credentials belong in the keychain,
+  not a file that can be committed. `tomllib` is stdlib, so no dependency.
 - `log.py` — console + logger singletons. **`out()` is stdout, `err()` is
   stderr.** The board goes to stdout; logs, spinners, and change tables go to
   stderr. `show -m | less` must stay clean, so nothing else may write stdout.

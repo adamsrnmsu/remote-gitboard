@@ -1,6 +1,9 @@
 # Secrets — the root password and any real token
 .env
 
+# Local config (url/defaults). Ship gitboard.toml.example instead.
+gitboard.toml
+
 # Python
 __pycache__/
 *.py[cod]

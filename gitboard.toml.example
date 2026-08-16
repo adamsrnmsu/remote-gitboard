@@ -1,0 +1,21 @@
+# cp gitboard.toml.example gitboard.toml
+#
+# Searched in order, first hit wins:
+#   1. --config PATH, or $GITBOARD_CONFIG
+#   2. ./gitboard.toml          (per-project — this file)
+#   3. ~/.config/gitboard/config.toml   (per-user)
+#
+# Precedence:  --flag  >  environment  >  this file  >  built-in default
+#
+# There is deliberately no `token` key. A PAT belongs in the macOS keychain
+# (`security add-generic-password -a "$USER" -s gitlab-token -w '<PAT>'`),
+# in GITLAB_TOKEN, or behind --token. A token key here is ignored with a
+# warning, because config files get committed by accident and keychains don't.
+
+url = "http://localhost:8929"
+
+# Defaults, so the arguments become optional:
+project = "root/demo"    # ./gitboard.py show
+spec = "boards/demo.yaml"  # ./gitboard.py plan / apply
+
+# board = "Dev Board"    # only needed if a project has more than one board

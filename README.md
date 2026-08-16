@@ -134,6 +134,44 @@ One entry point, `./gitboard.py`:
 `-v` turns on debug logging. Logs and progress go to **stderr**, the board
 goes to **stdout**, so `--markdown | less` stays clean.
 
+### Config file
+
+So you stop exporting `GITLAB_URL` in every shell:
+
+```bash
+cp gitboard.toml.example gitboard.toml   # then edit
+```
+
+```toml
+url = "https://gitlab.YOURCO.com"
+project = "group/project"     # makes the argument optional
+spec = "boards/team.yaml"
+# board = "Dev Board"         # only if a project has several
+```
+
+```bash
+./gitboard.py show      # project comes from the file
+./gitboard.py plan      # spec comes from the file
+./gitboard.py config    # shows what resolved, and from where
+```
+
+Searched in order, first hit wins:
+
+1. `--config PATH`, or `$GITBOARD_CONFIG`
+2. `./gitboard.toml` — per project
+3. `~/.config/gitboard/config.toml` — per user (`$XDG_CONFIG_HOME` honoured)
+
+Precedence is **`--flag` > environment > file > default**, so the file sets
+your normal instance and a flag still overrides it for one command.
+
+**There is no `token` key.** A PAT belongs in the keychain, in `GITLAB_TOKEN`,
+or behind `--token`; a `token` key in the file is ignored with a warning,
+because config files get committed by accident and keychains don't.
+`gitboard.toml` is gitignored regardless.
+
+TOML via stdlib `tomllib` — no dependency added. A malformed file, or a
+`--config` path that doesn't exist, is an error rather than a silent fallback.
+
 Or the AI pass:
 
 ```

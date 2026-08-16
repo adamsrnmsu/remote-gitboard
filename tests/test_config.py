@@ -159,3 +159,102 @@ def test_rejected_token_message(monkeypatch):
 def test_unreachable_host_message(monkeypatch):
     msg = run_get(monkeypatch, lambda m: ConnectionError("refused"))
     assert "cannot reach" in msg
+
+
+# --- config file -----------------------------------------------------------
+
+
+def write(tmp_path, text, name="gitboard.toml"):
+    f = tmp_path / name
+    f.write_text(text)
+    return str(f)
+
+
+def test_file_supplies_url(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITLAB_URL", raising=False)
+    path = write(tmp_path, 'url = "http://from-file"\n')
+    assert config.configure(config_path=path).url == "http://from-file"
+
+
+def test_env_beats_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITLAB_URL", "http://from-env")
+    path = write(tmp_path, 'url = "http://from-file"\n')
+    assert config.configure(config_path=path).url == "http://from-env"
+
+
+def test_flag_beats_env_and_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITLAB_URL", "http://from-env")
+    path = write(tmp_path, 'url = "http://from-file"\n')
+    cfg = config.configure(url="http://from-flag", config_path=path)
+    assert cfg.url == "http://from-flag"
+
+
+def test_file_supplies_defaults(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITLAB_URL", raising=False)
+    path = write(tmp_path, 'project = "grp/proj"\nspec = "b.yaml"\nboard = "Dev"\n')
+    cfg = config.configure(config_path=path)
+    assert (cfg.project, cfg.spec, cfg.board) == ("grp/proj", "b.yaml", "Dev")
+
+
+def test_a_token_in_the_file_is_ignored_with_a_warning(monkeypatch, tmp_path):
+    """Credentials belong in the keychain, not a file that can be committed."""
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.setattr(
+        config.subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="from-keychain\n"),
+    )
+    path = write(tmp_path, 'token = "glpat-oops"\n')
+    cfg = config.configure(config_path=path)
+    assert cfg.token() == "from-keychain"
+    assert any("ignoring 'token'" in w for w in cfg.warnings)
+
+
+def test_unknown_keys_warn_but_do_not_fail(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITLAB_URL", raising=False)
+    path = write(tmp_path, 'url = "http://x"\nnope = 1\n')
+    cfg = config.configure(config_path=path)
+    assert cfg.url == "http://x"
+    assert any("nope" in w for w in cfg.warnings)
+
+
+def test_malformed_toml_is_an_error(tmp_path):
+    path = write(tmp_path, "url = [[[\n")
+    with pytest.raises(config.ConfigError):
+        config.configure(config_path=path)
+
+
+def test_a_missing_explicit_file_is_an_error(tmp_path):
+    """Asking for a config that isn't there must not silently fall back."""
+    with pytest.raises(config.ConfigError) as e:
+        config.configure(config_path=str(tmp_path / "absent.toml"))
+    assert "no such config file" in str(e.value)
+
+
+def test_no_file_anywhere_is_fine(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITLAB_URL", raising=False)
+    monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+    cfg = config.get_config()
+    assert cfg.source is None and cfg.url == config.DEFAULT_URL
+
+
+def test_cwd_file_is_found_without_being_named(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITLAB_URL", raising=False)
+    monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
+    write(tmp_path, 'url = "http://cwd"\n')
+    monkeypatch.chdir(tmp_path)
+    assert config.get_config().url == "http://cwd"
+
+
+def test_cwd_beats_user_config(monkeypatch, tmp_path):
+    monkeypatch.delenv("GITLAB_URL", raising=False)
+    monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
+    xdg = tmp_path / "xdg" / "gitboard"
+    xdg.mkdir(parents=True)
+    (xdg / "config.toml").write_text('url = "http://user"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    write(tmp_path, 'url = "http://cwd"\n')
+    monkeypatch.chdir(tmp_path)
+    assert config.get_config().url == "http://cwd"
