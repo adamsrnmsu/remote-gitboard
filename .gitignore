@@ -19,6 +19,3 @@ venv/
 .DS_Store
 .idea/
 .vscode/
-
-# uv creates this from the config-only pyproject; deps live in PEP 723 headers
-uv.lock

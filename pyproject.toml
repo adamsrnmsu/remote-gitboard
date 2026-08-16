@@ -1,14 +1,28 @@
-# Config only — this repo is two standalone `uv run --script` files, not a
-# package. Their deps live in PEP 723 headers, not here.
-
 [project]
-name = "remote-gitboard"
+name = "gitboard"
 version = "0.1.0"
-description = "Read a self-hosted GitLab issue board from the terminal."
+description = "Read a self-hosted GitLab issue board from the terminal, or define one in YAML."
+readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+    "python-gitlab",
+    "pyyaml",
+    "typer",
+    "rich",
+    "python-dotenv",
+]
+
+[project.scripts]
+gitboard = "gitboard.cli:app"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
 
 [tool.pytest.ini_options]
-pythonpath = ["."]        # board.py sits at the repo root, not in a package
 testpaths = ["tests"]
 
 [tool.ruff]
@@ -25,6 +39,5 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# board.py's selftest fakes the API surface with one-line stub classes.
-# Compact on purpose — the shape of the fake is the point, not its style.
-"board.py" = ["E701"]
+# Test fakes are deliberately terse; a stub class per API object is the point.
+"tests/*" = ["E501"]

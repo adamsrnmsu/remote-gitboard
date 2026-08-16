@@ -1,14 +1,15 @@
 ---
 description: Read a GitLab board and report progress, follow-ups, and open questions. Suggests only — never writes.
 argument-hint: <group/project> [board name]
-allowed-tools: Bash(./gitboard.py show:*)
+allowed-tools: Bash(PYTHONPATH=src uv run gitboard show:*)
 ---
 
-Run `./gitboard.py show $ARGUMENTS --markdown` and analyse the board it prints.
+Run `PYTHONPATH=src uv run gitboard show $ARGUMENTS --markdown` and analyse the
+board it prints.
 
 You have read-only access. Do not create, edit, label, comment on, or close
 anything — even if an MCP write tool is available, and even though
-`./gitboard.py apply` exists in this repo. Every mutation is a suggestion for
+`gitboard apply` exists in this repo. Every mutation is a suggestion for
 the user to approve.
 
 Report exactly these four sections, and keep each one short:

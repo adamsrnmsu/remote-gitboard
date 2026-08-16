@@ -1,32 +1,27 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["python-gitlab", "pyyaml", "typer", "rich", "python-dotenv"]
-# ///
 """gitboard — read a GitLab issue board, or define one in YAML.
 
-The single entry point. Everything else in this repo is a module it calls:
+The CLI. Everything else in the package is a module it calls:
 
-    config.py   the config singleton (url, token, verbosity)
+    config.py   the config singleton (url, tokens, verbosity)
     log.py      the console + logger singletons
     client.py   the GitLab connection and its error messages
     board.py    reading a board (the part no MCP server does)
     apply.py    writing a board from YAML — the only writer
 
-    ./gitboard.py show group/project
-    ./gitboard.py show group/project --markdown | less
-    ./gitboard.py plan boards/test.yaml
-    ./gitboard.py apply boards/test.yaml
+    gitboard show group/project
+    gitboard show group/project --markdown | less
+    gitboard plan boards/test.yaml
+    gitboard apply boards/test.yaml
 """
 
 import typer
 from rich.table import Table
 
-import apply as apply_mod
-import board as board_mod
-import client
-from config import ConfigError, candidate_paths, configure, get_config
-from log import err, get_logger, out, set_verbose
+from gitboard import apply as apply_mod
+from gitboard import board as board_mod
+from gitboard import client
+from gitboard.config import ConfigError, candidate_paths, configure, get_config
+from gitboard.log import err, get_logger, out, set_verbose
 
 app = typer.Typer(
     add_completion=False,
@@ -164,7 +159,7 @@ def apply(
             changes = apply_mod.apply(gl, parsed)
         err().print(
             f"[added]{len(changes)} change(s) written[/] — "
-            f"./gitboard.py show {parsed['project']}"
+            f"gitboard show {parsed['project']}"
         )
 
     _run(go)

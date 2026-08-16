@@ -6,7 +6,7 @@ A traceback is a bad answer to a typo'd project path or an expired token.
 
 from contextlib import contextmanager
 
-from config import get_config
+from gitboard.config import get_config
 
 
 class GitlabProblem(Exception):

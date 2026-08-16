@@ -4,7 +4,7 @@ board.py is a library module: no auth, no CLI. Auth lives in config.py and
 error mapping in client.py, each with their own tests.
 """
 
-import board
+from gitboard import board
 
 
 class FakeList:

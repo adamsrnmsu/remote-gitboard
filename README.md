@@ -38,7 +38,7 @@ in the environment overrides it if you'd rather pass one per-shell.
 ### 3. Verify, then decide on MCP
 
 ```bash
-./gitboard.py show group/project   # should print your board
+gitboard show group/project   # should print your board
 ```
 
 Then check whether your instance exposes the official MCP server:
@@ -51,7 +51,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "$GITLAB_URL/api/v4/mcp"
   OAuth 2.0 dynamic client registration, so no second token on disk. Free tier,
   not Duo-gated. Gives Claude ~34 tools: issues, labels, comments/notes,
   milestones, MRs, pipelines, code search.
-- **404** → instance predates it. `gitboard.py` alone still works; the AI pass just
+- **404** → instance predates it. `gitboard` alone still works; the AI pass just
   sees the board rather than the board plus issue discussion threads.
 
 ## Local test instance
@@ -65,13 +65,13 @@ open -a Docker                     # daemon must be running
 cp .env.example .env               # then edit the password
 docker compose up -d
 docker compose logs -f gitlab      # wait for healthy — first boot is 5-10 min
-./seed.py                          # demo project, board, labels, issues, PAT
+scripts/seed.py                          # demo project, board, labels, issues, PAT
 ```
 
-`seed.py` prints the two commands that point `gitboard.py` at it. Then:
+`scripts/seed.py` prints the two commands that point gitboard at it. Then:
 
 ```bash
-./gitboard.py show root/demo
+gitboard show root/demo
 ```
 
 | | |
@@ -121,16 +121,19 @@ sudo rm /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v1
 
 ## Use
 
-One entry point, `./gitboard.py`:
+One entry point, installed from `pyproject.toml`:
 
 ```bash
-./gitboard.py show group/project              # the board, as a tree
-./gitboard.py show group/project "Dev Board"  # a named board
-./gitboard.py show group/project --markdown   # stable output, for pipes
-./gitboard.py plan boards/test.yaml           # what would change
-./gitboard.py apply boards/test.yaml          # write it
-./gitboard.py config                          # what URL and token it resolved
-./gitboard.py --help
+uv sync                                       # once
+uv run gitboard --help                        # or `gitboard` if installed globally
+
+gitboard show group/project              # the board, as a tree
+gitboard show group/project "Dev Board"  # a named board
+gitboard show group/project --markdown   # stable output, for pipes
+gitboard plan boards/test.yaml           # what would change
+gitboard apply boards/test.yaml          # write it
+gitboard config                          # what URL and token it resolved
+gitboard --help
 ```
 
 `--url`, `--read-token`, and `--write-token` override `GITLAB_URL`,
@@ -162,12 +165,12 @@ write is refused with a message naming the fix rather than a raw 403.
 Then everything works with no exports and no keychain:
 
 ```bash
-./gitboard.py show test/test
+gitboard show test/test
 ```
 
-Found in the current directory, then next to the scripts — so it works when
-you run `~/path/to/gitboard.py` from somewhere else. A real exported variable
-still wins over it, and `./gitboard.py config` reports which of the four
+Found by walking up from the current directory, the way git finds its root —
+so it works from any subdirectory of a project. A real exported variable
+still wins over it, and `gitboard config` reports which of the four
 sources the token actually came from.
 
 `.env` is the one file allowed to hold a token, because it is gitignored and
@@ -191,9 +194,9 @@ spec = "boards/team.yaml"
 ```
 
 ```bash
-./gitboard.py show      # project comes from the file
-./gitboard.py plan      # spec comes from the file
-./gitboard.py config    # shows what resolved, and from where
+gitboard show      # project comes from the file
+gitboard plan      # spec comes from the file
+gitboard config    # shows what resolved, and from where
 ```
 
 Searched in order, first hit wins:
@@ -226,20 +229,21 @@ moves. Suggestions are copyable, never applied.
 
 ## What's here
 
-`gitboard.py` is the only executable. Everything else is a module it imports.
+The package lives in `src/gitboard/`; `gitboard.cli:app` is the entry point.
 
 | File | Purpose |
 |---|---|
-| `gitboard.py` | The CLI. Typer + rich. The only entry point. |
-| `board.py` | Reading a board — the one gap no existing tool fills. |
-| `apply.py` | Making a board match YAML. The only thing here that writes. |
-| `client.py` | The GitLab connection, and where API errors become English. |
-| `config.py` | Config singleton: URL, token, verbosity. |
-| `log.py` | Console + logger singletons. stdout for data, stderr for chatter. |
+| `src/gitboard/cli.py` | The CLI. Typer + rich. The entry point. |
+| `src/gitboard/board.py` | Reading a board — the one gap no existing tool fills. |
+| `src/gitboard/apply.py` | Making a board match YAML. The only thing that writes. |
+| `src/gitboard/client.py` | The GitLab connection, and where API errors become English. |
+| `src/gitboard/config.py` | Config singleton: URL, tokens, verbosity. |
+| `src/gitboard/log.py` | Console + logger singletons. stdout for data, stderr for chatter. |
+| `tests/` | pytest suite. No network — the API surface is faked. |
 | `boards/*.yaml` | Board definitions — columns and issues, editable. |
+| `scripts/seed.py` | Mints a PAT, then applies `boards/demo.yaml`. |
 | `.claude/commands/board.md` | The `/board` prompt. Read-only instructions. |
 | `docker-compose.yml` | Disposable local GitLab CE for development. |
-| `seed.py` | Mints a PAT, then applies `boards/demo.yaml`. |
 
 ### Why these packages
 
@@ -271,7 +275,7 @@ Every script here starts with the same two lines:
 ```
 
 That block is [PEP 723](https://peps.python.org/pep-0723/) inline metadata: a
-script declaring its own dependencies. When you run `./gitboard.py`, uv reads
+script declaring its own dependencies. When you run `gitboard`, uv reads
 it, builds a cached virtual environment containing exactly those packages,
 and runs the script inside it. First run downloads; later runs are instant and
 reuse the cache.
@@ -279,7 +283,7 @@ reuse the cache.
 **What this means in practice:**
 
 - There is nothing to install. No `pip install -r requirements.txt`, no
-  "activate the venv first". `./gitboard.py show group/project` just works on
+  "activate the venv first". `gitboard show group/project` just works on
   a machine that has uv and nothing else.
 - The environment is per-script and cached globally (`~/.cache/uv`), not in
   this directory. Deleting the repo leaves no orphaned venv.
@@ -296,13 +300,6 @@ ignore it entirely — they use the uv-managed environment either way. If your
 editor is happy without it, you never need to run it.
 
 **Useful commands:**
-
-```bash
-uv run --script gitboard.py show group/project   # explicit form of ./gitboard.py
-uv run --with rich python                        # a REPL with rich available
-uvx ruff check .                                 # run a tool without installing it
-uv cache clean                                   # if an environment ever gets stuck
-```
 
 `pyproject.toml` here is config only — ruff and pytest settings. It declares
 no dependencies and builds no package, because the PEP 723 headers own that.
@@ -331,9 +328,9 @@ issues:
 ```
 
 ```bash
-./gitboard.py plan boards/test.yaml     # what would change
-./gitboard.py apply boards/test.yaml    # write it
-./gitboard.py show test/test           # read it back
+gitboard plan boards/test.yaml     # what would change
+gitboard apply boards/test.yaml    # write it
+gitboard show test/test           # read it back
 ```
 
 Idempotent — re-running writes only the drift. **Additive only:** nothing is
@@ -375,7 +372,7 @@ Currently the AI can only suggest. To let it actually move cards:
    label add/remove — the move-card primitive. The official server lacks it;
    its write set is create-only (`create_issue`, `create_workitem_note`, …).
 3. Drop the read-only paragraph from `.claude/commands/board.md`, or it will
-   keep refusing to write even with the tools present. (`./gitboard.py apply`
+   keep refusing to write even with the tools present. (`gitboard apply`
    already writes — this is only about letting the AI do it unprompted.)
 
 ## Notes

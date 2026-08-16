@@ -1,27 +1,29 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# ///
+#!/usr/bin/env python3
 """Mint a root PAT on the local GitLab container, then apply boards/demo.yaml.
 
-    ./seed.py            # mint a token and seed the demo board
-    ./seed.py --token    # just mint and print a token, seed nothing
+    scripts/seed.py            # mint a token and seed the demo board
+    scripts/seed.py --token    # just mint and print a token, seed nothing
 
 Only for the throwaway instance in docker-compose.yml. It shells into the
 container as root; never point it at anything you care about.
 
-The board contents live in boards/demo.yaml and go through the CLI, so this
-file owns nothing but the token — the one thing the REST API cannot bootstrap
-for itself. That leaves it dependency-free.
+The board contents live in boards/demo.yaml and go through `uv run gitboard`,
+so this file owns nothing but the token — the one thing the REST API cannot
+bootstrap for itself.
+
+Plain python3, not `uv run --script`: it needs no dependencies, and running
+under uv would export a VIRTUAL_ENV that hijacks the nested `uv run gitboard`.
+The nested call uses --no-sync; re-syncing mid-run has been observed to leave
+the editable install unimportable (see README, "If gitboard stops importing").
 """
 
 import os
 import subprocess
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 URL = "http://localhost:8929"
-SPEC = os.path.join(HERE, "boards", "demo.yaml")
+SPEC = os.path.join(ROOT, "boards", "demo.yaml")
 TOKEN_NAME = "gitboard-seed"
 # Fixed so re-seeding doesn't invalidate your keychain entry. Safe only
 # because this instance is disposable and bound to localhost.
@@ -56,6 +58,7 @@ def mint(token):
             RUBY,
             token,
         ],
+        cwd=ROOT,  # docker-compose.yml lives at the repo root, not in scripts/
         capture_output=True,
         text=True,
     )
@@ -73,8 +76,15 @@ def main():
         return
 
     r = subprocess.run(
-        [os.path.join(HERE, "gitboard.py"), "apply", SPEC, "--yes"],
-        env={**os.environ, "GITLAB_URL": URL, "GITLAB_TOKEN": TOKEN},
+        ["uv", "run", "--no-sync", "gitboard", "apply", SPEC, "--yes"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.path.join(ROOT, "src"),  # see the Makefile header
+            "GITLAB_URL": URL,
+            "GITLAB_READ_TOKEN": TOKEN,
+            "GITLAB_WRITE_TOKEN": TOKEN,
+        },
     )
     if r.returncode:
         sys.exit(r.returncode)
@@ -82,9 +92,9 @@ def main():
     print(f"""
 seeded root/demo — {URL}/root/demo/-/boards
 
-  security add-generic-password -U -a "$USER" -s gitlab-token -w '{TOKEN}'
+  security add-generic-password -U -a "$USER" -s gitlab-read-token -w '{TOKEN}'
   export GITLAB_URL={URL}
-  ./gitboard.py show root/demo
+  uv run gitboard show root/demo
 """)
 
 

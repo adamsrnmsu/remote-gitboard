@@ -10,8 +10,8 @@ leaves it on the board. Issues are matched by title.
 
 import yaml
 
-import client
-from log import get_logger
+from gitboard import client
+from gitboard.log import get_logger
 
 log = get_logger()
 

@@ -10,8 +10,7 @@ import types
 
 import pytest
 
-import apply
-import client
+from gitboard import apply, client
 
 
 class FakeIssue:

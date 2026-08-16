@@ -1,18 +1,17 @@
 # Local GitLab CE lifecycle + the gitboard CLI.
-# Everything is `uv run --script` with inline deps — `venv` is for your
-# editor's autocomplete, not for running anything.
+# `uv run gitboard` resolves the entry point from pyproject.toml and syncs the
+# environment first, so there is no install step and no venv to activate.
+#
+# PYTHONPATH=src is belt-and-braces: uv's editable install writes a .pth that
+# this machine intermittently stops honouring, leaving `import gitboard`
+# failing until `uv sync --reinstall-package gitboard`. Naming src directly
+# makes every target deterministic. Harmless when the install is healthy.
 
-PROJECT    ?= root/demo
-SPEC       ?= boards/demo.yaml
-GITLAB_URL ?= http://localhost:8929
-export GITLAB_URL
+PROJECT    ?=
+SPEC       ?=
+GITBOARD    = PYTHONPATH=src uv run gitboard
 
-# pytest imports the modules, so it needs their deps. uvx builds this env
-# on the fly and caches it; nothing is installed into the repo.
-PYTEST = uvx --with pyyaml --with rich --with typer --with python-gitlab \
-                --with python-dotenv pytest
-
-.PHONY: help up wait down reset logs seed show plan apply test fmt lint venv clean
+.PHONY: help up wait down reset logs seed show plan apply test fmt lint sync repair clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -36,19 +35,19 @@ logs:  ## follow container logs
 	docker compose logs -f gitlab
 
 seed: wait  ## mint a PAT and apply boards/demo.yaml
-	./seed.py
+	scripts/seed.py
 
 show:  ## print a board: make show PROJECT=group/project
-	./gitboard.py show $(PROJECT)
+	$(GITBOARD) show $(PROJECT)
 
 plan:  ## preview YAML changes: make plan SPEC=boards/test.yaml
-	./gitboard.py plan $(SPEC)
+	$(GITBOARD) plan $(SPEC)
 
 apply:  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
-	./gitboard.py apply $(SPEC)
+	$(GITBOARD) apply $(SPEC)
 
 test:  ## run the test suite
-	$(PYTEST) -q
+	PYTHONPATH=src uv run pytest -q
 
 fmt:  ## format (ruff format is black, same style)
 	uvx ruff format .
@@ -56,11 +55,15 @@ fmt:  ## format (ruff format is black, same style)
 lint:  ## lint, --fix to apply the safe fixes
 	uvx ruff check .
 
-venv:  ## .venv for editor autocomplete only
-	uv venv && uv pip install python-gitlab pyyaml typer rich python-dotenv
+sync:  ## install the project and its deps into .venv
+	uv sync
+
+repair:  ## fix `ModuleNotFoundError: gitboard` from a stale editable install
+	uv sync --reinstall-package gitboard
 
 .env:
 	@echo "no .env — cp .env.example .env and set GITLAB_ROOT_PASSWORD" >&2; exit 1
 
 clean:  ## remove venv, caches, and bytecode
-	rm -rf .venv __pycache__ tests/__pycache__ .pytest_cache .ruff_cache
+	rm -rf .venv .pytest_cache .ruff_cache
+	find . -name __pycache__ -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true

@@ -9,8 +9,8 @@ project.issues.
 from rich.text import Text
 from rich.tree import Tree
 
-import client
-from log import out
+from gitboard import client
+from gitboard.log import out
 
 
 def board_columns(project, board):

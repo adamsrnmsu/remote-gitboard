@@ -4,8 +4,7 @@ import types
 
 import pytest
 
-import client
-import config
+from gitboard import client, config
 
 
 @pytest.fixture(autouse=True)
@@ -13,12 +12,12 @@ def clean_config(monkeypatch, tmp_path_factory):
     """Isolate every test from the developer's real environment.
 
     Three things leak in otherwise, and each one made a test lie: the
-    singleton outlives a test unless reset; the repo's own .env is found via
-    config.HERE from any cwd; and ~/.config/gitboard/config.toml is found via
-    XDG. Point all of them somewhere empty.
+    singleton outlives a test unless reset; a .env is found by walking up from
+    the cwd, so running pytest from the repo finds the repo's; and
+    ~/.config/gitboard/config.toml is found via XDG. Point all of them
+    somewhere empty.
     """
     empty = tmp_path_factory.mktemp("isolated")
-    monkeypatch.setattr(config, "HERE", empty)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(empty / "xdg"))
     monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
     monkeypatch.chdir(empty)

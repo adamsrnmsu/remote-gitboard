@@ -46,7 +46,6 @@ LEGACY_KEYCHAIN_SERVICE = "gitlab-token"  # pre-rename name, still honoured
 LEGACY_ENV_VAR = "GITLAB_TOKEN"  # ditto — warned about, not broken
 FILENAME = "gitboard.toml"
 ENV_FILENAME = ".env"
-HERE = Path(__file__).resolve().parent
 KNOWN_KEYS = {"url", "project", "board", "spec"}
 
 _overrides: dict[str, object] = {}
@@ -122,13 +121,14 @@ def _from_keychain(service, also=None, fallback=None, env_var=None) -> str:
 
 
 def env_file_paths():
-    """cwd first, then next to the scripts — so running from elsewhere works."""
-    seen, paths = set(), []
-    for path in (Path.cwd() / ENV_FILENAME, HERE / ENV_FILENAME):
-        if path not in seen:
-            seen.add(path)
-            paths.append(path)
-    return paths
+    """cwd, then each parent — the way git finds its root.
+
+    Walking up rather than looking next to the package: once gitboard is
+    installed the package lives in site-packages, which is nobody's project.
+    This finds the .env of whatever tree you are standing in.
+    """
+    here = Path.cwd()
+    return [d / ENV_FILENAME for d in (here, *here.parents)]
 
 
 @lru_cache(maxsize=1)
