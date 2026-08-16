@@ -15,6 +15,9 @@ dependencies = [
 [project.scripts]
 gitboard = "gitboard.cli:app"
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [dependency-groups]
 dev = ["pytest"]
 

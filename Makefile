@@ -1,22 +1,36 @@
 # Local GitLab CE lifecycle + the gitboard CLI.
-# `uv run gitboard` resolves the entry point from pyproject.toml and syncs the
-# environment first, so there is no install step and no venv to activate.
 #
-# PYTHONPATH=src is belt-and-braces: uv's editable install writes a .pth that
-# this machine intermittently stops honouring, leaving `import gitboard`
-# failing until `uv sync --reinstall-package gitboard`. Naming src directly
-# makes every target deterministic. Harmless when the install is healthy.
+# Everything here runs the code straight out of src/ via PYTHONPATH, and never
+# through an editable install. On this machine a .pth-based editable install
+# works for a few seconds after `pip install -e .` (or `uv sync`) and then
+# stops — the file is present and readable, its target exists, site lists it,
+# and the path still is not added. Reproduced identically with pip and with
+# uv, so it is not a uv problem. Root cause unknown.
+#
+# What is reliable: anything that copies the package (`pip install .`,
+# `uv tool install .`) and anything that names src/ directly (PYTHONPATH).
+# Both are used below. Do not "simplify" these away.
 
+VENV       = .venv
+PY         = $(VENV)/bin/python
 PROJECT    ?=
 SPEC       ?=
-GITBOARD    = PYTHONPATH=src uv run gitboard
+GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help uv up wait down reset logs seed show plan apply test fmt lint sync repair clean
+.PHONY: help install uv up wait down reset logs seed show plan apply test fmt lint clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
 
-uv:  ## install uv if it is missing, then explain how it is used here
+$(VENV)/bin/pytest: pyproject.toml
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install -q --upgrade pip
+	$(VENV)/bin/pip install -q ".[dev]"
+	@echo "installed into $(VENV) — no uv required"
+
+install: $(VENV)/bin/pytest  ## create .venv and install (plain venv + pip)
+
+uv:  ## optional: install uv, and explain how it is used here
 	@if command -v uv >/dev/null 2>&1; then \
 	  echo "uv is already installed — $$(uv --version)"; \
 	elif command -v brew >/dev/null 2>&1; then \
@@ -33,25 +47,14 @@ uv:  ## install uv if it is missing, then explain how it is used here
 	  exit 1; }
 	@printf '%s\n' \
 	  "" \
-	  "uv replaces pip + venv + pipx. Nothing here is ever pip-installed." \
+	  "uv is optional here — \`make install\` uses plain venv + pip." \
+	  "What uv is good for in this project:" \
 	  "" \
-	  "  Run this project" \
-	  "    uv tool install .        \`gitboard\` on your PATH; re-run after code changes" \
-	  "    uv run gitboard show     run from the repo without installing" \
-	  "    make show                same, but immune to the .pth issue (see: make repair)" \
+	  "    uv tool install .        \`gitboard\` on your PATH, anywhere" \
+	  "    uvx ruff check .         run a tool without installing it" \
 	  "" \
-	  "  Environment" \
-	  "    uv sync                  make .venv match pyproject.toml + uv.lock" \
-	  "    uv add <pkg>             add a dependency and update uv.lock" \
-	  "    uv remove <pkg>          drop one" \
-	  "    uv lock --upgrade        refresh pinned versions" \
-	  "" \
-	  "  Tools you do not want as dependencies" \
-	  "    uvx ruff check .         run a tool in a throwaway cached env" \
-	  "" \
-	  "uv owns .venv in this directory — you never activate it; \`uv run\` and" \
-	  "\`make\` use it for you. uv.lock is committed, so the environment is" \
-	  "reproducible. Point your editor at .venv/bin/python for autocomplete." \
+	  "Avoid \`uv run gitboard\`: it relies on an editable install, which is" \
+	  "the one thing that does not work reliably on this machine." \
 	  ""
 
 up: .env  ## start the local GitLab container
@@ -72,20 +75,20 @@ reset:  ## stop and wipe all three volumes
 logs:  ## follow container logs
 	docker compose logs -f gitlab
 
-seed: wait  ## mint a PAT and apply boards/demo.yaml
+seed: wait install  ## mint a PAT and apply boards/demo.yaml
 	scripts/seed.py
 
-show:  ## print a board: make show PROJECT=group/project
-	$(GITBOARD) show $(PROJECT)
+show: install  ## print a board: make show PROJECT=group/project
+	@$(GITBOARD) show $(PROJECT)
 
-plan:  ## preview YAML changes: make plan SPEC=boards/test.yaml
-	$(GITBOARD) plan $(SPEC)
+plan: install  ## preview YAML changes: make plan SPEC=boards/test.yaml
+	@$(GITBOARD) plan $(SPEC)
 
-apply:  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
-	$(GITBOARD) apply $(SPEC)
+apply: install  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
+	@$(GITBOARD) apply $(SPEC)
 
-test:  ## run the test suite
-	PYTHONPATH=src uv run pytest -q
+test: install  ## run the test suite
+	PYTHONPATH=src $(VENV)/bin/pytest -q
 
 fmt:  ## format (ruff format is black, same style)
 	uvx ruff format .
@@ -93,15 +96,9 @@ fmt:  ## format (ruff format is black, same style)
 lint:  ## lint, --fix to apply the safe fixes
 	uvx ruff check .
 
-sync:  ## install the project and its deps into .venv
-	uv sync
-
-repair:  ## fix `ModuleNotFoundError: gitboard` from a stale editable install
-	uv sync --reinstall-package gitboard
-
 .env:
 	@echo "no .env — cp .env.example .env and set GITLAB_ROOT_PASSWORD" >&2; exit 1
 
 clean:  ## remove venv, caches, and bytecode
-	rm -rf .venv .pytest_cache .ruff_cache
-	find . -name __pycache__ -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
+	rm -rf $(VENV) .pytest_cache .ruff_cache
+	find . -name __pycache__ -not -path './$(VENV)/*' -exec rm -rf {} + 2>/dev/null || true

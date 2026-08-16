@@ -5,9 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv tool install .                       # `gitboard` on PATH — most reliable
-gitboard show group/project             # the board, as a rich tree
-uv run gitboard show group/project      # same, from the repo
+make install                            # once: plain venv + pip, no uv
+make show PROJECT=group/project         # the board, as a rich tree
 uv run gitboard show group/project -m   # markdown — stable, parseable
 uv run gitboard plan boards/test.yaml   # diff YAML against GitLab
 uv run gitboard apply boards/test.yaml  # write it (--yes to skip the prompt)
@@ -17,15 +16,17 @@ make up seed                            # local GitLab + demo board
 make repair                             # fix ModuleNotFoundError: gitboard
 ```
 
-`make` alone lists targets. `uv run` syncs the environment from
-`pyproject.toml` + `uv.lock` first, so there is no install step.
+`make` alone lists targets.
 
-**Every make target passes `PYTHONPATH=src`.** uv's editable install writes a
-`.pth` that this machine intermittently stops honouring — byte-identical file,
-working one moment and failing 5 seconds later — leaving `import gitboard`
-broken until `uv sync --reinstall-package gitboard` (`make repair`). Naming
-`src` directly sidesteps the `.pth` and is harmless when it is healthy. Do not
-remove it thinking it is redundant.
+**Never use an editable install on this machine.** `pip install -e .` and
+`uv sync` both work through a `.pth` in `.venv` that adds `src/`; it stops
+being honoured ~8 seconds after install, with the file present and readable,
+its target existing, and `site` listing it. Reproduced identically with pip
+and uv — not a uv problem, root cause unknown. Every make target therefore
+runs `PYTHONPATH=src .venv/bin/python -m gitboard.cli`, which names `src`
+directly and makes edits live with no reinstall. `uv tool install .` /
+`pipx install .` copy the package and are also fine. Do not "simplify" the
+PYTHONPATH away.
 
 ## Architecture
 

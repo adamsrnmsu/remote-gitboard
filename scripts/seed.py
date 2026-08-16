@@ -7,14 +7,13 @@
 Only for the throwaway instance in docker-compose.yml. It shells into the
 container as root; never point it at anything you care about.
 
-The board contents live in boards/demo.yaml and go through `uv run gitboard`,
-so this file owns nothing but the token — the one thing the REST API cannot
-bootstrap for itself.
+The board contents live in boards/demo.yaml and go through the CLI, so this
+file owns nothing but the token — the one thing the REST API cannot bootstrap
+for itself.
 
-Plain python3, not `uv run --script`: it needs no dependencies, and running
-under uv would export a VIRTUAL_ENV that hijacks the nested `uv run gitboard`.
-The nested call uses --no-sync; re-syncing mid-run has been observed to leave
-the editable install unimportable (see README, "If gitboard stops importing").
+Plain python3 and no dependencies of its own. It calls .venv's python with
+PYTHONPATH=src rather than a console script, for the reason in the Makefile
+header: editable installs do not stay working on this machine.
 """
 
 import os
@@ -76,7 +75,8 @@ def main():
         return
 
     r = subprocess.run(
-        ["uv", "run", "--no-sync", "gitboard", "apply", SPEC, "--yes"],
+        [os.path.join(ROOT, ".venv", "bin", "python"),
+         "-m", "gitboard.cli", "apply", SPEC, "--yes"],
         cwd=ROOT,
         env={
             **os.environ,
@@ -94,7 +94,7 @@ seeded root/demo — {URL}/root/demo/-/boards
 
   security add-generic-password -U -a "$USER" -s gitlab-read-token -w '{TOKEN}'
   export GITLAB_URL={URL}
-  uv run gitboard show root/demo
+  make show PROJECT=root/demo
 """)
 
 
