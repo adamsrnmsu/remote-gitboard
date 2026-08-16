@@ -6,7 +6,7 @@ PROJECT    ?= root/demo
 GITLAB_URL ?= http://localhost:8929
 export GITLAB_URL
 
-.PHONY: help up wait down reset logs seed board test fmt lint venv clean
+.PHONY: help up wait down reset logs seed board test selftest fmt lint venv clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -35,7 +35,10 @@ seed: wait  ## mint a PAT and seed the demo board
 board:  ## print a board: make board PROJECT=group/project
 	./board.py $(PROJECT)
 
-test:  ## column-bucketing selftest, no deps needed
+test: selftest  ## full suite: pytest + the dep-free selftest
+	uvx pytest -q
+
+selftest:  ## column-bucketing check that runs with nothing installed
 	./board.py --selftest
 
 fmt:  ## format (ruff format is black, same style)
@@ -50,5 +53,5 @@ venv:  ## .venv for editor autocomplete only
 .env:
 	@echo "no .env — cp .env.example .env and set GITLAB_ROOT_PASSWORD" >&2; exit 1
 
-clean:  ## remove venv and bytecode
-	rm -rf .venv __pycache__
+clean:  ## remove venv, caches, and bytecode
+	rm -rf .venv __pycache__ tests/__pycache__ .pytest_cache .ruff_cache

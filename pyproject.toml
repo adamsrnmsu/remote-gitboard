@@ -7,6 +7,10 @@ version = "0.1.0"
 description = "Read a self-hosted GitLab issue board from the terminal."
 requires-python = ">=3.11"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]        # board.py sits at the repo root, not in a package
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 88
 

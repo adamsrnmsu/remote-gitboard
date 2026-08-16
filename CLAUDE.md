@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 ./board.py group/project [board-name]   # dump a board as markdown
-./board.py --selftest                   # the only test; runs with no deps installed
+make test                               # pytest + selftest
+uvx pytest -q -k backlog                # a single test
+./board.py --selftest                   # dep-free check, runs with nothing installed
 docker compose up -d && ./seed.py       # local GitLab CE + demo board (first boot 5-10 min)
 docker compose down -v                  # reset the local instance
 ```
