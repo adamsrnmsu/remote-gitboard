@@ -11,6 +11,7 @@ Auth: GITLAB_TOKEN env var, else macOS keychain item `gitlab-token`.
 Store one with:
     security add-generic-password -a "$USER" -s gitlab-token -w '<PAT>'
 """
+
 import os
 import subprocess
 import sys
@@ -23,7 +24,8 @@ def token():
         return t
     out = subprocess.run(
         ["security", "find-generic-password", "-s", "gitlab-token", "-w"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if out.returncode:
         sys.exit("no token: set GITLAB_TOKEN or add keychain item 'gitlab-token'")
@@ -38,7 +40,7 @@ def board_columns(project, board):
     GitLab UI does, it does not pick a winner.
     """
     lists = sorted(board.lists.list(all=True), key=lambda x: x.position)
-    labelled = [(l.label["name"], l) for l in lists if getattr(l, "label", None)]
+    labelled = [(x.label["name"], x) for x in lists if getattr(x, "label", None)]
     names = [n for n, _ in labelled]
 
     opened = project.issues.list(state="opened", all=True)
@@ -55,7 +57,7 @@ def render(project, board):
         out.append(f"## {name} ({len(issues)})\n")
         for i in issues:
             who = i.assignee["username"] if i.assignee else "unassigned"
-            extra = [l for l in i.labels if l != name]
+            extra = [x for x in i.labels if x != name]
             tags = f" `{'` `'.join(extra)}`" if extra else ""
             due = f" due:{i.due_date}" if i.due_date else ""
             out.append(f"- #{i.iid} {i.title} — @{who}{due}{tags}")
@@ -81,6 +83,9 @@ def main(path, board_name=None):
 
 def _selftest():
     """Column bucketing is the only real logic here. Fake the API surface."""
+
+    # Kept compact: the shape of the fake is the point, expanded it buries the test.
+    # fmt: off
     class L:
         def __init__(s, n, p): s.label, s.position = {"name": n}, p
     class Lists:
@@ -95,6 +100,7 @@ def _selftest():
         def list(s, **_): return s.v
     class Project:
         def __init__(s, i): s.issues = Issues(i)
+    # fmt: on
 
     issues = [Issue(1, []), Issue(2, ["Doing"]), Issue(3, ["Doing", "Blocked"])]
     # positions deliberately out of order — render must sort by them

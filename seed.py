@@ -10,6 +10,7 @@
 Only for the throwaway instance in docker-compose.yml. It shells into the
 container as root; never point it at anything you care about.
 """
+
 import subprocess
 import sys
 
@@ -45,24 +46,37 @@ def mint(token):
     that has to reach inside the container.
     """
     r = subprocess.run(
-        ["docker", "compose", "exec", "-T", "gitlab",
-         "gitlab-rails", "runner", RUBY, token],
-        capture_output=True, text=True,
+        [
+            "docker",
+            "compose",
+            "exec",
+            "-T",
+            "gitlab",
+            "gitlab-rails",
+            "runner",
+            RUBY,
+            token,
+        ],
+        capture_output=True,
+        text=True,
     )
     if "minted" not in r.stdout:
-        sys.exit(f"could not mint token — is the container healthy?\n"
-                 f"{r.stdout}\n{r.stderr}")
+        sys.exit(
+            f"could not mint token — is the container healthy?\n{r.stdout}\n{r.stderr}"
+        )
     return token
 
 
 def seed(gl):
-    project = next((p for p in gl.projects.list(owned=True, all=True)
-                    if p.path == "demo"), None)
+    project = next(
+        (p for p in gl.projects.list(owned=True, all=True) if p.path == "demo"), None
+    )
     if project:
         print("project 'demo' already exists — leaving it alone")
         return project
     project = gl.projects.create(
-        {"name": "demo", "path": "demo", "initialize_with_readme": True})
+        {"name": "demo", "path": "demo", "initialize_with_readme": True}
+    )
 
     labels = {}
     for name, color in COLUMNS:

@@ -6,7 +6,7 @@ PROJECT    ?= root/demo
 GITLAB_URL ?= http://localhost:8929
 export GITLAB_URL
 
-.PHONY: help up wait down reset logs seed board test venv clean
+.PHONY: help up wait down reset logs seed board test fmt lint venv clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -37,6 +37,12 @@ board:  ## print a board: make board PROJECT=group/project
 
 test:  ## column-bucketing selftest, no deps needed
 	./board.py --selftest
+
+fmt:  ## format (ruff format is black, same style)
+	uvx ruff format .
+
+lint:  ## lint, --fix to apply the safe fixes
+	uvx ruff check .
 
 venv:  ## .venv for editor autocomplete only
 	uv venv && uv pip install python-gitlab

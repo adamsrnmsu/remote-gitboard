@@ -1,0 +1,26 @@
+# Config only — this repo is two standalone `uv run --script` files, not a
+# package. Their deps live in PEP 723 headers, not here.
+
+[project]
+name = "remote-gitboard"
+version = "0.1.0"
+description = "Read a self-hosted GitLab issue board from the terminal."
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+]
+
+[tool.ruff.lint.per-file-ignores]
+# board.py's selftest fakes the API surface with one-line stub classes.
+# Compact on purpose — the shape of the fake is the point, not its style.
+"board.py" = ["E701"]

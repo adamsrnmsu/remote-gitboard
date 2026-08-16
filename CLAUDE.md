@@ -11,9 +11,16 @@ docker compose up -d && ./seed.py       # local GitLab CE + demo board (first bo
 docker compose down -v                  # reset the local instance
 ```
 
+`make` alone lists targets; `make up seed` is the whole cold start.
+`make fmt` / `make lint` run ruff via `uvx` — nothing to install.
+
 Both scripts are `uv run --script` shebangs with inline PEP 723 deps
 (`python-gitlab`) — no venv, no requirements file. Run them directly, not via
-`python board.py`.
+`python board.py`. `pyproject.toml` is ruff config only; the project is not a
+package and `make venv` exists for editor autocomplete, nothing else.
+
+`_selftest`'s stub classes are wrapped in `# fmt: off` on purpose — the
+formatter expands them to 35 lines and buries the assertions. Leave it.
 
 ## Architecture
 
