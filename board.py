@@ -1,43 +1,23 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# dependencies = ["python-gitlab"]
-# ///
-"""Dump a GitLab issue board as markdown. Read-only.
+"""Read a GitLab issue board. No writes, no CLI — see gitboard.py.
 
-    ./board.py group/project              # first board
-    ./board.py group/project "Dev Board"  # named board
-
-Auth: GITLAB_TOKEN env var, else macOS keychain item `gitlab-token`.
-Store one with:
-    security add-generic-password -a "$USER" -s gitlab-token -w '<PAT>'
+`board_columns` is the reason this repo exists: no MCP server exposes board
+structure. A board list is bound to a label and membership is 'has that
+label', so the column mapping has to be reassembled from board.lists +
+project.issues.
 """
 
-import os
-import subprocess
-import sys
+from rich.text import Text
+from rich.tree import Tree
 
-URL = os.environ.get("GITLAB_URL", "https://gitlab.com")
-
-
-def token():
-    if t := os.environ.get("GITLAB_TOKEN"):
-        return t
-    out = subprocess.run(
-        ["security", "find-generic-password", "-s", "gitlab-token", "-w"],
-        capture_output=True,
-        text=True,
-    )
-    if out.returncode:
-        sys.exit("no token: set GITLAB_TOKEN or add keychain item 'gitlab-token'")
-    return out.stdout.strip()
+import client
+from log import out
 
 
 def board_columns(project, board):
     """[(column_name, [issue, ...]), ...] in board order, Backlog first.
 
-    A board list is bound to a label; membership is 'has that label'. Issues
-    carrying labels from several lists appear in each — that mirrors what the
-    GitLab UI does, it does not pick a winner.
+    Issues carrying labels from several lists appear in each — that mirrors
+    what the GitLab UI does, it does not pick a winner.
     """
     lists = sorted(board.lists.list(all=True), key=lambda x: x.position)
     labelled = [(x.label["name"], x) for x in lists if getattr(x, "label", None)]
@@ -51,81 +31,71 @@ def board_columns(project, board):
     return cols
 
 
-def render(project, board):
-    out = [f"# {project.path_with_namespace} — {board.name}\n"]
+def fetch(path, board_name=None):
+    """(project, board) for a project path, resolving the board by name."""
+    gl = client.gitlab()
+    project = client.get_project(gl, path)
+    boards = project.boards.list(all=True)
+    if not boards:
+        raise client.GitlabProblem(f"{path} has no issue boards")
+    if board_name:
+        boards = [b for b in boards if b.name == board_name]
+        if not boards:
+            have = [b.name for b in project.boards.list(all=True)]
+            raise client.GitlabProblem(f"no board named {board_name!r}; have: {have}")
+    return project, project.boards.get(boards[0].id)
+
+
+def as_markdown(project, board):
+    """The stable, parseable rendering. The /board prompt reads this."""
+    lines = [f"# {project.path_with_namespace} — {board.name}\n"]
     for name, issues in board_columns(project, board):
-        out.append(f"## {name} ({len(issues)})\n")
+        lines.append(f"## {name} ({len(issues)})\n")
         for i in issues:
             who = i.assignee["username"] if i.assignee else "unassigned"
             extra = [x for x in i.labels if x != name]
             tags = f" `{'` `'.join(extra)}`" if extra else ""
             due = f" due:{i.due_date}" if i.due_date else ""
-            out.append(f"- #{i.iid} {i.title} — @{who}{due}{tags}")
-            out.append(f"  {i.web_url}")
-        out.append("")
-    return "\n".join(out)
+            lines.append(f"- #{i.iid} {i.title} — @{who}{due}{tags}")
+            lines.append(f"  {i.web_url}")
+        lines.append("")
+    return "\n".join(lines)
 
 
-def main(path, board_name=None):
-    import gitlab  # deferred so --selftest runs with no deps installed
-
-    gl = gitlab.Gitlab(URL, private_token=token())
-    try:
-        project = gl.projects.get(path)
-    except gitlab.exceptions.GitlabAuthenticationError:
-        sys.exit(f"{URL} rejected the token — expired, or minted on another instance?")
-    except gitlab.exceptions.GitlabGetError:
-        # GitLab answers 404 for private projects too, rather than confirm they exist.
-        sys.exit(f"no project {path!r} on {URL}, or the token cannot see it")
-    except OSError as e:  # requests' ConnectionError/Timeout subclass this
-        sys.exit(f"cannot reach {URL}: {e.__class__.__name__}")
-
-    boards = project.boards.list(all=True)
-    if not boards:
-        sys.exit(f"{path} has no issue boards")
-    if board_name:
-        boards = [b for b in boards if b.name == board_name] or sys.exit(
-            f"no board named {board_name!r}; have: {[b.name for b in boards]}"
-        )
-    print(render(project, project.boards.get(boards[0].id)))
+def issue_line(issue, column):
+    """One issue as a styled line. Extra labels are the ones from *other*
+    columns — the column's own label is redundant inside it."""
+    line = Text.assemble(
+        (f"#{issue.iid} ", "muted"),
+        issue.title,
+        (
+            f"  @{issue.assignee['username']}"
+            if issue.assignee
+            else Text("  unassigned", "muted")
+        ),
+    )
+    if issue.due_date:
+        line.append(f"  due {issue.due_date}", "yellow")
+    if extra := [x for x in issue.labels if x != column]:
+        line.append(f"  {' '.join(extra)}", "magenta")
+    return line
 
 
-def _selftest():
-    """Column bucketing is the only real logic here. Fake the API surface."""
-
-    # Kept compact: the shape of the fake is the point, expanded it buries the test.
-    # fmt: off
-    class L:
-        def __init__(s, n, p): s.label, s.position = {"name": n}, p
-    class Lists:
-        def __init__(s, v): s.v = v
-        def list(s, **_): return s.v
-    class Board:
-        def __init__(s, v): s.lists = Lists(v)
-    class Issue:
-        def __init__(s, iid, labels): s.iid, s.labels = iid, labels
-    class Issues:
-        def __init__(s, v): s.v = v
-        def list(s, **_): return s.v
-    class Project:
-        def __init__(s, i): s.issues = Issues(i)
-    # fmt: on
-
-    issues = [Issue(1, []), Issue(2, ["Doing"]), Issue(3, ["Doing", "Blocked"])]
-    # positions deliberately out of order — render must sort by them
-    cols = board_columns(Project(issues), Board([L("Blocked", 2), L("Doing", 1)]))
-
-    assert [n for n, _ in cols] == ["Backlog", "Doing", "Blocked"], cols
-    assert [i.iid for i in cols[0][1]] == [1], "unlabelled issue belongs in Backlog"
-    assert [i.iid for i in cols[1][1]] == [2, 3]
-    assert [i.iid for i in cols[2][1]] == [3], "multi-label issue appears in both"
-    print("ok")
-
-
-if __name__ == "__main__":
-    if "--selftest" in sys.argv:
-        _selftest()
-    elif len(sys.argv) < 2:
-        sys.exit(__doc__)
-    else:
-        main(*sys.argv[1:3])
+def print_rich(project, board):
+    """The human rendering. A tree — no repeated headers, no truncation."""
+    tree = Tree(
+        Text.assemble(
+            (project.path_with_namespace, "bold"), " — ", (board.name, "bold cyan")
+        ),
+        guide_style="muted",
+    )
+    for name, issues in board_columns(project, board):
+        node = tree.add(Text(f"{name} ({len(issues)})", "col"))
+        for issue in issues:
+            node.add(issue_line(issue, name))
+        if not issues:
+            node.add(Text("empty", "muted"))
+    console = out()
+    console.print()
+    console.print(tree)
+    console.print()

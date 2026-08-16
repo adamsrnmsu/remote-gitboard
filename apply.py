@@ -1,30 +1,33 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# dependencies = ["python-gitlab", "pyyaml"]
-# ///
-"""Make a GitLab board match a YAML file. Writes — needs an `api`-scope token.
+"""Make a GitLab board match a YAML file. The only thing here that writes.
 
-    ./apply.py boards/demo.yaml            # apply
-    ./apply.py boards/demo.yaml --dry-run  # show what would change
+Needs an `api`-scope token; the `read_api` token board reading uses will fail
+here, which is the intended split.
 
 Idempotent: edit the YAML, re-run, and only the drift is written. Additive
-only — nothing is deleted or closed, so removing an issue from the YAML leaves
-it on the board. Auth matches board.py (GITLAB_TOKEN, else keychain).
+only — nothing is deleted or closed, so removing an issue from the YAML
+leaves it on the board. Issues are matched by title.
 """
-
-import sys
 
 import yaml
 
-from board import URL, token  # same auth, one implementation
+import client
+from log import get_logger
+
+log = get_logger()
+
+
+class SpecError(Exception):
+    """The YAML is wrong. Rendered as one line, no traceback."""
 
 
 def load(path):
     with open(path) as f:
         spec = yaml.safe_load(f)
+    if not isinstance(spec, dict):
+        raise SpecError(f"{path}: expected a mapping at the top level")
     for key in ("project", "board"):
         if key not in spec:
-            sys.exit(f"{path}: missing required key {key!r}")
+            raise SpecError(f"{path}: missing required key {key!r}")
     spec.setdefault("columns", [])
     spec.setdefault("issues", [])
     return spec
@@ -52,7 +55,7 @@ def wanted_issue(gl, spec):
     if who := spec.get("assignee"):
         users = gl.users.list(username=who)
         if not users:
-            sys.exit(f"no such user {who!r} (issue {spec['title']!r})")
+            raise SpecError(f"no such user {who!r} (issue {spec['title']!r})")
         want["assignee_ids"] = [users[0].id]
     return want
 
@@ -68,38 +71,37 @@ def current_issue(issue):
 
 def ensure_project(gl, path, create):
     try:
-        return gl.projects.get(path)
-    except Exception:
+        return client.get_project(gl, path)
+    except client.GitlabProblem:
         if not create:
-            sys.exit(
-                f"no project {path!r} on {URL} — create it, or set create_project: true"
-            )
+            raise
         ns, _, name = path.rpartition("/")
         payload = {"name": name, "path": name, "initialize_with_readme": True}
         if ns and ns != gl.user.username:
             payload["namespace_id"] = gl.namespaces.get(ns).id
+        log.debug("creating project %s", path)
         return gl.projects.create(payload)
 
 
-def ensure_labels(project, columns, log):
+def ensure_labels(project, columns, record):
     have = {x.name: x for x in project.labels.list(all=True)}
     for col in columns:
         name, color = col["name"], col.get("color", "#428bca")
         if name not in have:
             have[name] = project.labels.create({"name": name, "color": color})
-            log(f"label   + {name} ({color})")
+            record("added", "label", f"{name} ({color})")
         elif have[name].color.lower() != color.lower():
             have[name].color = color
             have[name].save()
-            log(f"label   ~ {name} colour -> {color}")
+            record("changed", "label", f"{name} colour -> {color}")
     return have
 
 
-def ensure_board(project, name, columns, labels, log):
+def ensure_board(project, name, columns, labels, record):
     board = next((b for b in project.boards.list(all=True) if b.name == name), None)
     if board is None:
         board = project.boards.create({"name": name})
-        log(f"board   + {name}")
+        record("added", "board", name)
     board = project.boards.get(board.id)
 
     listed = {
@@ -108,16 +110,16 @@ def ensure_board(project, name, columns, labels, log):
     for col in columns:  # YAML order becomes column order
         if col["name"] not in listed:
             board.lists.create({"label_id": labels[col["name"]].id})
-            log(f"column  + {col['name']}")
+            record("added", "column", col["name"])
 
 
-def ensure_issues(gl, project, issues, log):
+def ensure_issues(gl, project, issues, record):
     have = {i.title: i for i in project.issues.list(state="opened", all=True)}
     for spec in issues:
         title, want = spec["title"], wanted_issue(gl, spec)
         if title not in have:
             project.issues.create({"title": title, **want})
-            log(f"issue   + {title}")
+            record("added", "issue", title)
             continue
         issue = have[title]
         now = current_issue(issue)
@@ -125,35 +127,40 @@ def ensure_issues(gl, project, issues, log):
             for k in changed:
                 setattr(issue, k, want[k])
             issue.save()
-            log(f"issue   ~ {title}: {', '.join(changed)}")
+            record("changed", "issue", f"{title}: {', '.join(changed)}")
 
 
-def apply(gl, spec):
-    log_lines = []
+def apply(gl, spec, on_change=None):
+    """Write the spec. Returns the list of (kind, what, detail) changes."""
+    changes = []
 
-    def log(msg):
-        log_lines.append(msg)
-        print(msg)
+    def record(kind, what, detail):
+        changes.append((kind, what, detail))
+        # Debug, not info: the CLI already prints the change table, and
+        # logging it again at info level says everything twice.
+        log.debug("%s %s %s", what, "+" if kind == "added" else "~", detail)
+        if on_change:
+            on_change(kind, what, detail)
 
     project = ensure_project(gl, spec["project"], spec.get("create_project", False))
-    labels = ensure_labels(project, spec["columns"], log)
-    ensure_board(project, spec["board"], spec["columns"], labels, log)
-    ensure_issues(gl, project, spec["issues"], log)
-    return log_lines
+    labels = ensure_labels(project, spec["columns"], record)
+    ensure_board(project, spec["board"], spec["columns"], labels, record)
+    ensure_issues(gl, project, spec["issues"], record)
+    return changes
 
 
 def plan(gl, spec):
     """Read-only: what apply would do. Never writes."""
     try:
-        project = gl.projects.get(spec["project"])
-    except Exception:
+        project = client.get_project(gl, spec["project"])
+    except client.GitlabProblem:
         project = None
 
     if project is None:
-        pending = [f"project + {spec['project']}"]
-        pending += [f"label   + {c['name']}" for c in spec["columns"]]
-        pending += [f"board   + {spec['board']}"]
-        pending += [f"issue   + {i['title']}" for i in spec["issues"]]
+        pending = [("added", "project", spec["project"])]
+        pending += [("added", "label", c["name"]) for c in spec["columns"]]
+        pending += [("added", "board", spec["board"])]
+        pending += [("added", "issue", i["title"]) for i in spec["issues"]]
         return pending
 
     labels = {x.name for x in project.labels.list(all=True)}
@@ -161,40 +168,18 @@ def plan(gl, spec):
     issues = {i.title: i for i in project.issues.list(state="opened", all=True)}
 
     pending = [
-        f"label   + {c['name']}" for c in spec["columns"] if c["name"] not in labels
+        ("added", "label", c["name"])
+        for c in spec["columns"]
+        if c["name"] not in labels
     ]
     if spec["board"] not in boards:
-        pending.append(f"board   + {spec['board']}")
+        pending.append(("added", "board", spec["board"]))
     for spec_i in spec["issues"]:
         title = spec_i["title"]
         if title not in issues:
-            pending.append(f"issue   + {title}")
+            pending.append(("added", "issue", title))
             continue
         want, now = wanted_issue(gl, spec_i), current_issue(issues[title])
         if changed := [k for k, v in want.items() if now[k] != v]:
-            pending.append(f"issue   ~ {title}: {', '.join(changed)}")
+            pending.append(("changed", "issue", f"{title}: {', '.join(changed)}"))
     return pending
-
-
-def main(path, dry_run=False):
-    import gitlab
-
-    spec = load(path)
-    gl = gitlab.Gitlab(URL, private_token=token())
-
-    if dry_run:
-        print(f"dry run against {URL} — nothing will be written\n")
-        pending = plan(gl, spec)
-        print("\n".join(pending) or "no changes — board already matches")
-        print(f"\n{len(pending)} change(s) pending")
-        return
-
-    changes = apply(gl, spec)
-    print(f"\n{len(changes)} change(s) — ./board.py {spec['project']}")
-
-
-if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
-    if not args:
-        sys.exit(__doc__)
-    main(args[0], dry_run="--dry-run" in sys.argv)

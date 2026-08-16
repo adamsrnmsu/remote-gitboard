@@ -1,12 +1,8 @@
 """Tests for board.py. No network — the GitLab API surface is faked.
 
-board.py defers `import gitlab` into main(), so importing it here needs no deps.
+board.py is a library module: no auth, no CLI. Auth lives in config.py and
+error mapping in client.py, each with their own tests.
 """
-
-import sys
-import types
-
-import pytest
 
 import board
 
@@ -88,7 +84,7 @@ def test_board_with_no_lists_puts_everything_in_backlog():
 
 
 def test_render_header_and_counts():
-    out = board.render(
+    out = board.as_markdown(
         FakeProject([FakeIssue(1, ["Doing"])]), FakeBoard([FakeList("Doing", 1)])
     )
     assert out.startswith("# grp/proj — Dev Board")
@@ -98,14 +94,14 @@ def test_render_header_and_counts():
 
 def test_render_unassigned_and_assignee():
     issues = [FakeIssue(1, []), FakeIssue(2, [], assignee={"username": "ana"})]
-    out = board.render(FakeProject(issues), FakeBoard([]))
+    out = board.as_markdown(FakeProject(issues), FakeBoard([]))
     assert "#1 t — @unassigned" in out
     assert "#2 t — @ana" in out
 
 
 def test_render_shows_due_date_and_extra_labels_but_not_the_column_label():
     issue = FakeIssue(1, ["Doing", "urgent"], due_date="2026-01-01")
-    out = board.render(FakeProject([issue]), FakeBoard([FakeList("Doing", 1)]))
+    out = board.as_markdown(FakeProject([issue]), FakeBoard([FakeList("Doing", 1)]))
     line = next(x for x in out.splitlines() if x.startswith("- #1"))
     assert "due:2026-01-01" in line
     assert "`urgent`" in line
@@ -113,97 +109,14 @@ def test_render_shows_due_date_and_extra_labels_but_not_the_column_label():
 
 
 def test_render_includes_the_issue_url():
-    out = board.render(FakeProject([FakeIssue(7, [])]), FakeBoard([]))
+    out = board.as_markdown(FakeProject([FakeIssue(7, [])]), FakeBoard([]))
     assert "http://gl/-/issues/7" in out
 
 
-# --- token -----------------------------------------------------------------
+# --- rendering -------------------------------------------------------------
 
 
-def test_env_token_wins_over_keychain(monkeypatch):
-    monkeypatch.setenv("GITLAB_TOKEN", "from-env")
-    monkeypatch.setattr(
-        board.subprocess, "run", lambda *a, **k: pytest.fail("keychain was consulted")
-    )
-    assert board.token() == "from-env"
-
-
-def test_keychain_is_the_fallback(monkeypatch):
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
-    monkeypatch.setattr(
-        board.subprocess,
-        "run",
-        lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "from-keychain\n"})(),
-    )
-    assert board.token() == "from-keychain"
-
-
-def test_missing_token_exits_rather_than_returning_empty(monkeypatch):
-    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
-    monkeypatch.setattr(
-        board.subprocess,
-        "run",
-        lambda *a, **k: type("R", (), {"returncode": 1, "stdout": ""})(),
-    )
-    with pytest.raises(SystemExit):
-        board.token()
-
-
-# --- main()'s failure modes ------------------------------------------------
-# A traceback is a bad answer to a typo'd path or an expired token. These pin
-# the friendly exits. `gitlab` is faked into sys.modules so the real package
-# isn't needed to test the handlers that catch its exceptions.
-
-
-@pytest.fixture
-def fake_gitlab(monkeypatch):
-    mod = types.ModuleType("gitlab")
-
-    class GitlabError(Exception):
-        pass
-
-    class GitlabAuthenticationError(GitlabError):
-        pass
-
-    class GitlabGetError(GitlabError):
-        pass
-
-    mod.exceptions = types.SimpleNamespace(
-        GitlabAuthenticationError=GitlabAuthenticationError,
-        GitlabGetError=GitlabGetError,
-    )
-    monkeypatch.setitem(sys.modules, "gitlab", mod)
-    monkeypatch.setenv("GITLAB_TOKEN", "tok")
-    return mod
-
-
-def raise_on_get(mod, exc):
-    class GL:
-        def __init__(self, *a, **k):
-            self.projects = types.SimpleNamespace(get=self._get)
-
-        def _get(self, _path):
-            raise exc
-
-    mod.Gitlab = GL
-
-
-def test_unknown_project_exits_cleanly(fake_gitlab):
-    raise_on_get(fake_gitlab, fake_gitlab.exceptions.GitlabGetError("404"))
-    with pytest.raises(SystemExit) as e:
-        board.main("grp/nope")
-    assert "no project 'grp/nope'" in str(e.value)
-
-
-def test_rejected_token_says_so_rather_than_project_not_found(fake_gitlab):
-    raise_on_get(fake_gitlab, fake_gitlab.exceptions.GitlabAuthenticationError("401"))
-    with pytest.raises(SystemExit) as e:
-        board.main("grp/proj")
-    assert "rejected the token" in str(e.value)
-
-
-def test_unreachable_host_exits_cleanly(fake_gitlab):
-    raise_on_get(fake_gitlab, ConnectionError("refused"))
-    with pytest.raises(SystemExit) as e:
-        board.main("grp/proj")
-    assert "cannot reach" in str(e.value)
+def test_issue_line_omits_the_column_its_own_label():
+    line = board.issue_line(FakeIssue(1, ["Doing", "urgent"], title="x"), "Doing")
+    text = line.plain
+    assert "urgent" in text and "Doing" not in text

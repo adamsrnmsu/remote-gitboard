@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# dependencies = ["python-gitlab", "pyyaml"]
+# requires-python = ">=3.11"
 # ///
 """Mint a root PAT on the local GitLab container, then apply boards/demo.yaml.
 
@@ -10,17 +10,18 @@
 Only for the throwaway instance in docker-compose.yml. It shells into the
 container as root; never point it at anything you care about.
 
-The board contents live in boards/demo.yaml and are applied by apply.py —
-this file owns nothing but the token, which is the one thing the REST API
-cannot bootstrap for itself.
+The board contents live in boards/demo.yaml and go through the CLI, so this
+file owns nothing but the token — the one thing the REST API cannot bootstrap
+for itself. That leaves it dependency-free.
 """
 
 import os
 import subprocess
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 URL = "http://localhost:8929"
-SPEC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "boards", "demo.yaml")
+SPEC = os.path.join(HERE, "boards", "demo.yaml")
 TOKEN_NAME = "gitboard-seed"
 # Fixed so re-seeding doesn't invalidate your keychain entry. Safe only
 # because this instance is disposable and bound to localhost.
@@ -71,10 +72,8 @@ def main():
         print(TOKEN)
         return
 
-    # Subprocess rather than import: board.URL is read at import time, so the
-    # env has to be set before apply.py's module body runs.
     r = subprocess.run(
-        [os.path.join(os.path.dirname(SPEC), "..", "apply.py"), SPEC],
+        [os.path.join(HERE, "gitboard.py"), "apply", SPEC, "--yes"],
         env={**os.environ, "GITLAB_URL": URL, "GITLAB_TOKEN": TOKEN},
     )
     if r.returncode:
@@ -85,7 +84,7 @@ seeded root/demo — {URL}/root/demo/-/boards
 
   security add-generic-password -U -a "$USER" -s gitlab-token -w '{TOKEN}'
   export GITLAB_URL={URL}
-  ./board.py root/demo
+  ./gitboard.py show root/demo
 """)
 
 

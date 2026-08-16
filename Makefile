@@ -1,13 +1,17 @@
-# Local GitLab CE lifecycle + the read-only board reader.
-# The scripts are `uv run --script` with inline deps — `venv` is for your
-# editor's autocomplete, not for running them.
+# Local GitLab CE lifecycle + the gitboard CLI.
+# Everything is `uv run --script` with inline deps — `venv` is for your
+# editor's autocomplete, not for running anything.
 
 PROJECT    ?= root/demo
 SPEC       ?= boards/demo.yaml
 GITLAB_URL ?= http://localhost:8929
 export GITLAB_URL
 
-.PHONY: help up wait down reset logs seed board plan apply test selftest fmt lint venv clean
+# pytest imports the modules, so it needs their deps. uvx builds this env
+# on the fly and caches it; nothing is installed into the repo.
+PYTEST = uvx --with pyyaml --with rich --with typer --with python-gitlab pytest
+
+.PHONY: help up wait down reset logs seed show plan apply test fmt lint venv clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -30,23 +34,20 @@ reset:  ## stop and wipe all three volumes
 logs:  ## follow container logs
 	docker compose logs -f gitlab
 
-seed: wait  ## mint a PAT and seed the demo board
+seed: wait  ## mint a PAT and apply boards/demo.yaml
 	./seed.py
 
-board:  ## print a board: make board PROJECT=group/project
-	./board.py $(PROJECT)
+show:  ## print a board: make show PROJECT=group/project
+	./gitboard.py show $(PROJECT)
 
 plan:  ## preview YAML changes: make plan SPEC=boards/test.yaml
-	./apply.py $(SPEC) --dry-run
+	./gitboard.py plan $(SPEC)
 
 apply:  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
-	./apply.py $(SPEC)
+	./gitboard.py apply $(SPEC)
 
-test: selftest  ## full suite: pytest + the dep-free selftest
-	uvx --with pyyaml pytest -q
-
-selftest:  ## column-bucketing check that runs with nothing installed
-	./board.py --selftest
+test:  ## run the test suite
+	$(PYTEST) -q
 
 fmt:  ## format (ruff format is black, same style)
 	uvx ruff format .
@@ -55,7 +56,7 @@ lint:  ## lint, --fix to apply the safe fixes
 	uvx ruff check .
 
 venv:  ## .venv for editor autocomplete only
-	uv venv && uv pip install python-gitlab
+	uv venv && uv pip install python-gitlab pyyaml typer rich
 
 .env:
 	@echo "no .env — cp .env.example .env and set GITLAB_ROOT_PASSWORD" >&2; exit 1

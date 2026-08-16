@@ -35,7 +35,7 @@ in the environment overrides it if you'd rather pass one per-shell.
 ### 3. Verify, then decide on MCP
 
 ```bash
-./board.py group/project        # should print your board as markdown
+./gitboard.py show group/project   # should print your board
 ```
 
 Then check whether your instance exposes the official MCP server:
@@ -48,7 +48,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "$GITLAB_URL/api/v4/mcp"
   OAuth 2.0 dynamic client registration, so no second token on disk. Free tier,
   not Duo-gated. Gives Claude ~34 tools: issues, labels, comments/notes,
   milestones, MRs, pipelines, code search.
-- **404** → instance predates it. `board.py` alone still works; the AI pass just
+- **404** → instance predates it. `gitboard.py` alone still works; the AI pass just
   sees the board rather than the board plus issue discussion threads.
 
 ## Local test instance
@@ -65,10 +65,10 @@ docker compose logs -f gitlab      # wait for healthy — first boot is 5-10 min
 ./seed.py                          # demo project, board, labels, issues, PAT
 ```
 
-`seed.py` prints the two commands that point `board.py` at it. Then:
+`seed.py` prints the two commands that point `gitboard.py` at it. Then:
 
 ```bash
-./board.py root/demo
+./gitboard.py show root/demo
 ```
 
 | | |
@@ -118,6 +118,24 @@ sudo rm /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v1
 
 ## Use
 
+One entry point, `./gitboard.py`:
+
+```bash
+./gitboard.py show group/project              # the board, as a tree
+./gitboard.py show group/project "Dev Board"  # a named board
+./gitboard.py show group/project --markdown   # stable output, for pipes
+./gitboard.py plan boards/test.yaml           # what would change
+./gitboard.py apply boards/test.yaml          # write it
+./gitboard.py config                          # what URL and token it resolved
+./gitboard.py --help
+```
+
+`--url` and `--token` override `GITLAB_URL` / `GITLAB_TOKEN` per invocation;
+`-v` turns on debug logging. Logs and progress go to **stderr**, the board
+goes to **stdout**, so `--markdown | less` stays clean.
+
+Or the AI pass:
+
 ```
 /board group/project
 /board group/project "Dev Board"
@@ -126,27 +144,89 @@ sudo rm /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v1
 Prints four sections: Progress, Needs follow-up, Questions for you, Suggested
 moves. Suggestions are copyable, never applied.
 
-Or use the script bare, for piping or a quick look:
-
-```bash
-./board.py group/project | less
-```
-
 ## What's here
+
+`gitboard.py` is the only executable. Everything else is a module it imports.
 
 | File | Purpose |
 |---|---|
-| `board.py` | Dumps a board as markdown. The one gap no existing tool fills. |
-| `apply.py` | Makes a board match a YAML file. The only thing here that writes. |
+| `gitboard.py` | The CLI. Typer + rich. The only entry point. |
+| `board.py` | Reading a board — the one gap no existing tool fills. |
+| `apply.py` | Making a board match YAML. The only thing here that writes. |
+| `client.py` | The GitLab connection, and where API errors become English. |
+| `config.py` | Config singleton: URL, token, verbosity. |
+| `log.py` | Console + logger singletons. stdout for data, stderr for chatter. |
 | `boards/*.yaml` | Board definitions — columns and issues, editable. |
 | `.claude/commands/board.md` | The `/board` prompt. Read-only instructions. |
 | `docker-compose.yml` | Disposable local GitLab CE for development. |
 | `seed.py` | Mints a PAT, then applies `boards/demo.yaml`. |
 
+### Why these packages
+
+- **[typer](https://typer.tiangolo.com/)** — the CLI. Commands are plain
+  functions with type hints; `--help`, parsing, and env-var binding come free.
+  It is Click underneath, with rich formatting on top.
+- **[rich](https://rich.readthedocs.io/)** — the tree, tables, spinners, and
+  log handler. It detects a pipe and drops colour automatically, so there is
+  no `--no-color` flag to maintain.
+
+Nothing else was added. `pydantic` for four config fields, `structlog` on top
+of a logger with one handler, or `click` alongside typer would all be weight
+without a job here.
+
+## How uv works
+
+Every script here starts with the same two lines:
+
+```python
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["python-gitlab", "pyyaml", "typer", "rich"]
+# ///
+```
+
+That block is [PEP 723](https://peps.python.org/pep-0723/) inline metadata: a
+script declaring its own dependencies. When you run `./gitboard.py`, uv reads
+it, builds a cached virtual environment containing exactly those packages,
+and runs the script inside it. First run downloads; later runs are instant and
+reuse the cache.
+
+**What this means in practice:**
+
+- There is nothing to install. No `pip install -r requirements.txt`, no
+  "activate the venv first". `./gitboard.py show group/project` just works on
+  a machine that has uv and nothing else.
+- The environment is per-script and cached globally (`~/.cache/uv`), not in
+  this directory. Deleting the repo leaves no orphaned venv.
+- Dependencies are declared where they are used. `seed.py` has an empty
+  dependency list because it only shells out — so it starts faster and can't
+  break when a package it never imports changes.
+- `uvx pytest` is the same idea for a tool you want to *run* rather than
+  import: a throwaway cached environment, nothing installed into the project.
+  That is why `make test` and `make lint` need no setup step.
+
+**The `.venv` is not part of this.** `make venv` exists only so your editor's
+autocomplete and go-to-definition can find `typer` and `gitlab`. The scripts
+ignore it entirely — they use the uv-managed environment either way. If your
+editor is happy without it, you never need to run it.
+
+**Useful commands:**
+
+```bash
+uv run --script gitboard.py show group/project   # explicit form of ./gitboard.py
+uv run --with rich python                        # a REPL with rich available
+uvx ruff check .                                 # run a tool without installing it
+uv cache clean                                   # if an environment ever gets stuck
+```
+
+`pyproject.toml` here is config only — ruff and pytest settings. It declares
+no dependencies and builds no package, because the PEP 723 headers own that.
+
 ## Defining a board in YAML
 
-`board.py` reads; `apply.py` writes. Columns and issues live in a YAML file
-you edit and re-apply:
+`show` reads; `apply` writes. Columns and issues live in a YAML file you edit
+and re-apply:
 
 ```yaml
 project: test/test
@@ -160,16 +240,16 @@ issues:
   - title: Set up the board from YAML
     labels: [Doing]
     assignee: root
-  - title: Point board.py at the work instance
+  - title: Point gitboard at the work instance
     labels: [Blocked]
     due_date: 2026-09-01
   - title: Rotate the PAT      # no labels -> Backlog
 ```
 
 ```bash
-./apply.py boards/test.yaml --dry-run   # what would change
-./apply.py boards/test.yaml             # write it
-./board.py test/test                    # read it back
+./gitboard.py plan boards/test.yaml     # what would change
+./gitboard.py apply boards/test.yaml    # write it
+./gitboard.py show test/test           # read it back
 ```
 
 Idempotent — re-running writes only the drift. **Additive only:** nothing is
@@ -177,11 +257,11 @@ deleted or closed, so removing an issue from the YAML leaves it on the board.
 Issues are matched by **title**, so editing a title creates a new issue rather
 than renaming the old one.
 
-This needs an `api`-scope token, not the `read_api` one `board.py` uses. Two
+This needs an `api`-scope token, not the `read_api` one reading uses. Two
 gotchas worth knowing, both now handled: quote a `due_date` or don't, either
 works, and a `|` block description won't report a phantom change on every run.
 
-`./board.py --selftest` runs the column-bucketing check with no deps installed.
+`make test` runs the suite (pytest via uvx — nothing to install).
 
 ## Why this is so small
 
@@ -190,7 +270,7 @@ Almost all of it already existed and is not worth rewriting:
 - **[Official GitLab MCP server](https://docs.gitlab.com/user/model_context_protocol/mcp_server/)**
   — issues, labels, comments, milestones, search. Free tier, OAuth.
 - **[`python-gitlab`](https://python-gitlab.readthedocs.io/en/stable/gl_objects/boards.html)**
-  — the API wrapper `board.py` is a thin shell over.
+  — the API wrapper `board.py` and `apply.py` are thin shells over.
 - **[`glab`](https://docs.gitlab.com/editor_extensions/gitlab_cli/)** — official
   CLI, has `glab issue board view` if you want a non-AI look.
 - **[rcieri/glab-tui](https://github.com/rcieri/glab-tui)** — full TUI over
@@ -211,12 +291,13 @@ Currently the AI can only suggest. To let it actually move cards:
    label add/remove — the move-card primitive. The official server lacks it;
    its write set is create-only (`create_issue`, `create_workitem_note`, …).
 3. Drop the read-only paragraph from `.claude/commands/board.md`, or it will
-   keep refusing to write even with the tools present.
+   keep refusing to write even with the tools present. (`./gitboard.py apply`
+   already writes — this is only about letting the AI do it unprompted.)
 
 ## Notes
 
 - An issue labeled for two columns appears in both. The GitLab web UI behaves
-  the same way, so `board.py` doesn't invent a tiebreak.
+  the same way, so gitboard doesn't invent a tiebreak.
 - Board *deletion* is unsupported on GitLab CE. Creation and list management
   are fine.
 - Unattempted: webhook-driven notification. GitLab fires issue events on label

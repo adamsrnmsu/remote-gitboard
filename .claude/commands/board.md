@@ -1,14 +1,15 @@
 ---
 description: Read a GitLab board and report progress, follow-ups, and open questions. Suggests only — never writes.
 argument-hint: <group/project> [board name]
-allowed-tools: Bash(./board.py:*)
+allowed-tools: Bash(./gitboard.py show:*)
 ---
 
-Run `./board.py $ARGUMENTS` and analyse the board it prints.
+Run `./gitboard.py show $ARGUMENTS --markdown` and analyse the board it prints.
 
 You have read-only access. Do not create, edit, label, comment on, or close
-anything — even if an MCP write tool is available. Every mutation is a
-suggestion for the user to approve.
+anything — even if an MCP write tool is available, and even though
+`./gitboard.py apply` exists in this repo. Every mutation is a suggestion for
+the user to approve.
 
 Report exactly these four sections, and keep each one short:
 
@@ -32,6 +33,9 @@ No questions is a valid answer. Do not manufacture them to fill the section.
 ## Suggested moves
 Concrete label changes as a copyable list, each with its reason:
 `#iid: Doing -> Blocked (waiting on #other)`
+
+If the board is defined by a YAML file in `boards/`, give the edit as a diff
+to that file instead — that is how the user applies it.
 
 Ground every claim in an issue number from the output. If the board is empty
 or the script errors, say so and stop — do not infer a board from the repo.

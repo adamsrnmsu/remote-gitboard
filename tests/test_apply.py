@@ -11,6 +11,7 @@ import types
 import pytest
 
 import apply
+import client
 
 
 class FakeIssue:
@@ -31,13 +32,17 @@ def _lister(items):
     return types.SimpleNamespace(list=lambda **_: items)
 
 
-def fake_gl(project=None):
-    def get(_path):
+def use_project(monkeypatch, project):
+    """Patch client.get_project directly — its error mapping has its own tests.
+    None means 'no such project', which plan() treats as a fresh build."""
+
+    def get_project(_gl, path):
         if project is None:
-            raise RuntimeError("404")
+            raise client.GitlabProblem(f"no project {path!r}")
         return project
 
-    return types.SimpleNamespace(projects=types.SimpleNamespace(get=get))
+    monkeypatch.setattr(apply.client, "get_project", get_project)
+    return types.SimpleNamespace()
 
 
 SPEC = {
@@ -92,40 +97,41 @@ def test_a_settled_issue_shows_no_drift():
 # --- plan ------------------------------------------------------------------
 
 
-def test_plan_on_a_missing_project_lists_everything():
-    pending = apply.plan(fake_gl(None), SPEC)
-    assert pending[0].startswith("project +")
-    assert any("board   + Dev Board" in x for x in pending)
+def test_plan_on_a_missing_project_lists_everything(monkeypatch):
+    gl = use_project(monkeypatch, None)
+    pending = apply.plan(gl, SPEC)
+    assert pending[0] == ("added", "project", "grp/proj")
+    assert ("added", "board", "Dev Board") in pending
     assert len(pending) == 5  # project, 2 labels, board, 1 issue
 
 
-def test_plan_reports_nothing_when_the_board_already_matches():
+def test_plan_reports_nothing_when_the_board_already_matches(monkeypatch):
     project = FakeProject(
         labels=["Doing", "Blocked"],
         boards=["Dev Board"],
         issues=[FakeIssue("one", labels=["Doing"])],
     )
-    assert apply.plan(fake_gl(project), SPEC) == []
+    assert apply.plan(use_project(monkeypatch, project), SPEC) == []
 
 
-def test_plan_spots_a_changed_label():
+def test_plan_spots_a_changed_label(monkeypatch):
     project = FakeProject(
         labels=["Doing", "Blocked"],
         boards=["Dev Board"],
         issues=[FakeIssue("one", labels=["Blocked"])],
     )
-    pending = apply.plan(fake_gl(project), SPEC)
-    assert pending == ["issue   ~ one: labels"]
+    pending = apply.plan(use_project(monkeypatch, project), SPEC)
+    assert pending == [("changed", "issue", "one: labels")]
 
 
-def test_plan_never_proposes_deleting_what_the_yaml_omits():
+def test_plan_never_proposes_deleting_what_the_yaml_omits(monkeypatch):
     """Additive only — an issue not in the YAML is left alone, not removed."""
     project = FakeProject(
         labels=["Doing", "Blocked"],
         boards=["Dev Board"],
         issues=[FakeIssue("one", labels=["Doing"]), FakeIssue("not in yaml")],
     )
-    assert apply.plan(fake_gl(project), SPEC) == []
+    assert apply.plan(use_project(monkeypatch, project), SPEC) == []
 
 
 # --- load ------------------------------------------------------------------
@@ -134,7 +140,7 @@ def test_plan_never_proposes_deleting_what_the_yaml_omits():
 def test_load_rejects_a_spec_with_no_board(tmp_path):
     f = tmp_path / "b.yaml"
     f.write_text("project: grp/proj\n")
-    with pytest.raises(SystemExit) as e:
+    with pytest.raises(apply.SpecError) as e:
         apply.load(str(f))
     assert "board" in str(e.value)
 
