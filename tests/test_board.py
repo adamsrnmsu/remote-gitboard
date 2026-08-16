@@ -3,6 +3,9 @@
 board.py defers `import gitlab` into main(), so importing it here needs no deps.
 """
 
+import sys
+import types
+
 import pytest
 
 import board
@@ -144,3 +147,63 @@ def test_missing_token_exits_rather_than_returning_empty(monkeypatch):
     )
     with pytest.raises(SystemExit):
         board.token()
+
+
+# --- main()'s failure modes ------------------------------------------------
+# A traceback is a bad answer to a typo'd path or an expired token. These pin
+# the friendly exits. `gitlab` is faked into sys.modules so the real package
+# isn't needed to test the handlers that catch its exceptions.
+
+
+@pytest.fixture
+def fake_gitlab(monkeypatch):
+    mod = types.ModuleType("gitlab")
+
+    class GitlabError(Exception):
+        pass
+
+    class GitlabAuthenticationError(GitlabError):
+        pass
+
+    class GitlabGetError(GitlabError):
+        pass
+
+    mod.exceptions = types.SimpleNamespace(
+        GitlabAuthenticationError=GitlabAuthenticationError,
+        GitlabGetError=GitlabGetError,
+    )
+    monkeypatch.setitem(sys.modules, "gitlab", mod)
+    monkeypatch.setenv("GITLAB_TOKEN", "tok")
+    return mod
+
+
+def raise_on_get(mod, exc):
+    class GL:
+        def __init__(self, *a, **k):
+            self.projects = types.SimpleNamespace(get=self._get)
+
+        def _get(self, _path):
+            raise exc
+
+    mod.Gitlab = GL
+
+
+def test_unknown_project_exits_cleanly(fake_gitlab):
+    raise_on_get(fake_gitlab, fake_gitlab.exceptions.GitlabGetError("404"))
+    with pytest.raises(SystemExit) as e:
+        board.main("grp/nope")
+    assert "no project 'grp/nope'" in str(e.value)
+
+
+def test_rejected_token_says_so_rather_than_project_not_found(fake_gitlab):
+    raise_on_get(fake_gitlab, fake_gitlab.exceptions.GitlabAuthenticationError("401"))
+    with pytest.raises(SystemExit) as e:
+        board.main("grp/proj")
+    assert "rejected the token" in str(e.value)
+
+
+def test_unreachable_host_exits_cleanly(fake_gitlab):
+    raise_on_get(fake_gitlab, ConnectionError("refused"))
+    with pytest.raises(SystemExit) as e:
+        board.main("grp/proj")
+    assert "cannot reach" in str(e.value)

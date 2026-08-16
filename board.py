@@ -70,7 +70,16 @@ def main(path, board_name=None):
     import gitlab  # deferred so --selftest runs with no deps installed
 
     gl = gitlab.Gitlab(URL, private_token=token())
-    project = gl.projects.get(path)
+    try:
+        project = gl.projects.get(path)
+    except gitlab.exceptions.GitlabAuthenticationError:
+        sys.exit(f"{URL} rejected the token — expired, or minted on another instance?")
+    except gitlab.exceptions.GitlabGetError:
+        # GitLab answers 404 for private projects too, rather than confirm they exist.
+        sys.exit(f"no project {path!r} on {URL}, or the token cannot see it")
+    except OSError as e:  # requests' ConnectionError/Timeout subclass this
+        sys.exit(f"cannot reach {URL}: {e.__class__.__name__}")
+
     boards = project.boards.list(all=True)
     if not boards:
         sys.exit(f"{path} has no issue boards")
