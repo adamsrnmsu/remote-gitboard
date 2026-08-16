@@ -41,6 +41,7 @@ from dotenv import dotenv_values
 
 DEFAULT_URL = "https://gitlab.com"
 KEYCHAIN_SERVICE = "gitlab-token"
+WRITE_KEYCHAIN_SERVICE = "gitlab-write-token"
 FILENAME = "gitboard.toml"
 ENV_FILENAME = ".env"
 HERE = Path(__file__).resolve().parent
@@ -63,25 +64,46 @@ class Config:
     source: Path | None = None  # which toml file these came from, if any
     env_source: Path | None = None  # which .env file was read, if any
     warnings: tuple[str, ...] = ()
-    token_source: str = "keychain"  # which of the four sources supplied it
+    token_source: str = "keychain"  # which source supplied the read token
+    write_token_source: str | None = None  # None => falls back to the read one
     token_override: str | None = None
+    write_token_override: str | None = None
     _token: str | None = field(default=None, repr=False)
+    _write_token: str | None = field(default=None, repr=False)
 
-    def token(self) -> str:
-        """Flag/env first, then the macOS keychain. Cached per instance."""
-        if self._token is None:
-            self._token = self.token_override or _from_keychain()
-        return self._token
+    def token(self, write: bool = False) -> str:
+        """The read token, or the write one for `apply`.
+
+        Two slots because the scopes differ: reading wants `read_api`, writing
+        needs `api`. Keeping them apart is what lets the read-only AI pass stay
+        read-only even on a machine that can write.
+
+        With no write token configured this falls back to the read token — a
+        single `api`-scope token is a legitimate setup — and GitLab refuses the
+        write if that token lacks the scope. client.write_errors() explains it.
+        """
+        if not write:
+            if self._token is None:
+                self._token = self.token_override or _from_keychain(KEYCHAIN_SERVICE)
+            return self._token
+
+        if self._write_token is None:
+            self._write_token = self.write_token_override or _from_keychain(
+                WRITE_KEYCHAIN_SERVICE, fallback=self.token
+            )
+        return self._write_token
 
 
-def _from_keychain() -> str:
+def _from_keychain(service, fallback=None) -> str:
     out = subprocess.run(
-        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+        ["security", "find-generic-password", "-s", service, "-w"],
         capture_output=True,
         text=True,
     )
     if out.returncode:
-        add = f'security add-generic-password -a "$USER" -s {KEYCHAIN_SERVICE} -w'
+        if fallback is not None:
+            return fallback()  # no dedicated write token; reuse the read one
+        add = f'security add-generic-password -a "$USER" -s {service} -w'
         raise ConfigError(
             "no token — set GITLAB_TOKEN, pass --token, or add a keychain item:\n"
             f"  {add} '<PAT>'"
@@ -149,11 +171,14 @@ def load_file(explicit=None):
     return {}, None, warnings
 
 
-def configure(*, url=None, token=None, verbose=None, config_path=None) -> "Config":
+def configure(
+    *, url=None, token=None, write_token=None, verbose=None, config_path=None
+) -> "Config":
     """Apply CLI overrides. Call once, before anything reads config."""
     for key, value in (
         ("url", url),
         ("token", token),
+        ("write_token", write_token),
         ("verbose", verbose),
         ("config_path", config_path),
     ):
@@ -179,6 +204,15 @@ def get_config() -> Config:
                 return env
         return values.get(key, default)
 
+    if _overrides.get("write_token"):
+        write_token_source = "--write-token"
+    elif os.environ.get("GITLAB_WRITE_TOKEN"):
+        write_token_source = "environment"
+    elif env_values.get("GITLAB_WRITE_TOKEN"):
+        write_token_source = str(env_source)
+    else:
+        write_token_source = None  # falls back to the read token
+
     if _overrides.get("token"):
         token_source = "--token"
     elif os.environ.get("GITLAB_TOKEN"):
@@ -198,7 +232,9 @@ def get_config() -> Config:
         env_source=env_source,
         warnings=tuple(warnings),
         token_source=token_source,
+        write_token_source=write_token_source,
         token_override=pick("token", "GITLAB_TOKEN"),
+        write_token_override=pick("write_token", "GITLAB_WRITE_TOKEN"),
     )
 
 

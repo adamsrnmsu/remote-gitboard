@@ -45,7 +45,13 @@ def main(
         None, "--url", envvar="GITLAB_URL", help="GitLab instance URL."
     ),
     token: str | None = typer.Option(
-        None, "--token", envvar="GITLAB_TOKEN", help="PAT. Defaults to the keychain."
+        None, "--token", envvar="GITLAB_TOKEN", help="Read PAT (read_api scope)."
+    ),
+    write_token: str | None = typer.Option(
+        None,
+        "--write-token",
+        envvar="GITLAB_WRITE_TOKEN",
+        help="PAT for `apply` (api scope). Falls back to --token.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging."),
     config_path: str | None = typer.Option(
@@ -59,7 +65,13 @@ def main(
     """Configure the singletons once, before any command runs."""
     set_verbose(verbose)
     try:
-        cfg = configure(url=url, token=token, verbose=verbose, config_path=config_path)
+        cfg = configure(
+            url=url,
+            token=token,
+            write_token=write_token,
+            verbose=verbose,
+            config_path=config_path,
+        )
     except ConfigError as e:
         err().print(f"[logging.level.error]error[/] {e}")
         raise typer.Exit(1) from e
@@ -133,7 +145,7 @@ def apply(
 
     def go():
         parsed = apply_mod.load(_need(spec, "spec", "spec file"))
-        gl = client.gitlab()
+        gl = client.gitlab(write=True)
         with err().status(f"reading {parsed['project']}…"):
             pending = apply_mod.plan(gl, parsed)
 
@@ -144,7 +156,8 @@ def apply(
         if not yes and not typer.confirm(f"apply {len(pending)} change(s)?"):
             raise typer.Abort()
 
-        changes = apply_mod.apply(gl, parsed)
+        with client.write_errors():
+            changes = apply_mod.apply(gl, parsed)
         err().print(
             f"[added]{len(changes)} change(s) written[/] — "
             f"./gitboard.py show {parsed['project']}"
@@ -181,9 +194,15 @@ def config():
         table.add_row(key, getattr(cfg, key) or "[muted]unset[/]")
     try:
         cfg.token()
-        table.add_row("token", f"[added]found[/] [muted]({cfg.token_source})[/]")
+        table.add_row("read token", f"[added]found[/] [muted]({cfg.token_source})[/]")
     except ConfigError:
-        table.add_row("token", "[logging.level.error]not found[/]")
+        table.add_row("read token", "[logging.level.error]not found[/]")
+    if cfg.write_token_source:
+        table.add_row(
+            "write token", f"[added]found[/] [muted]({cfg.write_token_source})[/]"
+        )
+    else:
+        table.add_row("write token", "[muted]unset — apply reuses the read token[/]")
     out().print(table)
 
 

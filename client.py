@@ -4,6 +4,8 @@ Every failure surfaces as GitlabProblem, which the CLI prints as one line.
 A traceback is a bad answer to a typo'd project path or an expired token.
 """
 
+from contextlib import contextmanager
+
 from config import get_config
 
 
@@ -11,12 +13,39 @@ class GitlabProblem(Exception):
     """Something the user can act on. Rendered without a traceback."""
 
 
-def gitlab():
-    """An authenticated python-gitlab client from the config singleton."""
+def gitlab(write=False):
+    """An authenticated python-gitlab client from the config singleton.
+
+    `write=True` picks the write token, which needs `api` scope where reading
+    only needs `read_api`.
+    """
     import gitlab as gitlab_pkg
 
     cfg = get_config()
-    return gitlab_pkg.Gitlab(cfg.url, private_token=cfg.token())
+    return gitlab_pkg.Gitlab(cfg.url, private_token=cfg.token(write=write))
+
+
+@contextmanager
+def write_errors():
+    """Explain a refused write instead of dumping the API's 403.
+
+    A `read_api` token reads boards perfectly and fails only here, so this is
+    the most likely way to get the scopes wrong.
+    """
+    import gitlab as gitlab_pkg
+
+    try:
+        yield
+    except gitlab_pkg.exceptions.GitlabError as e:
+        if getattr(e, "response_code", None) in (401, 403):
+            raise GitlabProblem(
+                "the token cannot write — writing needs `api` scope, reading only "
+                "needs `read_api`.\n"
+                "  Put an api-scope token in GITLAB_WRITE_TOKEN (.env or the "
+                "environment), pass --write-token,\n"
+                "  or add a keychain item named 'gitlab-write-token'."
+            ) from e
+        raise GitlabProblem(str(e)) from e
 
 
 def get_project(gl, path):

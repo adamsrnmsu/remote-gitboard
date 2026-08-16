@@ -47,8 +47,12 @@ exists only for editor autocomplete; the scripts ignore it.
   server exposes board structure.** A board list is bound to a label and
   membership is "has that label", so the mapping is reassembled from
   `board.lists` + `project.issues`.
-- `apply.py` — the only writer. Needs an `api`-scope token; `read_api` reads
-  boards fine and fails here, which is the intended split.
+- `apply.py` — the only writer. Uses `Config.token(write=True)`: the separate
+  `GITLAB_WRITE_TOKEN` / `--write-token` / `gitlab-write-token` keychain slot,
+  falling back to the read token when unset (a single `api` token is a valid
+  setup). `client.write_errors()` turns the resulting 401/403 into a message
+  naming the scope. Two slots exist so a `read_api` token can be the only one
+  the read-only AI pass can reach.
 
 Deliberate, not bugs: an issue with labels from two lists appears in both
 columns (the web UI does the same, no tiebreak invented); `Backlog` is
@@ -82,6 +86,8 @@ the prompt. `.claude/commands/board.md` restates it and restricts tools to
 command cannot reach `apply`. If you add write capability for the AI, both
 have to change together; README "Adding writes later" has the steps.
 
-Auth: `--token`, else `GITLAB_TOKEN`, else macOS keychain item `gitlab-token`.
+Auth (read): `--token`, else `GITLAB_TOKEN`, else keychain `gitlab-token`.
+Auth (write): `--write-token`, else `GITLAB_WRITE_TOKEN`, else keychain
+`gitlab-write-token`, else the read token.
 `GITLAB_URL` defaults to gitlab.com. `./gitboard.py config` shows what
 resolved.

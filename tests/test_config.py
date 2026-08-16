@@ -357,3 +357,91 @@ def test_unrelated_env_keys_are_ignored(env_file):
     cfg = config.get_config()
     assert cfg.url == "http://x"
     assert "hunter2" not in repr(cfg)
+
+
+# --- write token -----------------------------------------------------------
+# Two slots because the scopes differ: reading wants read_api, writing needs
+# api. Keeping them apart is what lets the read-only AI pass stay read-only on
+# a machine that is also able to write.
+
+
+def test_write_token_is_separate_from_the_read_token(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "read-tok")
+    monkeypatch.setenv("GITLAB_WRITE_TOKEN", "write-tok")
+    cfg = config.get_config()
+    assert cfg.token() == "read-tok"
+    assert cfg.token(write=True) == "write-tok"
+
+
+def test_write_falls_back_to_the_read_token(monkeypatch):
+    """A single api-scope token is a legitimate setup."""
+    monkeypatch.setenv("GITLAB_TOKEN", "only-tok")
+    monkeypatch.delenv("GITLAB_WRITE_TOKEN", raising=False)
+    monkeypatch.setattr(
+        config.subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(returncode=1, stdout=""),
+    )
+    cfg = config.get_config()
+    assert cfg.token(write=True) == "only-tok"
+    assert cfg.write_token_source is None
+
+
+def test_write_token_from_env_file(env_file):
+    env_file("GITLAB_TOKEN=read-tok\nGITLAB_WRITE_TOKEN=write-tok\n")
+    cfg = config.get_config()
+    assert cfg.token(write=True) == "write-tok"
+    assert cfg.write_token_source.endswith(".env")
+
+
+def test_write_token_flag_beats_env(monkeypatch):
+    monkeypatch.setenv("GITLAB_WRITE_TOKEN", "from-env")
+    assert config.configure(write_token="from-flag").token(write=True) == "from-flag"
+
+
+def test_write_keychain_is_consulted_before_falling_back(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "read-tok")
+    monkeypatch.delenv("GITLAB_WRITE_TOKEN", raising=False)
+    asked = []
+
+    def keychain(cmd, **k):
+        asked.append(cmd[cmd.index("-s") + 1])
+        return types.SimpleNamespace(returncode=0, stdout="from-write-keychain\n")
+
+    monkeypatch.setattr(config.subprocess, "run", keychain)
+    assert config.get_config().token(write=True) == "from-write-keychain"
+    assert asked == [config.WRITE_KEYCHAIN_SERVICE]
+
+
+def test_a_refused_write_explains_the_scope(monkeypatch):
+    """The 403 a read_api token gets must name the fix, not dump the API error."""
+    mod = fake_gitlab_module(None)
+
+    class GitlabError(Exception):
+        def __init__(self, code):
+            self.response_code = code
+
+    mod.exceptions.GitlabError = GitlabError
+    monkeypatch.setitem(__import__("sys").modules, "gitlab", mod)
+
+    with pytest.raises(client.GitlabProblem) as e, client.write_errors():
+        raise GitlabError(403)
+    assert "api` scope" in str(e.value)
+    assert "GITLAB_WRITE_TOKEN" in str(e.value)
+
+
+def test_a_non_scope_error_is_not_mislabelled(monkeypatch):
+    """A 500 is not a scope problem — don't send the user chasing tokens."""
+    mod = fake_gitlab_module(None)
+
+    class GitlabError(Exception):
+        def __init__(self, code):
+            self.response_code = code
+            super().__init__("boom")
+
+    mod.exceptions.GitlabError = GitlabError
+    monkeypatch.setitem(__import__("sys").modules, "gitlab", mod)
+
+    with pytest.raises(client.GitlabProblem) as e, client.write_errors():
+        raise GitlabError(500)
+    assert "scope" not in str(e.value)

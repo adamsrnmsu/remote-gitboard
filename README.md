@@ -13,7 +13,10 @@ left, all of them need you.
 GitLab UI → avatar → **Edit profile → Access → Personal access tokens**.
 
 - Scope: **`read_api`** only. Not `api`. The read-only guarantee is enforced by
-  the token, not by the prompt.
+  the token, not by the prompt. This is the one that goes in `GITLAB_TOKEN`.
+- If you also want `apply` to write, mint a **second** token with `api` scope
+  and put that one in `GITLAB_WRITE_TOKEN` (or a `gitlab-write-token` keychain
+  item). Two tokens, so reading can never write.
 - Work instances often cap token lifetime by admin policy — note the expiry.
 
 SSH keys cannot do this. The GitLab REST API accepts OAuth tokens, personal /
@@ -130,7 +133,8 @@ One entry point, `./gitboard.py`:
 ./gitboard.py --help
 ```
 
-`--url` and `--token` override `GITLAB_URL` / `GITLAB_TOKEN` per invocation;
+`--url`, `--token`, and `--write-token` override `GITLAB_URL`,
+`GITLAB_TOKEN`, and `GITLAB_WRITE_TOKEN` per invocation;
 `-v` turns on debug logging. Logs and progress go to **stderr**, the board
 goes to **stdout**, so `--markdown | less` stays clean.
 
@@ -142,8 +146,18 @@ and already exists for docker compose:
 ```bash
 # .env
 GITLAB_URL=http://localhost:8929
-GITLAB_TOKEN=glpat-seedseedseedseedseed
+GITLAB_TOKEN=glpat-read…          # read_api — show, and the /board pass
+GITLAB_WRITE_TOKEN=glpat-write…   # api      — apply only
 ```
+
+**Two tokens, because the scopes differ.** Reading a board needs `read_api`;
+`apply` needs `api`. Keeping them in separate slots is what lets the read-only
+AI pass stay read-only on a machine that is also able to write — a single
+`api` token in `GITLAB_TOKEN` would hand write scope to everything.
+
+If you only have one `api`-scope token, set `GITLAB_TOKEN` and leave the write
+slot unset: `apply` falls back to it. If the fallback token lacks `api`, the
+write is refused with a message naming the fix rather than a raw 403.
 
 Then everything works with no exports and no keychain:
 
