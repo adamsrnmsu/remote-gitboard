@@ -121,11 +121,10 @@ sudo rm /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v1
 
 ## Use
 
-One entry point, installed from `pyproject.toml`:
+Install it once, then it is just `gitboard`:
 
 ```bash
-uv sync                                       # once
-uv run gitboard --help                        # or `gitboard` if installed globally
+uv tool install .        # puts `gitboard` on your PATH; re-run after code changes
 
 gitboard show group/project              # the board, as a tree
 gitboard show group/project "Dev Board"  # a named board

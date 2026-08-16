@@ -5,7 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run gitboard show group/project      # the board, as a rich tree
+uv tool install .                       # `gitboard` on PATH — most reliable
+gitboard show group/project             # the board, as a rich tree
+uv run gitboard show group/project      # same, from the repo
 uv run gitboard show group/project -m   # markdown — stable, parseable
 uv run gitboard plan boards/test.yaml   # diff YAML against GitLab
 uv run gitboard apply boards/test.yaml  # write it (--yes to skip the prompt)
