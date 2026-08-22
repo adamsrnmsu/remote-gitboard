@@ -87,7 +87,8 @@ The API's order is not stable, and a truncated column has to show what the
 reader would have gone looking for. `summarise` de-duplicates by iid — a
 two-column issue is one issue, and summing per-column counts double-counts it.
 `show` truncates to 5 per column by default; `--all` / `-n` override.
-`tui` is a keypress loop over the same rendering: reload / snapshot / edit
+`tui` is a keypress loop over the same rendering: reload / board-picker /
+snapshot / edit
 (`$EDITOR` on the spec, pulled via `spec_from_board` if missing) / plan /
 apply-with-y/n / migrate-comments / help. Raw input comes from `_key()`
 (termios, dies without a tty); prompts and the editor run with the Live

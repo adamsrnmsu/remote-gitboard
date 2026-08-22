@@ -154,7 +154,8 @@ overdue, and names the YAML that defines the board.
 (refusing to clobber an existing file), so a board born in the web UI
 becomes editable text. `pull` then `plan` is always a no-op.
 
-`tui` is the interactive loop: `r` reload, `s` snapshot, `e` edit the YAML
+`tui` is the interactive loop: `r` reload, `b` pick another of the
+project's boards, `s` snapshot, `e` edit the YAML
 in `$EDITOR` (pulling the board into one first if none exists) with the diff
 shown on return, `p` plan, `a` apply after a y/n on the change table, `m`
 migrate comments between issues, `?` help, `q` quit.

@@ -358,19 +358,23 @@ def tui(
         from rich.text import Text
 
         path = _need(project, "project", "project")
-        name = board_name or get_config().board
         console = err()
-        st = {"status": None, "extra": None, "prompt": None}
+        st = {
+            "status": None,
+            "extra": None,
+            "prompt": None,
+            "name": board_name or get_config().board,
+        }
 
         def refetch():
-            st["proj"], st["board"] = board_mod.fetch(path, name)
+            st["proj"], st["board"] = board_mod.fetch(path, st["name"])
             st["columns"] = board_mod.board_columns(st["proj"], st["board"])
             st["spec"] = find_spec(path)
 
         def keybar():
             if st["prompt"]:
                 return Text(f"  {st['prompt']}", "bold yellow")
-            pairs = [("r", "reload"), ("s", "snapshot"), ("e", "edit")]
+            pairs = [("r", "reload"), ("b", "board"), ("s", "snapshot"), ("e", "edit")]
             if st["spec"]:
                 pairs += [("p", "plan"), ("a", "apply")]
             pairs += [("m", "migrate"), ("?", "help"), ("q", "quit")]
@@ -418,6 +422,7 @@ def tui(
                 ("", "The YAML in boards/ is the source of truth; the board is"),
                 ("", "what GitLab currently shows. Editing happens in the YAML."),
                 ("r", "refetch the board"),
+                ("b", "switch to another of the project's boards"),
                 ("s", "append every issue to snapshots.jsonl, the progress log"),
                 ("e", "edit the YAML in $EDITOR (pulled from the board if there"),
                 ("", "is none yet); the diff is shown when you come back"),
@@ -463,6 +468,32 @@ def tui(
                     )
                 elif k == "?":
                     st["extra"] = help_panel()
+                elif k == "b":
+                    boards = st["proj"].boards.list(all=True)
+                    if len(boards) < 2:
+                        st["status"] = Text("this project has only one board", "muted")
+                    else:
+                        # ponytail: single-digit pick caps at 9 boards; a
+                        # project with ten needs the board_name argument
+                        grid = Table(box=None, show_header=False, padding=(0, 1))
+                        grid.add_column(style="bold reverse", width=3)
+                        grid.add_column()
+                        for i, b in enumerate(boards[:9], 1):
+                            here = "  ← current" if b.name == st["board"].name else ""
+                            grid.add_row(f" {i} ", f"{b.name}{here}")
+                        st["extra"] = Panel(
+                            grid, title="boards", border_style="muted", padding=(0, 1)
+                        )
+                        st["prompt"] = "which board?  (anything else cancels)"
+                        draw()
+                        st["prompt"], st["extra"] = None, None
+                        pick = _key()
+                        if pick.isdigit() and 1 <= int(pick) <= len(boards[:9]):
+                            st["name"] = boards[int(pick) - 1].name
+                            draw(busy=f"reading {st['name']}…")
+                            refetch()
+                        else:
+                            st["status"] = Text("cancelled", "muted")
                 elif k == "e":
                     live.stop()
                     spec = st["spec"]
