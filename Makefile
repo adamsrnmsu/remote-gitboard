@@ -75,7 +75,7 @@ seed: wait install  ## mint a PAT and apply boards/demo.yaml
 show: install  ## print a board: make show PROJECT=group/project
 	@$(GITBOARD) show $(PROJECT)
 
-snapshot: install  ## record board state in snapshots.db: make snapshot PROJECT=group/project
+snapshot: install  ## append board state to snapshots.jsonl: make snapshot PROJECT=group/project
 	@$(GITBOARD) snapshot $(PROJECT)
 
 plan: install  ## preview YAML changes: make plan SPEC=boards/test.yaml

@@ -162,8 +162,8 @@ churn) are not copied.
 
 `snapshot` appends one JSON line per open issue (timestamp, columns,
 assignee, due date) to `snapshots.jsonl`. Run it on a schedule and the file
-becomes a progress log you can query — who moved what when, and joined
-against `git log`, who ships what they pick up.
+becomes a progress log you can query with jq — who moved what when — and
+joined against `git log`, who ships what they pick up.
 
 ## Defining a board in YAML
 
@@ -222,12 +222,10 @@ which made every apply report a phantom description change.
 ```
 
 Four sections: Progress, Needs follow-up, Questions for you, Suggested moves.
-Suggestions are copyable, never applied — the command is restricted to
-`show` and `plan` (both read-only), so it cannot reach `apply` even though
-`apply` exists.
-
-The read-only guarantee is the **token scope**, not the prompt. Give it the
-`read_api` token and it cannot write regardless of what it is asked.
+The command can also **apply** the moves, through one path only: it edits the
+board's YAML, runs `plan`, shows you the pending table, and waits for a yes
+in the conversation before `apply --yes`. `apply` is additive-only — nothing
+is ever deleted or closed — and the YAML stays the source of truth.
 
 ## Configuration
 
@@ -398,21 +396,20 @@ The genuine gap: **no MCP server exposes board structure.** Boards are lists
 bound to labels, and neither the official server nor the community ones read
 that mapping. Hence `board_columns()`, and nothing more.
 
-## Letting the AI write
+## Taking write access away again
 
-Currently the AI can only suggest. To let it move cards itself:
+The AI pass writes because two things allow it — revoke either:
 
-1. Give the `/board` command the `api` token instead of the `read_api` one —
-   the scope is the guarantee, so nothing else matters until this changes.
-2. Add [k1sina/gitlab-mcp-server](https://github.com/k1sina/gitlab-mcp-server)
-   with `GITLAB_ENABLE_WRITES=true`. It has `update_issue` with incremental
-   label add/remove — the move-card primitive. The official server lacks it;
-   its write set is create-only.
-3. Drop the read-only paragraph from `.claude/commands/board.md`, and widen its
-   `allowed-tools`, or it will keep refusing even with the tools present.
+1. Re-restrict `allowed-tools` in `.claude/commands/board.md` to `show` and
+   `plan`, and put its read-only paragraph back.
+2. Remove `GITLAB_WRITE_TOKEN` from `.env`, leaving a `read_api`-scope token.
+   The scope is the hard guarantee: without an `api` token, `apply` fails
+   with a one-line scope error no matter what the prompt says.
 
-Or keep the split and let it edit the YAML instead — `gitboard plan` then
-shows you exactly what would change before anything is written.
+For incremental label moves on issues you refuse to put in YAML,
+[k1sina/gitlab-mcp-server](https://github.com/k1sina/gitlab-mcp-server) with
+`GITLAB_ENABLE_WRITES=true` has `update_issue`; not wired up here because the
+YAML flow covers board management without a second write path.
 
 ## Notes
 

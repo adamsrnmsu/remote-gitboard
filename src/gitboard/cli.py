@@ -14,6 +14,7 @@ The CLI. Everything else in the package is a module it calls:
     gitboard apply boards/test.yaml
 """
 
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ from rich.table import Table
 
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
-from gitboard import client, history
+from gitboard import client
 from gitboard.config import (
     FILENAME,
     ConfigError,
@@ -263,21 +264,20 @@ def snapshot(
     project: str | None = typer.Argument(None, help="group/project"),
     board_name: str | None = typer.Argument(None, help="Board name, if several."),
     out_path: str = typer.Option(
-        "snapshots.db", "--out", "-o", help="SQLite file to record into."
+        "snapshots.jsonl", "--out", "-o", help="JSONL file to append to."
     ),
 ):
-    """Record the board's state in a SQLite log. Only changes are written."""
+    """Append the board's current state to a JSONL log, one line per issue."""
 
     def go():
         path = _need(project, "project", "project")
         proj, board = board_mod.fetch(path, board_name or get_config().board)
         ts = datetime.now(UTC).isoformat(timespec="seconds")
         records = board_mod.snapshot_records(proj, board, ts)
-        written = history.record(out_path, records)
-        if written:
-            err().print(f"[added]{written} change(s)[/] recorded in {out_path}")
-        else:
-            err().print(f"[muted]no changes since the last snapshot[/] ({out_path})")
+        with open(out_path, "a") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+        err().print(f"[added]{len(records)} issue(s)[/] appended to {out_path}")
 
     _run(go)
 
