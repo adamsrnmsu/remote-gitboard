@@ -8,6 +8,7 @@ project.issues.
 
 from datetime import date
 
+from rich.console import Group
 from rich.text import Text
 from rich.tree import Tree
 
@@ -149,15 +150,16 @@ def snapshot_records(project, board, ts):
     return list(records.values())
 
 
-def print_rich(project, board, spec_path=None, limit=5):
-    """The human rendering.
+def board_view(project, board, limit=5, columns=None):
+    """Tree + totals as one renderable, plus the hidden count.
 
+    `show` prints it once; `tui` redraws it on every keypress and resize.
     Long columns are truncated: a 200-issue board should still fit on a
-    screen, and the point of the overview is shape, not every title. `limit=0`
-    prints everything. The footer names the YAML that defines the board, so
-    the next step after looking is obvious.
+    screen, and the point of the overview is shape, not every title.
+    `limit=0` renders everything. `columns` skips the refetch when the
+    caller already has them.
     """
-    columns = board_columns(project, board)
+    columns = board_columns(project, board) if columns is None else columns
     tree = Tree(
         Text.assemble(
             (project.path_with_namespace, "bold"), " — ", (board.name, "bold cyan")
@@ -181,17 +183,21 @@ def print_rich(project, board, spec_path=None, limit=5):
             hidden += rest
             node.add(Text(f"… {rest} more", "muted"))
 
-    console = out()
-    console.print()
-    console.print(tree)
-
     totals = summarise(columns)
     line = Text()
     line.append(f"{totals['issues']} issues", "bold")
     line.append(f" · {totals['unassigned']} unassigned", "muted")
     if totals["overdue"]:
         line.append(f" · {totals['overdue']} overdue", "bold red")
-    console.print(line)
+    return Group(tree, line), hidden
+
+
+def print_rich(project, board, spec_path=None, limit=5):
+    """The human rendering: the view, then the where-to-edit footer."""
+    view, hidden = board_view(project, board, limit)
+    console = out()
+    console.print()
+    console.print(view)
 
     if hidden:
         console.print(Text(f"{hidden} issue(s) hidden — pass --all", "muted"))

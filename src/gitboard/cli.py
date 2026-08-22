@@ -312,73 +312,146 @@ def tui(
     def go():
         if not sys.stdin.isatty():
             raise ConfigError("tui needs a terminal — use `show` in pipes")
+        import signal
+
+        from rich.console import Group
+        from rich.live import Live
+        from rich.panel import Panel
+        from rich.text import Text
+
         path = _need(project, "project", "project")
         name = board_name or get_config().board
-        status = ""
-        while True:
-            with err().status(f"reading {path}…"):
-                proj, board = board_mod.fetch(path, name)
-            spec = find_spec(path)
-            out().clear()
-            board_mod.print_rich(proj, board, spec_path=spec)
-            if status:
-                err().print(status)
-            keys = (
-                "[r]eload  [s]napshot"
-                + ("  [p]lan  [a]pply" if spec else "")
-                + "  [q]uit"
+        console = err()
+        st = {"status": None, "extra": None, "prompt": None}
+
+        def refetch():
+            st["proj"], st["board"] = board_mod.fetch(path, name)
+            st["columns"] = board_mod.board_columns(st["proj"], st["board"])
+            st["spec"] = find_spec(path)
+
+        def keybar():
+            if st["prompt"]:
+                return Text(f"  {st['prompt']}", "bold yellow")
+            pairs = [("r", "reload"), ("s", "snapshot")]
+            if st["spec"]:
+                pairs += [("p", "plan"), ("a", "apply")]
+            pairs += [("q", "quit")]
+            bar = Text("  ")
+            for key, label in pairs:
+                bar.append(f" {key} ", "bold reverse")
+                bar.append(f" {label}", "muted")
+                bar.append("   ")
+            return bar
+
+        def view():
+            cols = st["columns"]
+            # ponytail: naive fit — one header + one spare line per column,
+            # the rest split evenly. Uneven boards waste a little; fine
+            # until someone complains.
+            usable = console.size.height - 7 - (2 * len(cols))
+            limit = max(2, usable // max(len(cols), 1))
+            body, hidden = board_mod.board_view(
+                st["proj"], st["board"], limit=limit, columns=cols
             )
-            err().print(f"[muted]{keys}[/]")
+            spec = st["spec"]
+            parts = [
+                Panel(
+                    body,
+                    subtitle=Text(
+                        f"defined by {spec} — p compares, a applies"
+                        if spec
+                        else "no boards/*.yaml defines this board",
+                        "muted",
+                    ),
+                    subtitle_align="left",
+                    border_style="cyan",
+                    padding=(0, 1),
+                )
+            ]
+            if st["extra"] is not None:
+                parts.append(st["extra"])
+            if st["status"] is not None:
+                parts.append(Text("  ", end="") + st["status"])
+            parts.append(keybar())
+            return Group(*parts)
+
+        with Live(console=console, screen=True, auto_refresh=False) as live:
+
+            def draw(busy=None):
+                if busy:
+                    st["status"] = Text(busy, "muted")
+                live.update(view() if "proj" in st else Text(""), refresh=True)
+                if busy:
+                    st["status"] = None
+
+            # a resize re-renders at the new size, including the fit limit
+            signal.signal(signal.SIGWINCH, lambda *_: draw())
+
+            live.update(Text(f"reading {path}…", "muted"), refresh=True)
+            refetch()
+            draw()
             while True:
                 k = _key().lower()
+                st["status"] = st["extra"] = st["prompt"] = None
                 if k == "q":
                     return
                 if k == "r":
-                    status = ""
-                    break
-                if k == "s":
-                    n = _write_snapshot(proj, board)
-                    status = f"[added]{n} issue(s)[/] appended to snapshots.jsonl"
-                    break
-                if k == "p" and spec:
-                    parsed = apply_mod.load(spec)
-                    with err().status("comparing…"):
-                        pending = apply_mod.plan(client.gitlab(), parsed)
-                    _print_changes(pending, f"{spec} vs the board — [a] writes it")
-                    status = ""
-                    err().print(f"[muted]{keys}[/]")
-                if k == "a" and spec:
-                    parsed = apply_mod.load(spec)
-                    gl = client.gitlab(write=True)
-                    with err().status("comparing…"):
-                        pending = apply_mod.plan(gl, parsed)
+                    draw(busy=f"reading {path}…")
+                    refetch()
+                elif k == "s":
+                    n = _write_snapshot(st["proj"], st["board"])
+                    st["status"] = Text(
+                        f"{n} issue(s) appended to snapshots.jsonl", "added"
+                    )
+                elif k in ("p", "a") and st["spec"]:
+                    parsed = apply_mod.load(st["spec"])
+                    gl = client.gitlab(write=(k == "a"))
+                    draw(busy="comparing…")
+                    pending = apply_mod.plan(gl, parsed)
+                    spec = st["spec"]
                     if not pending:
-                        status = "[muted]no changes — board already matches[/]"
-                        break
-                    _print_changes(pending, f"{spec} — will write")
-                    err().print(f"[muted]apply {len(pending)} change(s)? \[y/n][/]")
-                    if _key().lower() != "y":
-                        status = "[muted]not applied[/]"
-                        break
-                    with client.write_errors():
-                        changes = apply_mod.apply(gl, parsed)
-                    status = f"[added]{len(changes)} change(s) written[/]"
-                    break
+                        st["status"] = Text(
+                            "no changes — board already matches", "muted"
+                        )
+                    elif k == "p":
+                        st["extra"] = _changes_table(pending, f"{spec} — a applies")
+                    else:
+                        st["extra"] = _changes_table(pending, f"{spec} — will write")
+                        st["prompt"] = f"apply {len(pending)} change(s)?  y / n"
+                        draw()
+                        st["prompt"] = None
+                        if _key().lower() == "y":
+                            draw(busy="writing…")
+                            with client.write_errors():
+                                changes = apply_mod.apply(gl, parsed)
+                            refetch()
+                            st["extra"] = None
+                            st["status"] = Text(
+                                f"{len(changes)} change(s) written", "added"
+                            )
+                        else:
+                            st["extra"] = None
+                            st["status"] = Text("not applied", "muted")
+                draw()
 
     _run(go)
 
 
-def _print_changes(pending, title):
-    if not pending:
-        err().print("[muted]no changes — board already matches[/]")
-        return
+def _changes_table(pending, title):
     table = Table(title=title, title_justify="left", title_style="muted", box=None)
     table.add_column("", width=1)
     table.add_column("", style="muted", width=7)
     table.add_column("")
     for kind, what, detail in pending:
         table.add_row(f"[{kind}]{SIGN[kind]}[/]", what, detail)
-    err().print(table)
+    return table
+
+
+def _print_changes(pending, title):
+    if not pending:
+        err().print("[muted]no changes — board already matches[/]")
+        return
+    err().print(_changes_table(pending, title))
 
 
 @app.command()
