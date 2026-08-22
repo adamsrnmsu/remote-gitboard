@@ -101,6 +101,24 @@ def load(path):
     return spec
 
 
+def close_issue(gl, path, iid, superseded_by=()):
+    """Close an issue, leaving a note naming what replaced it.
+
+    The forward half of a migration: comments go to the successors, the
+    source stops cluttering the board. Already-closed issues are left alone,
+    so re-running is a no-op.
+    """
+    project = client.get_project(gl, path)
+    issue = client.get_issue(project, iid)
+    if issue.state == "closed":
+        return False
+    if superseded_by:
+        issue.notes.create({"body": "superseded by " + ", ".join(superseded_by)})
+    issue.state_event = "close"
+    issue.save()
+    return True
+
+
 def spec_from_board(project, board, columns):
     """The live board as an apply()-shaped spec — the pull direction.
 
@@ -331,7 +349,8 @@ def migrate_comments(gl, path, src_iid, dst_iid, dst_path=None):
     have = {n.body for n in dst.notes.list(all=True)}
     copied = 0
     for note in sorted(src.notes.list(all=True), key=lambda n: n.created_at):
-        if note.system:
+        # close_issue's breadcrumb is bookkeeping, not discussion
+        if note.system or note.body.startswith("superseded by "):
             continue
         body = (
             f"*from {ref}, by @{note.author['username']} on "

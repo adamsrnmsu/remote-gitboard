@@ -303,15 +303,11 @@ def test_cross_project_header_is_qualified(monkeypatch):
         ),
         "grp/b": types.SimpleNamespace(
             path_with_namespace="grp/b",
-            issues=types.SimpleNamespace(
-                get=lambda iid: projects_b_issue
-            ),
+            issues=types.SimpleNamespace(get=lambda iid: projects_b_issue),
         ),
     }
     projects_b_issue = types.SimpleNamespace(iid=9, notes=FakeNotes())
-    monkeypatch.setattr(
-        apply.client, "get_project", lambda _gl, path: projects[path]
-    )
+    monkeypatch.setattr(apply.client, "get_project", lambda _gl, path: projects[path])
     n = apply.migrate_comments(None, "grp/a", 1, 9, dst_path="grp/b")
     assert n == 1
     assert projects_b_issue.notes.notes[0].body.startswith("*from grp/a#1,")
@@ -321,3 +317,36 @@ def test_same_project_dst_path_keeps_the_short_ref(monkeypatch):
     issues = migration_project(monkeypatch, [fake_note("hi")])
     apply.migrate_comments(None, "grp/proj", 1, 2, dst_path="grp/proj")
     assert issues[2].notes.notes[0].body.startswith("*from #1,")
+
+
+def test_close_issue_notes_the_successors_and_closes(monkeypatch):
+    issue = types.SimpleNamespace(iid=1, state="opened", notes=FakeNotes(), saved=False)
+    issue.save = lambda: setattr(issue, "saved", True)
+    project = types.SimpleNamespace(
+        path_with_namespace="grp/proj",
+        issues=types.SimpleNamespace(get=lambda _iid: issue),
+    )
+    use_project(monkeypatch, project)
+    assert apply.close_issue(None, "grp/proj", 1, superseded_by=["#2", "x/y#3"])
+    assert issue.notes.notes[0].body == "superseded by #2, x/y#3"
+    assert issue.state_event == "close" and issue.saved
+
+
+def test_close_issue_leaves_a_closed_issue_alone(monkeypatch):
+    issue = types.SimpleNamespace(iid=1, state="closed", notes=FakeNotes())
+    project = types.SimpleNamespace(
+        path_with_namespace="grp/proj",
+        issues=types.SimpleNamespace(get=lambda _iid: issue),
+    )
+    use_project(monkeypatch, project)
+    assert apply.close_issue(None, "grp/proj", 1) is False
+    assert not issue.notes.notes
+
+
+def test_the_superseded_breadcrumb_is_not_migrated(monkeypatch):
+    """close_issue's note on the source must not ride along to the successor."""
+    issues = migration_project(
+        monkeypatch, [fake_note("real"), fake_note("superseded by #2")]
+    )
+    assert apply.migrate_comments(None, "grp/proj", 1, 2) == 1
+    assert len(issues[2].notes.notes) == 1

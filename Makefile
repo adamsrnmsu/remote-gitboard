@@ -81,6 +81,12 @@ tui: install  ## the board, interactively: make tui PROJECT=group/project
 snapshot: install  ## append board state to snapshots.jsonl: make snapshot PROJECT=group/project
 	@$(GITBOARD) snapshot $(PROJECT)
 
+report: install  ## what moved, from the snapshot log: make report PROJECT=group/project
+	@$(GITBOARD) report $(PROJECT)
+
+cron:  ## print a crontab line that snapshots every 30 minutes
+	@echo '*/30 * * * * cd $(CURDIR) && /usr/bin/make -s snapshot >/dev/null 2>&1'
+
 pull: install  ## save the board as YAML: make pull PROJECT=group/project
 	@$(GITBOARD) pull $(PROJECT)
 

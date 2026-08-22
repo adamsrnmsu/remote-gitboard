@@ -64,7 +64,10 @@ out to `.venv/bin/python -m gitboard.cli`.
   server exposes board structure.** A board list is bound to a label and
   membership is "has that label", so the mapping is reassembled from
   `board.lists` + `project.issues`.
-- **`apply.py`** — the only writer (`apply` and `migrate_comments`), and the
+- **`report.py`** — reads `snapshots.jsonl`, no network: batches -> first/last
+  diff -> per-assignee tally; `commit_counts` shells to `git log` and
+  `match_author` joins heuristically (name or email local part).
+- **`apply.py`** — the only writer (`apply`, `migrate_comments`, `close_issue`), and the
   spec schema's home: `spec_from_board`/`dump` are `pull`'s read direction,
   built so pull-then-plan is always empty. Uses `Config.token(write=True)`: the
   separate `GITLAB_WRITE_TOKEN` / `--write-token` / `gitlab-write-token`

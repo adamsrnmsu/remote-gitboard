@@ -1,7 +1,7 @@
 ---
 description: Read a GitLab board, report progress, and — after a go-ahead — apply the moves.
 argument-hint: <group/project> [board name]
-allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Edit(boards/*.yaml)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Edit(boards/*.yaml)
 ---
 
 Run `PYTHONPATH=src .venv/bin/python -m gitboard.cli show $ARGUMENTS --markdown`
@@ -18,6 +18,11 @@ issue in the YAML (that creates a second issue).
 Report exactly these four sections, and keep each one short:
 
 ## Progress
+If a `snapshots.jsonl` exists, first run
+`PYTHONPATH=src .venv/bin/python -m gitboard.cli report $ARGUMENTS` and
+ground this section in actual movement — what changed, what sat still —
+rather than the current shape alone. If it reports too few snapshots, fall
+back to the board as it stands.
 Where the work actually stands. Column counts are the least interesting
 signal — say what moved, what the shape of the board implies, and whether the
 distribution looks healthy or lopsided.

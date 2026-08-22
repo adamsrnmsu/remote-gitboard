@@ -26,6 +26,7 @@ from rich.table import Table
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import client
+from gitboard import report as report_mod
 from gitboard.config import (
     FILENAME,
     ConfigError,
@@ -257,6 +258,11 @@ def migrate_comments(
     project: str | None = typer.Option(
         None, "--project", "-p", help="group/project. Defaults to the config."
     ),
+    close_source: bool = typer.Option(
+        False,
+        "--close-source",
+        help="Close the source issue afterwards, noting its successors.",
+    ),
 ):
     """Copy an issue's comments to its successor(s). Writes — needs api scope."""
 
@@ -264,12 +270,14 @@ def migrate_comments(
         path = _need(project, "project", "project")
         gl = client.gitlab(write=True)
         targets = [_parse_target(a, path) for a in dst]
+        wheres = []
         with client.write_errors():
             for dst_path, dst_iid in targets:
                 copied = apply_mod.migrate_comments(
                     gl, path, src, dst_iid, dst_path=dst_path
                 )
                 where = f"#{dst_iid}" if dst_path == path else f"{dst_path}#{dst_iid}"
+                wheres.append(where)
                 if copied:
                     err().print(
                         f"[added]{copied} comment(s) copied[/] #{src} -> {where}"
@@ -279,6 +287,11 @@ def migrate_comments(
                         f"[muted]nothing to copy to {where} — "
                         "no comments, or already migrated[/]"
                     )
+            if close_source:
+                if apply_mod.close_issue(gl, path, src, superseded_by=wheres):
+                    err().print(f"[added]closed #{src}[/]")
+                else:
+                    err().print(f"[muted]#{src} was already closed[/]")
 
     _run(go)
 
@@ -343,6 +356,81 @@ def pull(
         err().print(
             f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
         )
+
+    _run(go)
+
+
+@app.command()
+def report(
+    project: str | None = typer.Argument(None, help="group/project"),
+    days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
+    db: str = typer.Option("snapshots.jsonl", "--db", help="Snapshot log to read."),
+    repo: str | None = typer.Option(
+        None, "--repo", help="Git repo to correlate commits against."
+    ),
+):
+    """What moved on the board, from the snapshot log. Reads only local files."""
+
+    def go():
+        path = _need(project, "project", "project")
+        batches = report_mod.load(db, project=path, days=days)
+        if len(batches) < 2:
+            err().print(
+                f"[muted]need two snapshots of {path} within {days} day(s) in "
+                f"{db} — run `gitboard snapshot`, wait for movement, run it "
+                "again[/]"
+            )
+            return
+        changes = report_mod.diff(batches)
+        console = out()
+        console.print(f"[bold]{path}[/] — {len(batches)} snapshots over {days} day(s)")
+
+        table = Table(box=None)
+        table.add_column("", style="muted", width=8)
+        table.add_column("")
+        for before, after in changes["moved"]:
+            table.add_row(
+                f"#{after['iid']}",
+                f"{after['title']}  [muted]{'+'.join(before['columns'])} ->[/] "
+                f"{'+'.join(after['columns'])}",
+            )
+        for rec in changes["new"]:
+            table.add_row(
+                f"#{rec['iid']}",
+                f"{rec['title']}  [added]new[/] [muted]in "
+                f"{'+'.join(rec['columns'])}[/]",
+            )
+        for rec in changes["closed"]:
+            table.add_row(f"#{rec['iid']}", f"{rec['title']}  [muted]closed[/]")
+        if table.row_count:
+            console.print(table)
+        else:
+            console.print("[muted]no movement in the window[/]")
+        console.print(f"[muted]{len(changes['unchanged'])} issue(s) did not move[/]")
+
+        tally = report_mod.by_assignee(changes)
+        if tally:
+            authors = report_mod.commit_counts(repo, days) if repo else {}
+            who = Table(box=None)
+            who.add_column("assignee", style="bold")
+            for col in ("moved", "new", "closed"):
+                who.add_column(col, justify="right")
+            if repo:
+                who.add_column("commits", justify="right")
+            for name in sorted(tally, key=lambda n: -sum(tally[n].values())):
+                row = [name] + [
+                    str(tally[name][c] or "") for c in ("moved", "new", "closed")
+                ]
+                if repo:
+                    author = report_mod.match_author(name, authors)
+                    row.append(str(authors.pop(author)) if author else "?")
+                who.add_row(*row)
+            console.print(who)
+            for (a_name, email), count in sorted(authors.items()):
+                console.print(
+                    f"[muted]{count} commit(s) by {a_name} <{email}> matched "
+                    "no assignee[/]"
+                )
 
     _run(go)
 
@@ -457,11 +545,15 @@ def tui(
                         choices.append(entry)
             return choices
 
-        def read_iid(label):
-            """Digits typed into the prompt line, board still on screen."""
+        def read_iid(label, hint="enter confirms, esc cancels", extra=""):
+            """Digits typed into the prompt line, board still on screen.
+
+            A key from `extra` pressed on an empty buffer is returned as-is,
+            so callers can offer escapes like b-for-board without a mode.
+            """
             buf = ""
             while True:
-                st["prompt"] = f"{label} #{buf}_   (enter confirms, esc cancels)"
+                st["prompt"] = f"{label} #{buf}_   ({hint})"
                 draw()
                 k = _key()
                 if k in ("\r", "\n"):
@@ -470,6 +562,9 @@ def tui(
                 if k == "\x1b":
                     st["prompt"] = None
                     return None
+                if not buf and k.lower() in extra:
+                    st["prompt"] = None
+                    return k.lower()
                 if k in ("\x7f", "\b"):
                     buf = buf[:-1]
                 elif k.isdigit():
@@ -480,6 +575,32 @@ def tui(
                 for issue in issues:
                     if issue.iid == iid:
                         return issue.title
+            return None
+
+        def pick_board(title="which board?"):
+            """The numbered board overlay; (path, name) or None."""
+            choices = board_choices()[:9]
+            if len(choices) < 2:
+                st["status"] = Text("nothing else to switch to", "muted")
+                return None
+            # ponytail: single-digit pick caps at 9; past that, pass the
+            # project/board arguments instead
+            current = (st["path"], st["board"].name)
+            grid = Table(box=None, show_header=False, padding=(0, 1))
+            grid.add_column(style="bold reverse", width=3)
+            grid.add_column()
+            for i, (proj_path, name) in enumerate(choices, 1):
+                here = "  ← current" if (proj_path, name) == current else ""
+                grid.add_row(f" {i} ", f"{proj_path} — {name}{here}")
+            st["extra"] = Panel(
+                grid, title="boards", border_style="muted", padding=(0, 1)
+            )
+            st["prompt"] = f"{title}  (anything else cancels)"
+            draw()
+            st["prompt"], st["extra"] = None, None
+            pick = _key()
+            if pick.isdigit() and 1 <= int(pick) <= len(choices):
+                return choices[int(pick) - 1]
             return None
 
         def help_panel():
@@ -536,32 +657,13 @@ def tui(
                 elif k == "?":
                     st["extra"] = help_panel()
                 elif k == "b":
-                    choices = board_choices()[:9]
-                    if len(choices) < 2:
-                        st["status"] = Text("nothing else to switch to", "muted")
+                    picked = pick_board()
+                    if picked:
+                        st["path"], st["name"] = picked
+                        draw(busy=f"reading {st['path']}…")
+                        refetch()
                     else:
-                        # ponytail: single-digit pick caps at 9; past that,
-                        # pass the project/board arguments instead
-                        current = (st["path"], st["board"].name)
-                        grid = Table(box=None, show_header=False, padding=(0, 1))
-                        grid.add_column(style="bold reverse", width=3)
-                        grid.add_column()
-                        for i, (proj_path, name) in enumerate(choices, 1):
-                            here = "  ← current" if (proj_path, name) == current else ""
-                            grid.add_row(f" {i} ", f"{proj_path} — {name}{here}")
-                        st["extra"] = Panel(
-                            grid, title="boards", border_style="muted", padding=(0, 1)
-                        )
-                        st["prompt"] = "which board?  (anything else cancels)"
-                        draw()
-                        st["prompt"], st["extra"] = None, None
-                        pick = _key()
-                        if pick.isdigit() and 1 <= int(pick) <= len(choices):
-                            st["path"], st["name"] = choices[int(pick) - 1]
-                            draw(busy=f"reading {st['path']}…")
-                            refetch()
-                        else:
-                            st["status"] = Text("cancelled", "muted")
+                        st["status"] = Text("cancelled", "muted")
                 elif k == "e":
                     live.stop()
                     spec = st["spec"]
@@ -592,27 +694,60 @@ def tui(
                         source = f"#{m_src}"
                         if title:
                             source += f" “{title[:40]}”"
+                        target = st["path"]
                         while True:
-                            got = "" if not dsts else f" (have {len(dsts)}, enter runs)"
-                            nxt = read_iid(f"{source}  →  onto{got}")
+                            got = "" if not dsts else f" (have {len(dsts)})"
+                            label = f"{source}  →  onto"
+                            if target != st["path"]:
+                                label += f" {target}"
+                            nxt = read_iid(
+                                f"{label}{got}",
+                                hint="enter runs, b picks a project, esc cancels",
+                                extra="b",
+                            )
+                            if nxt == "b":
+                                picked = pick_board("destination project?")
+                                if picked:
+                                    target = picked[0]
+                                continue
                             if nxt is None:
                                 break
-                            dsts.append(nxt)
+                            dsts.append((target, nxt))
                     if not dsts:
                         st["status"] = Text("cancelled", "muted")
                     else:
                         total = 0
+                        wheres = []
                         gl = client.gitlab(write=True)
                         with client.write_errors():
-                            for m_dst in dsts:
-                                draw(busy=f"copying #{m_src} -> #{m_dst}…")
-                                total += apply_mod.migrate_comments(
-                                    gl, st["path"], m_src, m_dst
+                            for m_path, m_dst in dsts:
+                                ref = (
+                                    f"#{m_dst}"
+                                    if m_path == st["path"]
+                                    else f"{m_path}#{m_dst}"
                                 )
-                        where = ", ".join(f"#{d}" for d in dsts)
+                                wheres.append(ref)
+                                draw(busy=f"copying #{m_src} -> {ref}…")
+                                total += apply_mod.migrate_comments(
+                                    gl, st["path"], m_src, m_dst, dst_path=m_path
+                                )
+                        where = ", ".join(wheres)
                         st["status"] = Text(
                             f"{total} comment(s) copied #{m_src} -> {where}", "added"
                         )
+                        st["prompt"] = f"close #{m_src} as superseded?  y / n"
+                        draw()
+                        st["prompt"] = None
+                        if _key().lower() == "y":
+                            with client.write_errors():
+                                apply_mod.close_issue(
+                                    gl, st["path"], m_src, superseded_by=wheres
+                                )
+                            draw(busy="closing…")
+                            refetch()
+                            st["status"] = Text(
+                                f"{total} comment(s) copied; #{m_src} closed", "added"
+                            )
                 elif k in ("p", "a") and st["spec"]:
                     parsed = apply_mod.load(st["spec"])
                     gl = client.gitlab(write=(k == "a"))

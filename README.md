@@ -142,6 +142,7 @@ gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
 gitboard migrate-comments 12 34 35       # copy #12's comments onto #34 and #35
 gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
 gitboard snapshot group/project          # append board state to snapshots.jsonl
+gitboard report group/project --repo .   # what moved; correlate with commits
 gitboard config                          # what URL and tokens resolved
 gitboard --help
 ```
@@ -176,9 +177,17 @@ header. Idempotent: already-copied comments are skipped. System notes (label
 churn) are not copied.
 
 `snapshot` appends one JSON line per open issue (timestamp, columns,
-assignee, due date) to `snapshots.jsonl`. Run it on a schedule and the file
-becomes a progress log you can query with jq — who moved what when — and
-joined against `git log`, who ships what they pick up.
+assignee, due date) to `snapshots.jsonl`; `make cron` prints a crontab line
+that runs it every 30 minutes. Two snapshots in, `report` diffs the window:
+issues that moved column, appeared, or closed, what sat still, and a
+per-assignee tally. `--repo path` adds a commits column from `git log` over
+the same window, matching GitLab usernames to git authors by name or email
+local part — who ships what they pick up, and whose board activity has no
+commits behind it.
+
+`migrate-comments --close-source` closes the source issue after copying,
+leaving a "superseded by …" note; the TUI's `m` offers the same as a y/n,
+and `b` inside its destination prompt sends copies to another project.
 
 ## Defining a board in YAML
 
