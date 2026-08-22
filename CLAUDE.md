@@ -64,7 +64,9 @@ out to `.venv/bin/python -m gitboard.cli`.
   server exposes board structure.** A board list is bound to a label and
   membership is "has that label", so the mapping is reassembled from
   `board.lists` + `project.issues`.
-- **`apply.py`** — the only writer (`apply` and `migrate_comments`). Uses `Config.token(write=True)`: the
+- **`apply.py`** — the only writer (`apply` and `migrate_comments`), and the
+  spec schema's home: `spec_from_board`/`dump` are `pull`'s read direction,
+  built so pull-then-plan is always empty. Uses `Config.token(write=True)`: the
   separate `GITLAB_WRITE_TOKEN` / `--write-token` / `gitlab-write-token`
   keychain slot, falling back to the read token when unset (a single `api`
   token is a valid setup). Two slots exist so a `read_api` token can be the
@@ -85,9 +87,11 @@ The API's order is not stable, and a truncated column has to show what the
 reader would have gone looking for. `summarise` de-duplicates by iid — a
 two-column issue is one issue, and summing per-column counts double-counts it.
 `show` truncates to 5 per column by default; `--all` / `-n` override.
-`tui` is a keypress loop over the same rendering (reload / snapshot / plan /
-apply-with-y/n / quit); raw input comes from `_key()` (termios, dies without
-a tty).
+`tui` is a keypress loop over the same rendering: reload / snapshot / edit
+(`$EDITOR` on the spec, pulled via `spec_from_board` if missing) / plan /
+apply-with-y/n / migrate-comments / help. Raw input comes from `_key()`
+(termios, dies without a tty); prompts and the editor run with the Live
+screen stopped.
 `snapshot` appends `snapshot_records` (one JSON line per distinct issue) to a
 JSONL file — the progress-over-time log.
 

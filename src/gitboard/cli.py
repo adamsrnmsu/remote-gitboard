@@ -288,6 +288,42 @@ def _write_snapshot(proj, board, out_path="snapshots.jsonl"):
     return len(records)
 
 
+def _pull_spec(proj, board, columns, out_file):
+    """Write the live board as YAML. Refuses to clobber an existing file."""
+    if Path(out_file).exists():
+        raise ConfigError(
+            f"{out_file} already exists — edit it, or pass a different --out"
+        )
+    Path(out_file).parent.mkdir(parents=True, exist_ok=True)
+    spec = apply_mod.spec_from_board(proj, board, columns)
+    Path(out_file).write_text(apply_mod.dump(spec))
+    return out_file
+
+
+@app.command()
+def pull(
+    project: str | None = typer.Argument(None, help="group/project"),
+    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    out: str | None = typer.Option(
+        None, "--out", "-o", help="Where to write. Default: boards/<project>.yaml"
+    ),
+):
+    """Save the live board as YAML — the file plan/apply read. Reads only."""
+
+    def go():
+        path = _need(project, "project", "project")
+        with err().status(f"reading {path}…"):
+            proj, board = board_mod.fetch(path, board_name or get_config().board)
+            columns = board_mod.board_columns(proj, board)
+        target = out or f"boards/{path.rsplit('/', 1)[-1]}.yaml"
+        _pull_spec(proj, board, columns, target)
+        err().print(
+            f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
+        )
+
+    _run(go)
+
+
 def _key():
     """One raw keypress. The whole input layer of the TUI."""
     import termios
@@ -312,7 +348,9 @@ def tui(
     def go():
         if not sys.stdin.isatty():
             raise ConfigError("tui needs a terminal — use `show` in pipes")
+        import shlex
         import signal
+        import subprocess
 
         from rich.console import Group
         from rich.live import Live
@@ -332,10 +370,10 @@ def tui(
         def keybar():
             if st["prompt"]:
                 return Text(f"  {st['prompt']}", "bold yellow")
-            pairs = [("r", "reload"), ("s", "snapshot")]
+            pairs = [("r", "reload"), ("s", "snapshot"), ("e", "edit")]
             if st["spec"]:
                 pairs += [("p", "plan"), ("a", "apply")]
-            pairs += [("q", "quit")]
+            pairs += [("m", "migrate"), ("?", "help"), ("q", "quit")]
             bar = Text("  ")
             for key, label in pairs:
                 bar.append(f" {key} ", "bold reverse")
@@ -358,9 +396,9 @@ def tui(
                 Panel(
                     body,
                     subtitle=Text(
-                        f"defined by {spec} — p compares, a applies"
+                        f"defined by {spec} — e edits, a applies"
                         if spec
-                        else "no boards/*.yaml defines this board",
+                        else "no YAML yet — e pulls the board into one",
                         "muted",
                     ),
                     subtitle_align="left",
@@ -374,6 +412,26 @@ def tui(
                 parts.append(Text("  ", end="") + st["status"])
             parts.append(keybar())
             return Group(*parts)
+
+        def help_panel():
+            lines = [
+                ("", "The YAML in boards/ is the source of truth; the board is"),
+                ("", "what GitLab currently shows. Editing happens in the YAML."),
+                ("r", "refetch the board"),
+                ("s", "append every issue to snapshots.jsonl, the progress log"),
+                ("e", "edit the YAML in $EDITOR (pulled from the board if there"),
+                ("", "is none yet); the diff is shown when you come back"),
+                ("p", "diff the YAML against the board — never writes"),
+                ("a", "write the YAML to the board — additive only, y/n first"),
+                ("m", "copy a finished issue's comments onto its successor"),
+                ("q", "quit"),
+            ]
+            grid = Table(box=None, show_header=False, padding=(0, 1))
+            grid.add_column(style="bold reverse", width=3, justify="center")
+            grid.add_column()
+            for key, text in lines:
+                grid.add_row(f" {key} " if key else "", text)
+            return Panel(grid, title="keys", border_style="muted", padding=(0, 1))
 
         with Live(console=console, screen=True, auto_refresh=False) as live:
 
@@ -403,6 +461,53 @@ def tui(
                     st["status"] = Text(
                         f"{n} issue(s) appended to snapshots.jsonl", "added"
                     )
+                elif k == "?":
+                    st["extra"] = help_panel()
+                elif k == "e":
+                    live.stop()
+                    spec = st["spec"]
+                    if not spec:
+                        spec = f"boards/{path.rsplit('/', 1)[-1]}.yaml"
+                        _pull_spec(st["proj"], st["board"], st["columns"], spec)
+                        console.print(f"[added]pulled the board into {spec}[/]")
+                    editor = shlex.split(
+                        os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+                    )
+                    subprocess.call([*editor, spec])
+                    live.start(refresh=True)
+                    st["spec"] = spec
+                    parsed = apply_mod.load(spec)
+                    draw(busy="comparing…")
+                    pending = apply_mod.plan(client.gitlab(), parsed)
+                    if pending:
+                        st["extra"] = _changes_table(pending, f"{spec} — a applies")
+                    else:
+                        st["status"] = Text(
+                            "no changes — board already matches", "muted"
+                        )
+                elif k == "m":
+                    live.stop()
+                    console.print(
+                        "[muted]copy comments from a finished issue onto its "
+                        "successor (empty to cancel)[/]"
+                    )
+                    try:
+                        m_src = int(typer.prompt("from #", err=True))
+                        m_dst = int(typer.prompt("to #", err=True))
+                    except (ValueError, typer.Abort):
+                        m_src = None
+                    live.start(refresh=True)
+                    if m_src is None:
+                        st["status"] = Text("cancelled", "muted")
+                    else:
+                        draw(busy=f"copying #{m_src} -> #{m_dst}…")
+                        with client.write_errors():
+                            n = apply_mod.migrate_comments(
+                                client.gitlab(write=True), path, m_src, m_dst
+                            )
+                        st["status"] = Text(
+                            f"{n} comment(s) copied #{m_src} -> #{m_dst}", "added"
+                        )
                 elif k in ("p", "a") and st["spec"]:
                     parsed = apply_mod.load(st["spec"])
                     gl = client.gitlab(write=(k == "a"))

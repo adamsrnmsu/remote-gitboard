@@ -40,6 +40,49 @@ def load(path):
     return spec
 
 
+def spec_from_board(project, board, columns):
+    """The live board as an apply()-shaped spec — the pull direction.
+
+    Built so the roundtrip settles: plan() of the result against the same
+    board is empty. Backlog is synthesised from unlabelled issues, so it is
+    not a column here; empty fields are dropped to keep the YAML editable.
+    """
+    labels = {x.name: x for x in project.labels.list(all=True)}
+    seen = {}
+    for _, issues in columns:
+        for issue in issues:
+            seen[issue.iid] = issue
+
+    spec_issues = []
+    for issue in sorted(seen.values(), key=lambda i: i.iid):
+        entry = {"title": issue.title}
+        if issue.labels:
+            entry["labels"] = sorted(issue.labels)
+        if body := norm_text(issue.description):
+            entry["description"] = body
+        if issue.due_date:
+            entry["due_date"] = issue.due_date
+        if issue.assignee:
+            entry["assignee"] = issue.assignee["username"]
+        spec_issues.append(entry)
+
+    return {
+        "project": project.path_with_namespace,
+        "board": board.name,
+        "columns": [
+            {"name": name, "color": labels[name].color}
+            for name, _ in columns
+            if name != "Backlog" and name in labels
+        ],
+        "issues": spec_issues,
+    }
+
+
+def dump(spec):
+    """Spec -> YAML text, keys in schema order."""
+    return yaml.safe_dump(spec, sort_keys=False, allow_unicode=True, width=79)
+
+
 def norm_text(s):
     """GitLab strips trailing whitespace and normalises CRLF; YAML's `|` keeps
     a trailing newline. Without this every apply reports a phantom change."""

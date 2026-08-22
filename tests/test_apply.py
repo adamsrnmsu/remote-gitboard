@@ -212,3 +212,46 @@ def test_migration_is_idempotent(monkeypatch):
     assert apply.migrate_comments(None, "grp/proj", 1, 2) == 1
     assert apply.migrate_comments(None, "grp/proj", 1, 2) == 0
     assert len(issues[2].notes.notes) == 1
+
+
+# --- spec_from_board -------------------------------------------------------
+
+
+def board_fixture():
+    issue = FakeIssue(
+        "one", labels=["Doing"], description="body\n", due_date="2026-09-01"
+    )
+    issue.iid, issue.assignee = 7, None
+    project = FakeProject(labels=["Doing"], boards=["Dev Board"], issues=[issue])
+    project.labels.list()[0].color = "#428bca"
+    project.path_with_namespace = "grp/proj"
+    board = types.SimpleNamespace(name="Dev Board")
+    columns = [("Backlog", []), ("Doing", [issue])]
+    return project, board, columns
+
+
+def test_pulled_spec_plans_clean_against_its_own_board(monkeypatch):
+    """pull then plan must be a no-op, or pull is lying about the board."""
+    project, board, columns = board_fixture()
+    spec = apply.spec_from_board(project, board, columns)
+    spec.setdefault("issues", [])
+    use_project(monkeypatch, project)
+    assert apply.plan(None, spec) == []
+
+
+def test_pulled_spec_drops_empty_fields():
+    project, board, columns = board_fixture()
+    spec = apply.spec_from_board(project, board, columns)
+    assert spec["columns"] == [{"name": "Doing", "color": "#428bca"}]
+    assert "assignee" not in spec["issues"][0]
+    assert spec["issues"][0]["description"] == "body"
+
+
+def test_dump_load_roundtrip(tmp_path):
+    project, board, columns = board_fixture()
+    text = apply.dump(apply.spec_from_board(project, board, columns))
+    f = tmp_path / "b.yaml"
+    f.write_text(text)
+    loaded = apply.load(str(f))
+    assert loaded["issues"][0]["title"] == "one"
+    assert loaded["issues"][0]["due_date"] == "2026-09-01"

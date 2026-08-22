@@ -136,6 +136,7 @@ gitboard show --all                      # do not truncate long columns
 gitboard show -n 20                      # 20 issues per column
 gitboard show --markdown                 # stable output, for pipes and the AI
 gitboard tui group/project               # interactive: reload, snapshot, apply
+gitboard pull group/project              # save the board as boards/<name>.yaml
 gitboard plan boards/team.yaml           # what would change
 gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
 gitboard migrate-comments 12 34          # copy #12's comments onto #34 (writes)
@@ -149,10 +150,14 @@ each, so a 200-issue board still fits on a screen and the truncation never
 hides the part you were looking for. The footer counts issues, unassigned and
 overdue, and names the YAML that defines the board.
 
-`tui` is the loop version of `show`: the same tree, redrawn on `r`, with
-`s` appending a snapshot, and — when a `boards/*.yaml` defines the board —
-`p` showing spec drift and `a` applying it after a y/n on the change table.
-`q` leaves.
+`pull` is `apply` in reverse: it writes the live board as a YAML spec
+(refusing to clobber an existing file), so a board born in the web UI
+becomes editable text. `pull` then `plan` is always a no-op.
+
+`tui` is the interactive loop: `r` reload, `s` snapshot, `e` edit the YAML
+in `$EDITOR` (pulling the board into one first if none exists) with the diff
+shown on return, `p` plan, `a` apply after a y/n on the change table, `m`
+migrate comments between issues, `?` help, `q` quit.
 
 `--url`, `--read-token` and `--write-token` override the environment for one
 invocation; `-v` turns on debug logging.

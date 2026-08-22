@@ -81,6 +81,9 @@ tui: install  ## the board, interactively: make tui PROJECT=group/project
 snapshot: install  ## append board state to snapshots.jsonl: make snapshot PROJECT=group/project
 	@$(GITBOARD) snapshot $(PROJECT)
 
+pull: install  ## save the board as YAML: make pull PROJECT=group/project
+	@$(GITBOARD) pull $(PROJECT)
+
 plan: install  ## preview YAML changes: make plan SPEC=boards/test.yaml
 	@$(GITBOARD) plan $(SPEC)
 
