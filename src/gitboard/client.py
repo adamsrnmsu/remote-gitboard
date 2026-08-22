@@ -67,3 +67,13 @@ def get_project(gl, path):
         ) from e
     except OSError as e:  # requests' ConnectionError/Timeout subclass this
         raise GitlabProblem(f"cannot reach {url}: {e.__class__.__name__}") from e
+
+
+def get_issue(project, iid):
+    """Fetch an issue by iid, or say which one is missing."""
+    import gitlab as gitlab_pkg
+
+    try:
+        return project.issues.get(iid)
+    except gitlab_pkg.exceptions.GitlabGetError as e:
+        raise GitlabProblem(f"no issue #{iid} in {project.path_with_namespace}") from e

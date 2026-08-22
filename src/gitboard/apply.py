@@ -199,3 +199,32 @@ def plan(gl, spec):
         if changed := [k for k, v in want.items() if now[k] != v]:
             pending.append(("changed", "issue", f"{title}: {', '.join(changed)}"))
     return pending
+
+
+def migrate_comments(gl, path, src_iid, dst_iid):
+    """Copy one issue's comments onto another, oldest first.
+
+    The API cannot post as someone else, so authorship survives as an
+    attribution header instead. Idempotent the same way apply is: a comment
+    whose migrated body already sits on the destination is skipped, so
+    re-running copies nothing. System notes (relabels, milestone churn) are
+    activity, not discussion, and are not copied.
+    """
+    project = client.get_project(gl, path)
+    src = client.get_issue(project, src_iid)
+    dst = client.get_issue(project, dst_iid)
+
+    have = {n.body for n in dst.notes.list(all=True)}
+    copied = 0
+    for note in sorted(src.notes.list(all=True), key=lambda n: n.created_at):
+        if note.system:
+            continue
+        body = (
+            f"*from #{src_iid}, by @{note.author['username']} on "
+            f"{note.created_at[:10]}:*\n\n{note.body}"
+        )
+        if body in have:
+            continue
+        dst.notes.create({"body": body})
+        copied += 1
+    return copied

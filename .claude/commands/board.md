@@ -1,7 +1,7 @@
 ---
 description: Read a GitLab board and report progress, follow-ups, and open questions. Suggests only — never writes.
 argument-hint: <group/project> [board name]
-allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*)
 ---
 
 Run `PYTHONPATH=src .venv/bin/python -m gitboard.cli show $ARGUMENTS --markdown`
@@ -36,7 +36,9 @@ Concrete label changes as a copyable list, each with its reason:
 `#iid: Doing -> Blocked (waiting on #other)`
 
 If the board is defined by a YAML file in `boards/`, give the edit as a diff
-to that file instead — that is how the user applies it.
+to that file instead — that is how the user applies it. You may run
+`PYTHONPATH=src .venv/bin/python -m gitboard.cli plan <spec>` to check the
+current drift between a spec and the live board; `plan` never writes.
 
 Ground every claim in an issue number from the output. If the board is empty
 or the script errors, say so and stop — do not infer a board from the repo.

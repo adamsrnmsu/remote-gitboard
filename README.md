@@ -137,6 +137,8 @@ gitboard show -n 20                      # 20 issues per column
 gitboard show --markdown                 # stable output, for pipes and the AI
 gitboard plan boards/team.yaml           # what would change
 gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
+gitboard migrate-comments 12 34          # copy #12's comments onto #34 (writes)
+gitboard snapshot group/project          # append board state to snapshots.jsonl
 gitboard config                          # what URL and tokens resolved
 gitboard --help
 ```
@@ -151,6 +153,17 @@ invocation; `-v` turns on debug logging.
 
 **Streams:** the board goes to **stdout**, logs and progress to **stderr**, so
 `gitboard show --markdown | less` stays clean.
+
+`migrate-comments` copies discussion from a superseded issue onto its
+replacement, oldest first, each prefixed `*from #12, by @alice on
+2026-08-01:*` — the API cannot post as someone else, so attribution is a
+header. Idempotent: already-copied comments are skipped. System notes (label
+churn) are not copied.
+
+`snapshot` appends one JSON line per open issue (timestamp, columns,
+assignee, due date) to `snapshots.jsonl`. Run it on a schedule and the file
+becomes a progress log you can query — who moved what when, and joined
+against `git log`, who ships what they pick up.
 
 ## Defining a board in YAML
 
@@ -210,7 +223,8 @@ which made every apply report a phantom description change.
 
 Four sections: Progress, Needs follow-up, Questions for you, Suggested moves.
 Suggestions are copyable, never applied — the command is restricted to
-`show`, so it cannot reach `apply` even though `apply` exists.
+`show` and `plan` (both read-only), so it cannot reach `apply` even though
+`apply` exists.
 
 The read-only guarantee is the **token scope**, not the prompt. Give it the
 `read_api` token and it cannot write regardless of what it is asked.

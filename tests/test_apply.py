@@ -149,3 +149,66 @@ def test_load_defaults_columns_and_issues_to_empty(tmp_path):
     f.write_text("project: grp/proj\nboard: B\n")
     spec = apply.load(str(f))
     assert spec["columns"] == [] and spec["issues"] == []
+
+
+# --- migrate_comments ------------------------------------------------------
+
+
+def fake_note(body, author="alice", created="2026-08-01T10:00:00Z", system=False):
+    return types.SimpleNamespace(
+        body=body, system=system, author={"username": author}, created_at=created
+    )
+
+
+class FakeNotes:
+    def __init__(self, notes=()):
+        self.notes = list(notes)
+
+    def list(self, **_):
+        return list(self.notes)
+
+    def create(self, payload):
+        self.notes.append(fake_note(payload["body"], author="token-owner"))
+
+
+def migration_project(monkeypatch, src_notes, dst_notes=()):
+    issues = {
+        1: types.SimpleNamespace(iid=1, notes=FakeNotes(src_notes)),
+        2: types.SimpleNamespace(iid=2, notes=FakeNotes(dst_notes)),
+    }
+    project = types.SimpleNamespace(
+        path_with_namespace="grp/proj",
+        issues=types.SimpleNamespace(get=lambda iid: issues[iid]),
+    )
+    use_project(monkeypatch, project)
+    return issues
+
+
+def test_comments_are_copied_oldest_first_with_attribution(monkeypatch):
+    issues = migration_project(
+        monkeypatch,
+        [
+            fake_note("second", author="bob", created="2026-08-02T00:00:00Z"),
+            fake_note("first", author="alice", created="2026-08-01T00:00:00Z"),
+        ],
+    )
+    assert apply.migrate_comments(None, "grp/proj", 1, 2) == 2
+    bodies = [n.body for n in issues[2].notes.notes]
+    assert bodies[0] == "*from #1, by @alice on 2026-08-01:*\n\nfirst"
+    assert bodies[1].startswith("*from #1, by @bob on 2026-08-02:*")
+
+
+def test_system_notes_are_not_comments(monkeypatch):
+    issues = migration_project(
+        monkeypatch,
+        [fake_note("added label ~Doing", system=True), fake_note("real comment")],
+    )
+    assert apply.migrate_comments(None, "grp/proj", 1, 2) == 1
+    assert len(issues[2].notes.notes) == 1
+
+
+def test_migration_is_idempotent(monkeypatch):
+    issues = migration_project(monkeypatch, [fake_note("hello")])
+    assert apply.migrate_comments(None, "grp/proj", 1, 2) == 1
+    assert apply.migrate_comments(None, "grp/proj", 1, 2) == 0
+    assert len(issues[2].notes.notes) == 1

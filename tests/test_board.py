@@ -177,3 +177,29 @@ def test_summarise_counts_unassigned_and_overdue():
     ]
     totals = board.summarise(columns(issues, []))
     assert (totals["issues"], totals["unassigned"], totals["overdue"]) == (3, 2, 1)
+
+
+# --- snapshot_records ------------------------------------------------------
+
+
+def test_snapshot_is_one_record_per_distinct_issue():
+    """A two-column issue is one record with both columns, not two lines."""
+    records = board.snapshot_records(
+        FakeProject([FakeIssue(1, ["Doing", "Blocked"])]),
+        FakeBoard([FakeList("Doing", 1), FakeList("Blocked", 2)]),
+        ts="2026-08-21T00:00:00+00:00",
+    )
+    assert len(records) == 1
+    assert records[0]["columns"] == ["Doing", "Blocked"]
+    assert records[0]["iid"] == 1
+    assert records[0]["ts"] == "2026-08-21T00:00:00+00:00"
+
+
+def test_snapshot_records_assignee_and_backlog():
+    records = board.snapshot_records(
+        FakeProject([FakeIssue(1, [], assignee={"username": "alice"})]),
+        FakeBoard([FakeList("Doing", 1)]),
+        ts="t",
+    )
+    assert records[0]["assignee"] == "alice"
+    assert records[0]["columns"] == ["Backlog"]

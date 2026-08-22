@@ -14,7 +14,9 @@ The CLI. Everything else in the package is a module it calls:
     gitboard apply boards/test.yaml
 """
 
+import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -230,6 +232,52 @@ def apply(
             f"[added]{len(changes)} change(s) written[/] — "
             f"gitboard show {parsed['project']}"
         )
+
+    _run(go)
+
+
+@app.command("migrate-comments")
+def migrate_comments(
+    src: int = typer.Argument(..., help="Issue iid to copy comments from."),
+    dst: int = typer.Argument(..., help="Issue iid to copy them onto."),
+    project: str | None = typer.Option(
+        None, "--project", "-p", help="group/project. Defaults to the config."
+    ),
+):
+    """Copy an issue's comments to its successor. Writes — needs api scope."""
+
+    def go():
+        path = _need(project, "project", "project")
+        gl = client.gitlab(write=True)
+        with client.write_errors():
+            copied = apply_mod.migrate_comments(gl, path, src, dst)
+        if copied:
+            err().print(f"[added]{copied} comment(s) copied[/] #{src} -> #{dst}")
+        else:
+            err().print("[muted]nothing to copy — no comments, or already migrated[/]")
+
+    _run(go)
+
+
+@app.command()
+def snapshot(
+    project: str | None = typer.Argument(None, help="group/project"),
+    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    out_path: str = typer.Option(
+        "snapshots.jsonl", "--out", "-o", help="JSONL file to append to."
+    ),
+):
+    """Append the board's current state to a JSONL log, one line per issue."""
+
+    def go():
+        path = _need(project, "project", "project")
+        proj, board = board_mod.fetch(path, board_name or get_config().board)
+        ts = datetime.now(UTC).isoformat(timespec="seconds")
+        records = board_mod.snapshot_records(proj, board, ts)
+        with open(out_path, "a") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+        err().print(f"[added]{len(records)} issue(s)[/] appended to {out_path}")
 
     _run(go)
 

@@ -64,7 +64,7 @@ out to `.venv/bin/python -m gitboard.cli`.
   server exposes board structure.** A board list is bound to a label and
   membership is "has that label", so the mapping is reassembled from
   `board.lists` + `project.issues`.
-- **`apply.py`** — the only writer. Uses `Config.token(write=True)`: the
+- **`apply.py`** — the only writer (`apply` and `migrate_comments`). Uses `Config.token(write=True)`: the
   separate `GITLAB_WRITE_TOKEN` / `--write-token` / `gitlab-write-token`
   keychain slot, falling back to the read token when unset (a single `api`
   token is a valid setup). Two slots exist so a `read_api` token can be the
@@ -85,6 +85,8 @@ The API's order is not stable, and a truncated column has to show what the
 reader would have gone looking for. `summarise` de-duplicates by iid — a
 two-column issue is one issue, and summing per-column counts double-counts it.
 `show` truncates to 5 per column by default; `--all` / `-n` override.
+`snapshot` appends `snapshot_records` (one JSON line per distinct issue) to a
+JSONL file — the progress-over-time log.
 
 Deliberate, not bugs: an issue with labels from two lists appears in both
 columns (the web UI does the same, no tiebreak invented); `Backlog` is
@@ -120,8 +122,8 @@ edits back to the YAML.
 
 The read-only guarantee for the AI pass is the **token scope** (`read_api`),
 not the prompt. `.claude/commands/board.md` restates it and restricts tools to
-`Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*)` — note `show`,
-so it cannot reach `apply`. If you give the AI write capability, the scope and
+`show` and `plan` (both read-only), so it cannot reach `apply` or
+`migrate-comments`. If you give the AI write capability, the scope and
 the command must change together; README "Letting the AI write" has the steps.
 
 Auth (read): `--read-token`, else `GITLAB_READ_TOKEN`, else keychain

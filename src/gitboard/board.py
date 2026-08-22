@@ -17,9 +17,7 @@ from gitboard.log import out
 
 def is_overdue(issue, today=None):
     """ISO dates compare correctly as strings, so no parsing is needed."""
-    return bool(issue.due_date) and issue.due_date < (
-        today or date.today().isoformat()
-    )
+    return bool(issue.due_date) and issue.due_date < (today or date.today().isoformat())
 
 
 def board_columns(project, board):
@@ -123,6 +121,32 @@ def summarise(columns):
         "unassigned": sum(1 for i in issues if not i.assignee),
         "overdue": sum(1 for i in issues if is_overdue(i)),
     }
+
+
+def snapshot_records(project, board, ts):
+    """One dict per distinct open issue, ready for a JSONL progress log.
+
+    Distinct by iid for the same reason summarise is; the columns list keeps
+    the two-column case visible instead of inventing a winner.
+    """
+    records = {}
+    for name, issues in board_columns(project, board):
+        for i in issues:
+            rec = records.setdefault(
+                i.iid,
+                {
+                    "ts": ts,
+                    "project": project.path_with_namespace,
+                    "board": board.name,
+                    "iid": i.iid,
+                    "title": i.title,
+                    "assignee": i.assignee["username"] if i.assignee else None,
+                    "due_date": i.due_date,
+                    "columns": [],
+                },
+            )
+            rec["columns"].append(name)
+    return list(records.values())
 
 
 def print_rich(project, board, spec_path=None, limit=5):
