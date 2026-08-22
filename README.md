@@ -285,6 +285,11 @@ path that does not exist, is an error rather than a silent fallback.
 
 ## Local test instance
 
+`scripts/bulk_demo.py` fills the instance with five busy boards (30 issues
+each by default, `--issues` to change) plus commented issues in
+`test/payments` for trying `migrate-comments`. Deterministic per `--seed`,
+idempotent on re-run.
+
 A disposable GitLab CE in Docker, so you can develop against a real board
 without touching work. No Dockerfile — GitLab ships an official image.
 
