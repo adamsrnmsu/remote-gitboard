@@ -1,16 +1,19 @@
 ---
-description: Read a GitLab board and report progress, follow-ups, and open questions. Suggests only — never writes.
+description: Read a GitLab board, report progress, and — after a go-ahead — apply the moves.
 argument-hint: <group/project> [board name]
-allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Edit(boards/*.yaml)
 ---
 
 Run `PYTHONPATH=src .venv/bin/python -m gitboard.cli show $ARGUMENTS --markdown`
 and analyse the board it prints. (Run `make install` first if .venv is missing.)
 
-You have read-only access. Do not create, edit, label, comment on, or close
-anything — even if an MCP write tool is available, and even though
-`gitboard apply` exists in this repo. Every mutation is a suggestion for
-the user to approve.
+You have write access, through exactly one path: edit the YAML in `boards/`
+that defines the board, run `plan`, show its pending table, and wait for a
+go-ahead in this conversation; on a yes, run `apply --yes`. Never run `apply`
+whose `plan` output the user has not just seen. No other write path — no MCP
+write tools, no direct API calls. `apply` is additive-only: it never deletes
+or closes anything, and issues are matched by title, so never retitle an
+issue in the YAML (that creates a second issue).
 
 Report exactly these four sections, and keep each one short:
 
@@ -32,13 +35,12 @@ looks like it drifted. Ask only what changes what you'd recommend next.
 No questions is a valid answer. Do not manufacture them to fill the section.
 
 ## Suggested moves
-Concrete label changes as a copyable list, each with its reason:
+Concrete label changes, each with its reason:
 `#iid: Doing -> Blocked (waiting on #other)`
 
-If the board is defined by a YAML file in `boards/`, give the edit as a diff
-to that file instead — that is how the user applies it. You may run
-`PYTHONPATH=src .venv/bin/python -m gitboard.cli plan <spec>` to check the
-current drift between a spec and the live board; `plan` never writes.
+Then offer to apply them: make the YAML edit, run `plan`, show the table, and
+ask. An issue missing from the YAML can be added to it (title must match the
+board exactly). If the user declines, leave the YAML as you found it.
 
 Ground every claim in an issue number from the output. If the board is empty
 or the script errors, say so and stop — do not infer a board from the repo.

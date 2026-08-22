@@ -85,8 +85,9 @@ The API's order is not stable, and a truncated column has to show what the
 reader would have gone looking for. `summarise` de-duplicates by iid — a
 two-column issue is one issue, and summing per-column counts double-counts it.
 `show` truncates to 5 per column by default; `--all` / `-n` override.
-`snapshot` appends `snapshot_records` (one JSON line per distinct issue) to a
-JSONL file — the progress-over-time log.
+`snapshot` records `snapshot_records` into a SQLite log (`history.py`);
+only rows that changed since an issue's last row are written, so a scheduled
+run with no movement writes nothing.
 
 Deliberate, not bugs: an issue with labels from two lists appears in both
 columns (the web UI does the same, no tiebreak invented); `Backlog` is
@@ -118,13 +119,16 @@ YAML leaves it on the board.
 `boards/demo.yaml` applied through the CLI. Re-running it reverts manual board
 edits back to the YAML.
 
-## Read-only
+## The AI pass writes now
 
-The read-only guarantee for the AI pass is the **token scope** (`read_api`),
-not the prompt. `.claude/commands/board.md` restates it and restricts tools to
-`show` and `plan` (both read-only), so it cannot reach `apply` or
-`migrate-comments`. If you give the AI write capability, the scope and
-the command must change together; README "Letting the AI write" has the steps.
+`.claude/commands/board.md` may run `show`, `plan`, `apply`, and edit
+`boards/*.yaml`. The contract is the flow, stated in the command: YAML edit ->
+`plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
+additive-only (nothing deleted or closed), which bounds the blast radius.
+The write token is `GITLAB_WRITE_TOKEN` in `.env`; pulling it (or
+re-restricting `allowed-tools` to `show`/`plan`) revokes write access —
+change both to go back to the old read-only guarantee.
+`snapshot` writes only the local SQLite log, never GitLab.
 
 Auth (read): `--read-token`, else `GITLAB_READ_TOKEN`, else keychain
 `gitlab-read-token`. `GITLAB_TOKEN` and the `gitlab-token` keychain item are
