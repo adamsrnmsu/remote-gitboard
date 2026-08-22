@@ -434,6 +434,31 @@ def tui(
                         choices.append(entry)
             return choices
 
+        def read_iid(label):
+            """Digits typed into the prompt line, board still on screen."""
+            buf = ""
+            while True:
+                st["prompt"] = f"{label} #{buf}_   (enter confirms, esc cancels)"
+                draw()
+                k = _key()
+                if k in ("\r", "\n"):
+                    st["prompt"] = None
+                    return int(buf) if buf else None
+                if k == "\x1b":
+                    st["prompt"] = None
+                    return None
+                if k in ("\x7f", "\b"):
+                    buf = buf[:-1]
+                elif k.isdigit():
+                    buf += k
+
+        def issue_title(iid):
+            for _, issues in st["columns"]:
+                for issue in issues:
+                    if issue.iid == iid:
+                        return issue.title
+            return None
+
         def help_panel():
             lines = [
                 ("", "The YAML in boards/ is the source of truth; the board is"),
@@ -536,18 +561,15 @@ def tui(
                             "no changes — board already matches", "muted"
                         )
                 elif k == "m":
-                    live.stop()
-                    console.print(
-                        "[muted]copy comments from a finished issue onto its "
-                        "successor (empty to cancel)[/]"
-                    )
-                    try:
-                        m_src = int(typer.prompt("from #", err=True))
-                        m_dst = int(typer.prompt("to #", err=True))
-                    except (ValueError, typer.Abort):
-                        m_src = None
-                    live.start(refresh=True)
-                    if m_src is None:
+                    m_src = read_iid("copy comments from")
+                    m_dst = None
+                    if m_src is not None:
+                        title = issue_title(m_src)
+                        source = f"#{m_src}"
+                        if title:
+                            source += f" “{title[:40]}”"
+                        m_dst = read_iid(f"{source}  →  onto")
+                    if m_src is None or m_dst is None:
                         st["status"] = Text("cancelled", "muted")
                     else:
                         draw(busy=f"copying #{m_src} -> #{m_dst}…")
