@@ -357,19 +357,19 @@ def tui(
         from rich.panel import Panel
         from rich.text import Text
 
-        path = _need(project, "project", "project")
         console = err()
         st = {
             "status": None,
             "extra": None,
             "prompt": None,
+            "path": _need(project, "project", "project"),
             "name": board_name or get_config().board,
         }
 
         def refetch():
-            st["proj"], st["board"] = board_mod.fetch(path, st["name"])
+            st["proj"], st["board"] = board_mod.fetch(st["path"], st["name"])
             st["columns"] = board_mod.board_columns(st["proj"], st["board"])
-            st["spec"] = find_spec(path)
+            st["spec"] = find_spec(st["path"])
 
         def keybar():
             if st["prompt"]:
@@ -417,12 +417,30 @@ def tui(
             parts.append(keybar())
             return Group(*parts)
 
+        def board_choices():
+            choices = [(st["path"], b.name) for b in st["proj"].boards.list(all=True)]
+            seen = set(choices)
+            cfg = get_config()
+            roots = [c.parent for c in [cfg.source] if c] + [Path.cwd()]
+            for root in roots:
+                for f in sorted((root / "boards").glob("*.yaml")):
+                    try:
+                        parsed = apply_mod.load(str(f))
+                        entry = (parsed["project"], parsed["board"])
+                    except (apply_mod.SpecError, KeyError):
+                        continue
+                    if entry not in seen:
+                        seen.add(entry)
+                        choices.append(entry)
+            return choices
+
         def help_panel():
             lines = [
                 ("", "The YAML in boards/ is the source of truth; the board is"),
                 ("", "what GitLab currently shows. Editing happens in the YAML."),
                 ("r", "refetch the board"),
-                ("b", "switch to another of the project's boards"),
+                ("b", "switch board — this project's, plus any that a"),
+                ("", "boards/*.yaml defines (other projects included)"),
                 ("s", "append every issue to snapshots.jsonl, the progress log"),
                 ("e", "edit the YAML in $EDITOR (pulled from the board if there"),
                 ("", "is none yet); the diff is shown when you come back"),
@@ -450,7 +468,7 @@ def tui(
             # a resize re-renders at the new size, including the fit limit
             signal.signal(signal.SIGWINCH, lambda *_: draw())
 
-            live.update(Text(f"reading {path}…", "muted"), refresh=True)
+            live.update(Text(f"reading {st['path']}…", "muted"), refresh=True)
             refetch()
             draw()
             while True:
@@ -459,7 +477,7 @@ def tui(
                 if k == "q":
                     return
                 if k == "r":
-                    draw(busy=f"reading {path}…")
+                    draw(busy=f"reading {st['path']}…")
                     refetch()
                 elif k == "s":
                     n = _write_snapshot(st["proj"], st["board"])
@@ -469,18 +487,19 @@ def tui(
                 elif k == "?":
                     st["extra"] = help_panel()
                 elif k == "b":
-                    boards = st["proj"].boards.list(all=True)
-                    if len(boards) < 2:
-                        st["status"] = Text("this project has only one board", "muted")
+                    choices = board_choices()[:9]
+                    if len(choices) < 2:
+                        st["status"] = Text("nothing else to switch to", "muted")
                     else:
-                        # ponytail: single-digit pick caps at 9 boards; a
-                        # project with ten needs the board_name argument
+                        # ponytail: single-digit pick caps at 9; past that,
+                        # pass the project/board arguments instead
+                        current = (st["path"], st["board"].name)
                         grid = Table(box=None, show_header=False, padding=(0, 1))
                         grid.add_column(style="bold reverse", width=3)
                         grid.add_column()
-                        for i, b in enumerate(boards[:9], 1):
-                            here = "  ← current" if b.name == st["board"].name else ""
-                            grid.add_row(f" {i} ", f"{b.name}{here}")
+                        for i, (proj_path, name) in enumerate(choices, 1):
+                            here = "  ← current" if (proj_path, name) == current else ""
+                            grid.add_row(f" {i} ", f"{proj_path} — {name}{here}")
                         st["extra"] = Panel(
                             grid, title="boards", border_style="muted", padding=(0, 1)
                         )
@@ -488,9 +507,9 @@ def tui(
                         draw()
                         st["prompt"], st["extra"] = None, None
                         pick = _key()
-                        if pick.isdigit() and 1 <= int(pick) <= len(boards[:9]):
-                            st["name"] = boards[int(pick) - 1].name
-                            draw(busy=f"reading {st['name']}…")
+                        if pick.isdigit() and 1 <= int(pick) <= len(choices):
+                            st["path"], st["name"] = choices[int(pick) - 1]
+                            draw(busy=f"reading {st['path']}…")
                             refetch()
                         else:
                             st["status"] = Text("cancelled", "muted")
@@ -498,7 +517,7 @@ def tui(
                     live.stop()
                     spec = st["spec"]
                     if not spec:
-                        spec = f"boards/{path.rsplit('/', 1)[-1]}.yaml"
+                        spec = f"boards/{st['path'].rsplit('/', 1)[-1]}.yaml"
                         _pull_spec(st["proj"], st["board"], st["columns"], spec)
                         console.print(f"[added]pulled the board into {spec}[/]")
                     editor = shlex.split(
@@ -534,7 +553,7 @@ def tui(
                         draw(busy=f"copying #{m_src} -> #{m_dst}…")
                         with client.write_errors():
                             n = apply_mod.migrate_comments(
-                                client.gitlab(write=True), path, m_src, m_dst
+                                client.gitlab(write=True), st["path"], m_src, m_dst
                             )
                         st["status"] = Text(
                             f"{n} comment(s) copied #{m_src} -> #{m_dst}", "added"
