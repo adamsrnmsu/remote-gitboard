@@ -289,3 +289,35 @@ def test_pull_prefers_the_friendly_name():
     project.labels.list()[0].color = "#DC143C"
     spec = apply.spec_from_board(project, board, columns)
     assert spec["columns"][0]["color"] == "crimson"
+
+
+def test_cross_project_header_is_qualified(monkeypatch):
+    projects = {
+        "grp/a": types.SimpleNamespace(
+            path_with_namespace="grp/a",
+            issues=types.SimpleNamespace(
+                get=lambda iid: types.SimpleNamespace(
+                    iid=iid, notes=FakeNotes([fake_note("hello")])
+                )
+            ),
+        ),
+        "grp/b": types.SimpleNamespace(
+            path_with_namespace="grp/b",
+            issues=types.SimpleNamespace(
+                get=lambda iid: projects_b_issue
+            ),
+        ),
+    }
+    projects_b_issue = types.SimpleNamespace(iid=9, notes=FakeNotes())
+    monkeypatch.setattr(
+        apply.client, "get_project", lambda _gl, path: projects[path]
+    )
+    n = apply.migrate_comments(None, "grp/a", 1, 9, dst_path="grp/b")
+    assert n == 1
+    assert projects_b_issue.notes.notes[0].body.startswith("*from grp/a#1,")
+
+
+def test_same_project_dst_path_keeps_the_short_ref(monkeypatch):
+    issues = migration_project(monkeypatch, [fake_note("hi")])
+    apply.migrate_comments(None, "grp/proj", 1, 2, dst_path="grp/proj")
+    assert issues[2].notes.notes[0].body.startswith("*from #1,")

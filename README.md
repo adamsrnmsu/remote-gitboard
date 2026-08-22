@@ -139,7 +139,8 @@ gitboard tui group/project               # interactive: reload, snapshot, apply
 gitboard pull group/project              # save the board as boards/<name>.yaml
 gitboard plan boards/team.yaml           # what would change
 gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
-gitboard migrate-comments 12 34          # copy #12's comments onto #34 (writes)
+gitboard migrate-comments 12 34 35       # copy #12's comments onto #34 and #35
+gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
 gitboard snapshot group/project          # append board state to snapshots.jsonl
 gitboard config                          # what URL and tokens resolved
 gitboard --help
@@ -167,8 +168,9 @@ invocation; `-v` turns on debug logging.
 **Streams:** the board goes to **stdout**, logs and progress to **stderr**, so
 `gitboard show --markdown | less` stays clean.
 
-`migrate-comments` copies discussion from a superseded issue onto its
-replacement, oldest first, each prefixed `*from #12, by @alice on
+`migrate-comments` copies discussion from a superseded issue onto one or
+more replacements — bare iids stay in the project, `group/project#iid`
+crosses into another (the header is then project-qualified) — oldest first, each prefixed `*from #12, by @alice on
 2026-08-01:*` — the API cannot post as someone else, so attribution is a
 header. Idempotent: already-copied comments are skipped. System notes (label
 churn) are not copied.

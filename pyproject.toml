@@ -41,6 +41,10 @@ select = [
     "SIM",  # simplify
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# Typer's whole API is calls in argument defaults; B008 is noise here.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
 [tool.ruff.lint.per-file-ignores]
 # Test fakes are deliberately terse; a stub class per API object is the point.
 "tests/*" = ["E501"]

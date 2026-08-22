@@ -310,18 +310,23 @@ def plan(gl, spec):
     return pending
 
 
-def migrate_comments(gl, path, src_iid, dst_iid):
+def migrate_comments(gl, path, src_iid, dst_iid, dst_path=None):
     """Copy one issue's comments onto another, oldest first.
 
     The API cannot post as someone else, so authorship survives as an
     attribution header instead. Idempotent the same way apply is: a comment
     whose migrated body already sits on the destination is skipped, so
     re-running copies nothing. System notes (relabels, milestone churn) are
-    activity, not discussion, and are not copied.
+    activity, not discussion, and are not copied. `dst_path` sends the copies
+    to an issue in another project; the header is then project-qualified,
+    because a bare #iid means nothing over there.
     """
     project = client.get_project(gl, path)
     src = client.get_issue(project, src_iid)
-    dst = client.get_issue(project, dst_iid)
+    crossing = dst_path not in (None, path)
+    dst_project = client.get_project(gl, dst_path) if crossing else project
+    dst = client.get_issue(dst_project, dst_iid)
+    ref = f"{path}#{src_iid}" if crossing else f"#{src_iid}"
 
     have = {n.body for n in dst.notes.list(all=True)}
     copied = 0
@@ -329,7 +334,7 @@ def migrate_comments(gl, path, src_iid, dst_iid):
         if note.system:
             continue
         body = (
-            f"*from #{src_iid}, by @{note.author['username']} on "
+            f"*from {ref}, by @{note.author['username']} on "
             f"{note.created_at[:10]}:*\n\n{note.body}"
         )
         if body in have:

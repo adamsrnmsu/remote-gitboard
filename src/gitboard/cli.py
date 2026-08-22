@@ -237,25 +237,48 @@ def apply(
     _run(go)
 
 
+def _parse_target(arg, default_path):
+    """`34` -> (default_path, 34); `grp/proj#34` -> ("grp/proj", 34)."""
+    proj, _, iid = arg.rpartition("#")
+    try:
+        return (proj or default_path), int(iid)
+    except ValueError:
+        raise ConfigError(
+            f"bad destination {arg!r} — use an iid like 34, or group/project#34"
+        ) from None
+
+
 @app.command("migrate-comments")
 def migrate_comments(
     src: int = typer.Argument(..., help="Issue iid to copy comments from."),
-    dst: int = typer.Argument(..., help="Issue iid to copy them onto."),
+    dst: list[str] = typer.Argument(
+        ..., help="Destinations: an iid, or group/project#iid. One or more."
+    ),
     project: str | None = typer.Option(
         None, "--project", "-p", help="group/project. Defaults to the config."
     ),
 ):
-    """Copy an issue's comments to its successor. Writes — needs api scope."""
+    """Copy an issue's comments to its successor(s). Writes — needs api scope."""
 
     def go():
         path = _need(project, "project", "project")
         gl = client.gitlab(write=True)
+        targets = [_parse_target(a, path) for a in dst]
         with client.write_errors():
-            copied = apply_mod.migrate_comments(gl, path, src, dst)
-        if copied:
-            err().print(f"[added]{copied} comment(s) copied[/] #{src} -> #{dst}")
-        else:
-            err().print("[muted]nothing to copy — no comments, or already migrated[/]")
+            for dst_path, dst_iid in targets:
+                copied = apply_mod.migrate_comments(
+                    gl, path, src, dst_iid, dst_path=dst_path
+                )
+                where = f"#{dst_iid}" if dst_path == path else f"{dst_path}#{dst_iid}"
+                if copied:
+                    err().print(
+                        f"[added]{copied} comment(s) copied[/] #{src} -> {where}"
+                    )
+                else:
+                    err().print(
+                        f"[muted]nothing to copy to {where} — "
+                        "no comments, or already migrated[/]"
+                    )
 
     _run(go)
 
@@ -471,7 +494,8 @@ def tui(
                 ("", "is none yet); the diff is shown when you come back"),
                 ("p", "diff the YAML against the board — never writes"),
                 ("a", "write the YAML to the board — additive only, y/n first"),
-                ("m", "copy a finished issue's comments onto its successor"),
+                ("m", "copy a finished issue's comments onto one or more"),
+                ("", "successors — enter on an empty prompt runs it"),
                 ("q", "quit"),
             ]
             grid = Table(box=None, show_header=False, padding=(0, 1))
@@ -562,23 +586,32 @@ def tui(
                         )
                 elif k == "m":
                     m_src = read_iid("copy comments from")
-                    m_dst = None
+                    dsts = []
                     if m_src is not None:
                         title = issue_title(m_src)
                         source = f"#{m_src}"
                         if title:
                             source += f" “{title[:40]}”"
-                        m_dst = read_iid(f"{source}  →  onto")
-                    if m_src is None or m_dst is None:
+                        while True:
+                            got = "" if not dsts else f" (have {len(dsts)}, enter runs)"
+                            nxt = read_iid(f"{source}  →  onto{got}")
+                            if nxt is None:
+                                break
+                            dsts.append(nxt)
+                    if not dsts:
                         st["status"] = Text("cancelled", "muted")
                     else:
-                        draw(busy=f"copying #{m_src} -> #{m_dst}…")
+                        total = 0
+                        gl = client.gitlab(write=True)
                         with client.write_errors():
-                            n = apply_mod.migrate_comments(
-                                client.gitlab(write=True), st["path"], m_src, m_dst
-                            )
+                            for m_dst in dsts:
+                                draw(busy=f"copying #{m_src} -> #{m_dst}…")
+                                total += apply_mod.migrate_comments(
+                                    gl, st["path"], m_src, m_dst
+                                )
+                        where = ", ".join(f"#{d}" for d in dsts)
                         st["status"] = Text(
-                            f"{n} comment(s) copied #{m_src} -> #{m_dst}", "added"
+                            f"{total} comment(s) copied #{m_src} -> {where}", "added"
                         )
                 elif k in ("p", "a") and st["spec"]:
                     parsed = apply_mod.load(st["spec"])
