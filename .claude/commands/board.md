@@ -43,6 +43,11 @@ No questions is a valid answer. Do not manufacture them to fill the section.
 Concrete label changes, each with its reason:
 `#iid: Doing -> Blocked (waiting on #other)`
 
+If one issue looks superseded by another (retitled duplicate, split work,
+a stale twin of a newer issue), suggest the migration as a copyable line —
+`gitboard migrate-comments OLD NEW --close-source` — for the user to run.
+You cannot run it yourself, and should not try.
+
 Then offer to apply them: make the YAML edit, run `plan`, show the table, and
 ask. An issue missing from the YAML can be added to it (title must match the
 board exactly). If the user declines, leave the YAML as you found it.

@@ -355,14 +355,16 @@ The package lives in `src/gitboard/`; `gitboard.cli:app` is the entry point.
 |---|---|
 | `src/gitboard/cli.py` | The CLI. Typer + rich. |
 | `src/gitboard/board.py` | Reading a board — the one gap no existing tool fills. |
-| `src/gitboard/apply.py` | Making a board match YAML. The only thing that writes. |
+| `src/gitboard/apply.py` | Making a board match YAML; migrate/close. The only writer. |
+| `src/gitboard/report.py` | Diffing the snapshot log; commit correlation. Local only. |
 | `src/gitboard/client.py` | The GitLab connection, and where API errors become English. |
 | `src/gitboard/config.py` | Config singleton: URL, tokens, verbosity. |
 | `src/gitboard/log.py` | Console + logger singletons. stdout for data, stderr for chatter. |
 | `tests/` | pytest suite. No network — the API surface is faked. |
 | `boards/*.yaml` | Board definitions — columns and issues, editable. |
 | `scripts/seed.py` | Mints a PAT, then applies `boards/demo.yaml`. |
-| `.claude/commands/board.md` | The `/board` prompt. Read-only instructions. |
+| `scripts/bulk_demo.py` | Five busy stress-test boards for the local instance. |
+| `.claude/commands/board.md` | The `/board` prompt: report, then apply after a go-ahead. |
 | `docker-compose.yml` | Disposable local GitLab CE for development. |
 
 `make` on its own lists every target.
@@ -442,7 +444,9 @@ Almost all of it already existed and is not worth rewriting:
 
 The genuine gap: **no MCP server exposes board structure.** Boards are lists
 bound to labels, and neither the official server nor the community ones read
-that mapping. Hence `board_columns()`, and nothing more.
+that mapping. `board_columns()` fills it; everything else here — the YAML
+round trip, the TUI, the snapshot log and its report — is built on that one
+mapping and on files, not on more API surface.
 
 ## Taking write access away again
 

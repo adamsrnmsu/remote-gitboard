@@ -7,12 +7,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make install                        # once: venv + dependencies
 make show PROJECT=group/project     # the board, as a rich tree
+make tui PROJECT=group/project      # interactive: edit/plan/apply/migrate
+make pull PROJECT=group/project     # save the live board as boards/<name>.yaml
 make plan SPEC=boards/test.yaml     # diff YAML against GitLab
 make apply SPEC=boards/test.yaml    # write it
+make snapshot PROJECT=group/project # append board state to snapshots.jsonl
+make report PROJECT=group/project   # what moved, from the snapshot log
+make cron                           # print the crontab line for snapshots
 make test                           # pytest
 make lint / make fmt                # ruff, from .venv
 make up wait install && scripts/seed.py   # local GitLab + demo board
+scripts/bulk_demo.py                # 5 stress boards on the local instance
 ```
+
+CLI-only (no make target): `migrate-comments SRC DST... [--close-source]` —
+destinations are iids or `group/project#iid`.
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI
 directly: `PYTHONPATH=src .venv/bin/python -m gitboard.cli show grp/proj -m`.
@@ -38,8 +47,9 @@ PYTHONPATH away.**
 ## Architecture
 
 `src/` layout, package `gitboard`, entry point `gitboard.cli:app` declared in
-`pyproject.toml`. `scripts/seed.py` is plain python3 (stdlib only) and shells
-out to `.venv/bin/python -m gitboard.cli`.
+`pyproject.toml`. `scripts/seed.py` and
+`scripts/bulk_demo.py` are plain python3 (stdlib only) and shell out to
+`.venv/bin/python -m gitboard.cli`.
 
 - **`config.py`** — config singleton (`get_config()`, an `lru_cache(1)`).
   `configure()` applies CLI overrides and busts the cache. Token resolution is
@@ -90,12 +100,18 @@ The API's order is not stable, and a truncated column has to show what the
 reader would have gone looking for. `summarise` de-duplicates by iid — a
 two-column issue is one issue, and summing per-column counts double-counts it.
 `show` truncates to 5 per column by default; `--all` / `-n` override.
-`tui` is a keypress loop over the same rendering: reload / board-picker /
-snapshot / edit
-(`$EDITOR` on the spec, pulled via `spec_from_board` if missing) / plan /
-apply-with-y/n / migrate-comments / help. Raw input comes from `_key()`
-(termios, dies without a tty); prompts and the editor run with the Live
-screen stopped.
+`tui` is a keypress loop over `board_view` (shared with `show`, so they
+cannot drift) inside a rich `Live` alternate screen: reload / board-picker /
+snapshot / edit (`$EDITOR` on the spec, pulled via `spec_from_board` if
+missing, diff shown on return) / plan / apply-with-y/n /
+migrate-with-close-y/n / help. The per-column truncation limit is computed
+from terminal height each draw, and SIGWINCH redraws, so resizing works.
+Raw input is `_key()` (termios cbreak, dies without a tty); all prompts
+render inside the layout — `read_iid` echoes digits into the prompt line
+and takes single-key escapes (b = pick a destination project in `m`).
+Only `$EDITOR` stops the Live screen. Keybar labels are styled `Text`
+chips, never markup — `[s]napshot` renders as strikethrough-then-text
+because `[s]` is rich's strike tag.
 `snapshot` appends `snapshot_records` (one JSON line per distinct issue) to a
 JSONL file — the progress-over-time log.
 
@@ -108,8 +124,8 @@ shape breaks that command — treat it as an interface.
 
 ## apply.py invariants
 
-The YAML is the source of truth. Two normalisations exist because their
-absence caused real bugs, both pinned by tests — **don't remove them**:
+The YAML is the source of truth. Three normalisations exist because their
+absence caused real bugs, each pinned by tests — **don't remove them**:
 
 - Column `color` accepts friendly names (`COLORS` in apply.py); `load()`
   normalises to hex because the API only speaks hex, and `pull` maps known
@@ -123,25 +139,31 @@ absence caused real bugs, both pinned by tests — **don't remove them**:
 
 Issue identity is the **title**. Renaming a title creates a second issue.
 Apply is additive: nothing is deleted or closed, so removing an issue from the
-YAML leaves it on the board.
+YAML leaves it on the board. Closing exists but only as an explicit act —
+`migrate-comments --close-source` / `close_issue()` — never as a side effect
+of `apply`. `migrate_comments` skips system notes and the `superseded by`
+breadcrumb `close_issue` leaves, or re-runs would copy the bookkeeping.
 
 `ensure_project` resolves a namespace via `gl.namespaces.get`, not
 `gl.user.username` — `gl.user` is `None` until `gl.auth()` runs.
 
 `scripts/seed.py` owns only the token mint; the demo board is
 `boards/demo.yaml` applied through the CLI. Re-running it reverts manual board
-edits back to the YAML.
+edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
+(gitignored — the script is the source) and is idempotent per `--seed`.
 
 ## The AI pass writes now
 
-`.claude/commands/board.md` may run `show`, `plan`, `apply`, and edit
-`boards/*.yaml`. The contract is the flow, stated in the command: YAML edit ->
-`plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
-additive-only (nothing deleted or closed), which bounds the blast radius.
+`.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`, and
+edit `boards/*.yaml`. The contract is the flow, stated in the command: YAML
+edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
+additive-only (nothing deleted or closed), which bounds the blast radius;
+`migrate-comments` and its `--close-source` are deliberately NOT in the
+command's allowed-tools — the AI suggests those lines, the user runs them.
 The write token is `GITLAB_WRITE_TOKEN` in `.env`; pulling it (or
-re-restricting `allowed-tools` to `show`/`plan`) revokes write access —
-change both to go back to the old read-only guarantee.
-`snapshot` writes only the local JSONL log, never GitLab.
+re-restricting `allowed-tools` to `show`/`plan`/`report`) revokes write
+access — change both to go back to the old read-only guarantee.
+`snapshot` and `report` touch only the local JSONL log, never GitLab.
 
 Auth (read): `--read-token`, else `GITLAB_READ_TOKEN`, else keychain
 `gitlab-read-token`. `GITLAB_TOKEN` and the `gitlab-token` keychain item are
