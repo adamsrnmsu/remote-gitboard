@@ -307,7 +307,7 @@ def tui(
     project: str | None = typer.Argument(None, help="group/project"),
     board_name: str | None = typer.Argument(None, help="Board name, if several."),
 ):
-    """The board, interactively: [r]eload  [s]napshot  [p]lan  [q]uit."""
+    """The board, interactively: reload / snapshot / plan / apply / quit."""
 
     def go():
         if not sys.stdin.isatty():
@@ -323,7 +323,11 @@ def tui(
             board_mod.print_rich(proj, board, spec_path=spec)
             if status:
                 err().print(status)
-            keys = "[r]eload  [s]napshot" + ("  [p]lan" if spec else "") + "  [q]uit"
+            keys = (
+                "[r]eload  [s]napshot"
+                + ("  [p]lan  [a]pply" if spec else "")
+                + "  [q]uit"
+            )
             err().print(f"[muted]{keys}[/]")
             while True:
                 k = _key().lower()
@@ -340,11 +344,26 @@ def tui(
                     parsed = apply_mod.load(spec)
                     with err().status("comparing…"):
                         pending = apply_mod.plan(client.gitlab(), parsed)
-                    _print_changes(
-                        pending, f"{spec} vs the board — `gitboard apply` writes it"
-                    )
+                    _print_changes(pending, f"{spec} vs the board — [a] writes it")
                     status = ""
                     err().print(f"[muted]{keys}[/]")
+                if k == "a" and spec:
+                    parsed = apply_mod.load(spec)
+                    gl = client.gitlab(write=True)
+                    with err().status("comparing…"):
+                        pending = apply_mod.plan(gl, parsed)
+                    if not pending:
+                        status = "[muted]no changes — board already matches[/]"
+                        break
+                    _print_changes(pending, f"{spec} — will write")
+                    err().print(f"[muted]apply {len(pending)} change(s)? \[y/n][/]")
+                    if _key().lower() != "y":
+                        status = "[muted]not applied[/]"
+                        break
+                    with client.write_errors():
+                        changes = apply_mod.apply(gl, parsed)
+                    status = f"[added]{len(changes)} change(s) written[/]"
+                    break
 
     _run(go)
 

@@ -135,7 +135,7 @@ gitboard show group/project "Dev Board"  # a named board
 gitboard show --all                      # do not truncate long columns
 gitboard show -n 20                      # 20 issues per column
 gitboard show --markdown                 # stable output, for pipes and the AI
-gitboard tui group/project               # interactive: reload, snapshot, plan
+gitboard tui group/project               # interactive: reload, snapshot, apply
 gitboard plan boards/team.yaml           # what would change
 gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
 gitboard migrate-comments 12 34          # copy #12's comments onto #34 (writes)
@@ -150,9 +150,9 @@ hides the part you were looking for. The footer counts issues, unassigned and
 overdue, and names the YAML that defines the board.
 
 `tui` is the loop version of `show`: the same tree, redrawn on `r`, with
-`s` appending a snapshot, `p` showing spec drift when a `boards/*.yaml`
-defines the board, and `q` to leave. Reading only — `apply` stays a typed
-command.
+`s` appending a snapshot, and — when a `boards/*.yaml` defines the board —
+`p` showing spec drift and `a` applying it after a y/n on the change table.
+`q` leaves.
 
 `--url`, `--read-token` and `--write-token` override the environment for one
 invocation; `-v` turns on debug logging.

@@ -86,7 +86,8 @@ reader would have gone looking for. `summarise` de-duplicates by iid — a
 two-column issue is one issue, and summing per-column counts double-counts it.
 `show` truncates to 5 per column by default; `--all` / `-n` override.
 `tui` is a keypress loop over the same rendering (reload / snapshot / plan /
-quit); raw input comes from `_key()` (termios, dies without a tty).
+apply-with-y/n / quit); raw input comes from `_key()` (termios, dies without
+a tty).
 `snapshot` appends `snapshot_records` (one JSON line per distinct issue) to a
 JSONL file — the progress-over-time log.
 
