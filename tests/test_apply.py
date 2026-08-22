@@ -242,7 +242,7 @@ def test_pulled_spec_plans_clean_against_its_own_board(monkeypatch):
 def test_pulled_spec_drops_empty_fields():
     project, board, columns = board_fixture()
     spec = apply.spec_from_board(project, board, columns)
-    assert spec["columns"] == [{"name": "Doing", "color": "#428bca"}]
+    assert spec["columns"] == [{"name": "Doing", "color": "gitlab blue"}]
     assert "assignee" not in spec["issues"][0]
     assert spec["issues"][0]["description"] == "body"
 
@@ -255,3 +255,37 @@ def test_dump_load_roundtrip(tmp_path):
     loaded = apply.load(str(f))
     assert loaded["issues"][0]["title"] == "one"
     assert loaded["issues"][0]["due_date"] == "2026-09-01"
+
+
+# --- colors ----------------------------------------------------------------
+
+
+def test_color_names_translate_to_hex():
+    assert apply.norm_color("crimson") == "#dc143c"
+    assert apply.norm_color("Rose-Red") == "#c21e56"
+    assert apply.norm_color("MAGENTA_PINK") == "#cc338b"
+
+
+def test_hex_passes_through_lowercased():
+    assert apply.norm_color("#DC143C") == "#dc143c"
+    assert apply.norm_color("#fff") == "#fff"
+
+
+def test_unknown_color_is_a_spec_error():
+    with pytest.raises(apply.SpecError, match="unknown color"):
+        apply.norm_color("blurple")
+
+
+def test_load_normalises_column_colors(tmp_path):
+    f = tmp_path / "b.yaml"
+    f.write_text(
+        "project: g/p\nboard: B\ncolumns:\n  - name: Doing\n    color: crimson\n"
+    )
+    assert apply.load(str(f))["columns"][0]["color"] == "#dc143c"
+
+
+def test_pull_prefers_the_friendly_name():
+    project, board, columns = board_fixture()
+    project.labels.list()[0].color = "#DC143C"
+    spec = apply.spec_from_board(project, board, columns)
+    assert spec["columns"][0]["color"] == "crimson"

@@ -8,6 +8,8 @@ only — nothing is deleted or closed, so removing an issue from the YAML
 leaves it on the board. Issues are matched by title.
 """
 
+import re
+
 import yaml
 
 from gitboard import client
@@ -18,6 +20,62 @@ log = get_logger()
 
 class SpecError(Exception):
     """The YAML is wrong. Rendered as one line, no traceback."""
+
+
+# GitLab's own label palette plus the basic CSS names, so a column can say
+# `color: crimson` instead of `#dc143c`. The API only speaks hex, so names
+# are translated on load and back on pull.
+COLORS = {
+    "red": "#ff0000",
+    "crimson": "#dc143c",
+    "rose red": "#c21e56",
+    "magenta pink": "#cc338b",
+    "pink": "#ffc0cb",
+    "dark coral": "#cd5b45",
+    "orange": "#ffa500",
+    "carrot orange": "#ed9121",
+    "aztec gold": "#c39953",
+    "champagne": "#f7e7ce",
+    "yellow": "#ffff00",
+    "titanium yellow": "#eee600",
+    "green": "#008000",
+    "green cyan": "#009966",
+    "green screen": "#00b140",
+    "dark green": "#013220",
+    "dark sea green": "#8fbc8f",
+    "medium sea green": "#3cb371",
+    "teal": "#008080",
+    "blue": "#0000ff",
+    "gitlab blue": "#428bca",
+    "blue gray": "#6699cc",
+    "lavender": "#e6e6fa",
+    "purple": "#800080",
+    "dark violet": "#9400d3",
+    "deep violet": "#330066",
+    "brown": "#a52a2a",
+    "gray": "#808080",
+    "grey": "#808080",
+    "charcoal": "#36454f",
+    "black": "#000000",
+    "white": "#ffffff",
+}
+COLOR_NAMES = {}
+for _name, _hex in COLORS.items():
+    COLOR_NAMES.setdefault(_hex, _name)
+
+
+def norm_color(value):
+    """A color as the API's lowercase hex, from hex or a friendly name."""
+    value = str(value).strip()
+    if re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value):
+        return value.lower()
+    key = " ".join(value.lower().replace("-", " ").replace("_", " ").split())
+    if key in COLORS:
+        return COLORS[key]
+    raise SpecError(
+        f"unknown color {value!r} — use hex like '#428bca', or one of: "
+        + ", ".join(sorted(COLORS))
+    )
 
 
 def load(path):
@@ -37,6 +95,9 @@ def load(path):
             raise SpecError(f"{path}: missing required key {key!r}")
     spec.setdefault("columns", [])
     spec.setdefault("issues", [])
+    for col in spec["columns"]:
+        if "color" in col:
+            col["color"] = norm_color(col["color"])
     return spec
 
 
@@ -70,7 +131,12 @@ def spec_from_board(project, board, columns):
         "project": project.path_with_namespace,
         "board": board.name,
         "columns": [
-            {"name": name, "color": labels[name].color}
+            {
+                "name": name,
+                "color": COLOR_NAMES.get(
+                    labels[name].color.lower(), labels[name].color
+                ),
+            }
             for name, _ in columns
             if name != "Backlog" and name in labels
         ],

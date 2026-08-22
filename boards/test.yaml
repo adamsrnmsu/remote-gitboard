@@ -26,7 +26,7 @@ issues:
     due_date: 2026-09-01
 
   - title: Decide whether to add the MCP server
-    labels: [Doing, Review]     # two columns: shows up in both, like the web UI
+    labels: [Blocked, Review]     # two columns: shows up in both, like the web UI
 
   - title: Rotate the PAT before it expires
     # no labels -> lands in Backlog

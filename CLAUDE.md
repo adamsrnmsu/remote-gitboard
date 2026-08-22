@@ -107,6 +107,9 @@ shape breaks that command — treat it as an interface.
 The YAML is the source of truth. Two normalisations exist because their
 absence caused real bugs, both pinned by tests — **don't remove them**:
 
+- Column `color` accepts friendly names (`COLORS` in apply.py); `load()`
+  normalises to hex because the API only speaks hex, and `pull` maps known
+  hexes back to names. Compare in hex or nothing is idempotent.
 - An unquoted `2026-09-01` is a `datetime.date` to PyYAML, which `requests`
   cannot JSON-encode. `wanted_issue` coerces to ISO.
 - GitLab strips a description's trailing newline; YAML's `|` keeps it, so

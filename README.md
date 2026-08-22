@@ -188,9 +188,9 @@ board: Dev Board
 
 columns:                      # board lists, in order. Each is a label.
   - name: Doing
-    color: "#428bca"
+    color: gitlab blue          # names or hex — see Colors below
   - name: Blocked
-    color: "#d9534f"
+    color: crimson
 
 issues:
   - title: Set up the board from YAML
@@ -219,6 +219,25 @@ gitboard show test/test            # read it back
   and fails only here.
 - `Backlog` is synthesised for issues carrying no column label; you never
   declare it.
+
+### Colors
+
+`color` takes a hex like `"#428bca"` or a friendly name — the API only
+speaks hex, so names are translated on the way in, and `pull` translates
+known hexes back to names. Case, hyphens and underscores don't matter
+(`Rose-Red` = `rose red`). An unknown name is a one-line error listing all
+of these:
+
+| | | | |
+|---|---|---|---|
+| red | crimson | rose red | magenta pink |
+| pink | dark coral | orange | carrot orange |
+| aztec gold | champagne | yellow | titanium yellow |
+| green | green cyan | green screen | dark green |
+| dark sea green | medium sea green | teal | blue |
+| gitlab blue | blue gray | lavender | purple |
+| dark violet | deep violet | brown | gray |
+| charcoal | black | white | |
 
 Two gotchas that cost a debugging round each, both handled and both pinned by
 tests: an unquoted `due_date: 2026-09-01` is a date object to YAML (not JSON
