@@ -75,6 +75,9 @@ seed: wait install  ## mint a PAT and apply boards/demo.yaml
 show: install  ## print a board: make show PROJECT=group/project
 	@$(GITBOARD) show $(PROJECT)
 
+tui: install  ## the board, interactively: make tui PROJECT=group/project
+	@$(GITBOARD) tui $(PROJECT)
+
 snapshot: install  ## append board state to snapshots.jsonl: make snapshot PROJECT=group/project
 	@$(GITBOARD) snapshot $(PROJECT)
 

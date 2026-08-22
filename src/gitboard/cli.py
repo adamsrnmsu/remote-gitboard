@@ -16,6 +16,7 @@ The CLI. Everything else in the package is a module it calls:
 
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -272,12 +273,78 @@ def snapshot(
     def go():
         path = _need(project, "project", "project")
         proj, board = board_mod.fetch(path, board_name or get_config().board)
-        ts = datetime.now(UTC).isoformat(timespec="seconds")
-        records = board_mod.snapshot_records(proj, board, ts)
-        with open(out_path, "a") as f:
-            for rec in records:
-                f.write(json.dumps(rec) + "\n")
-        err().print(f"[added]{len(records)} issue(s)[/] appended to {out_path}")
+        n = _write_snapshot(proj, board, out_path)
+        err().print(f"[added]{n} issue(s)[/] appended to {out_path}")
+
+    _run(go)
+
+
+def _write_snapshot(proj, board, out_path="snapshots.jsonl"):
+    ts = datetime.now(UTC).isoformat(timespec="seconds")
+    records = board_mod.snapshot_records(proj, board, ts)
+    with open(out_path, "a") as f:
+        for rec in records:
+            f.write(json.dumps(rec) + "\n")
+    return len(records)
+
+
+def _key():
+    """One raw keypress. The whole input layer of the TUI."""
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+@app.command()
+def tui(
+    project: str | None = typer.Argument(None, help="group/project"),
+    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+):
+    """The board, interactively: [r]eload  [s]napshot  [p]lan  [q]uit."""
+
+    def go():
+        if not sys.stdin.isatty():
+            raise ConfigError("tui needs a terminal — use `show` in pipes")
+        path = _need(project, "project", "project")
+        name = board_name or get_config().board
+        status = ""
+        while True:
+            with err().status(f"reading {path}…"):
+                proj, board = board_mod.fetch(path, name)
+            spec = find_spec(path)
+            out().clear()
+            board_mod.print_rich(proj, board, spec_path=spec)
+            if status:
+                err().print(status)
+            keys = "[r]eload  [s]napshot" + ("  [p]lan" if spec else "") + "  [q]uit"
+            err().print(f"[muted]{keys}[/]")
+            while True:
+                k = _key().lower()
+                if k == "q":
+                    return
+                if k == "r":
+                    status = ""
+                    break
+                if k == "s":
+                    n = _write_snapshot(proj, board)
+                    status = f"[added]{n} issue(s)[/] appended to snapshots.jsonl"
+                    break
+                if k == "p" and spec:
+                    parsed = apply_mod.load(spec)
+                    with err().status("comparing…"):
+                        pending = apply_mod.plan(client.gitlab(), parsed)
+                    _print_changes(
+                        pending, f"{spec} vs the board — `gitboard apply` writes it"
+                    )
+                    status = ""
+                    err().print(f"[muted]{keys}[/]")
 
     _run(go)
 
