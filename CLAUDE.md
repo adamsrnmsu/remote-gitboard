@@ -174,3 +174,10 @@ Auth (write): `--write-token`, else `GITLAB_WRITE_TOKEN`, else keychain
 
 `GITLAB_URL` defaults to gitlab.com. `gitboard config` shows what resolved and
 from where.
+
+## Tasks: beads
+
+Task tracking is `bd` (beads); `.beads/` is the Dolt store, `AGENTS.md` the
+pointer. `bd ready` is the queue, `bd update <id> --claim` to start,
+`bd close <id> --reason "..."` to finish; follow-ups become beads, not TODOs.
+Sync is `bd dolt push/pull` on the git remote, never a committed JSONL.
