@@ -552,6 +552,12 @@ def _key():
 def tui(
     project: str | None = typer.Argument(None, help="group/project"),
     board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    from_file: str | None = typer.Option(
+        None,
+        "--from",
+        help="Offline: the YAML is the board. Keys r/e/p/?/q; the diff is against "
+        "<file>.base when it exists. Nothing here touches GitLab.",
+    ),
 ):
     """The board, interactively: reload / snapshot / plan / apply / quit."""
 
@@ -568,26 +574,49 @@ def tui(
         from rich.text import Text
 
         console = err()
+        offline = from_file
+        base = f"{from_file}.base" if from_file else None
         st = {
             "status": None,
             "extra": None,
             "prompt": None,
-            "path": _need(project, "project", "project"),
+            "path": from_file or _need(project, "project", "project"),
             "name": board_name or get_config().board,
         }
 
         def refetch():
+            if offline:
+                spec = apply_mod.load(offline)
+                st["proj"], st["board"] = board_mod.spec_stand_ins(spec)
+                st["columns"] = board_mod.columns_from_spec(spec, get_config().url)
+                st["spec"] = offline
+                return
             st["proj"], st["board"] = board_mod.fetch(st["path"], st["name"])
             st["columns"] = board_mod.board_columns(st["proj"], st["board"])
             st["spec"] = find_spec(st["path"])
 
+        def staged(parsed, write=False):
+            """What apply would do: against GitLab, or offline against .base."""
+            if not offline:
+                return apply_mod.plan(client.gitlab(write=write), parsed)
+            if not Path(base).exists():
+                return None
+            return apply_mod.diff(
+                parsed, apply_mod.have_from_spec(apply_mod.load(base))
+            )
+
         def keybar():
             if st["prompt"]:
                 return Text(f"  {st['prompt']}", "bold yellow")
-            pairs = [("r", "reload"), ("b", "board"), ("s", "snapshot"), ("e", "edit")]
-            if st["spec"]:
-                pairs += [("p", "plan"), ("a", "apply")]
-            pairs += [("m", "migrate"), ("?", "help"), ("q", "quit")]
+            if offline:
+                pairs = [("r", "reload"), ("e", "edit"), ("p", "diff")]
+                pairs += [("?", "help"), ("q", "quit")]
+            else:
+                pairs = [("r", "reload"), ("b", "board"), ("s", "snapshot")]
+                pairs += [("e", "edit")]
+                if st["spec"]:
+                    pairs += [("p", "plan"), ("a", "apply")]
+                pairs += [("m", "migrate"), ("?", "help"), ("q", "quit")]
             bar = Text("  ")
             for key, label in pairs:
                 bar.append(f" {key} ", "bold reverse")
@@ -606,15 +635,19 @@ def tui(
                 st["proj"], st["board"], limit=limit, columns=cols
             )
             spec = st["spec"]
+            if offline:
+                have_base = "p diffs against it" if Path(base).exists() else "no .base"
+                subtitle = (
+                    f"offline — {spec} is the board; {have_base}; the host applies"
+                )
+            elif spec:
+                subtitle = f"defined by {spec} — e edits, a applies"
+            else:
+                subtitle = "no YAML yet — e pulls the board into one"
             parts = [
                 Panel(
                     body,
-                    subtitle=Text(
-                        f"defined by {spec} — e edits, a applies"
-                        if spec
-                        else "no YAML yet — e pulls the board into one",
-                        "muted",
-                    ),
+                    subtitle=Text(subtitle, "muted"),
                     subtitle_align="left",
                     border_style="cyan",
                     padding=(0, 1),
@@ -706,6 +739,8 @@ def tui(
             lines = [
                 ("", "The YAML in boards/ is the source of truth; the board is"),
                 ("", "what GitLab currently shows. Editing happens in the YAML."),
+                ("", "--from FILE: offline. Only r/e/p/?/q work; p diffs against"),
+                ("", "FILE.base; copy the YAML to the host and apply there."),
                 ("r", "refetch the board"),
                 ("b", "switch board — this project's, plus any that a"),
                 ("", "boards/*.yaml defines (other projects included)"),
@@ -745,7 +780,11 @@ def tui(
                 st["status"] = st["extra"] = st["prompt"] = None
                 if k == "q":
                     return
-                if k == "r":
+                if offline and k in "sbma":
+                    st["status"] = Text(
+                        "offline — not here; the host does that", "muted"
+                    )
+                elif k == "r":
                     draw(busy=f"reading {st['path']}…")
                     refetch()
                 elif k == "s":
@@ -778,9 +817,18 @@ def tui(
                     st["spec"] = spec
                     parsed = apply_mod.load(spec)
                     draw(busy="comparing…")
-                    pending = apply_mod.plan(client.gitlab(), parsed)
-                    if pending:
-                        st["extra"] = _changes_table(pending, f"{spec} — a applies")
+                    if offline:
+                        refetch()
+                    pending = staged(parsed)
+                    if pending is None:
+                        st["status"] = Text(
+                            f"edited; no {base} to diff against", "muted"
+                        )
+                    elif pending:
+                        title = (
+                            f"{spec} — {'the host applies' if offline else 'a applies'}"
+                        )
+                        st["extra"] = _changes_table(pending, title)
                     else:
                         st["status"] = Text(
                             "no changes — board already matches", "muted"
@@ -849,16 +897,18 @@ def tui(
                             )
                 elif k in ("p", "a") and st["spec"]:
                     parsed = apply_mod.load(st["spec"])
-                    gl = client.gitlab(write=(k == "a"))
                     draw(busy="comparing…")
-                    pending = apply_mod.plan(gl, parsed)
+                    pending = staged(parsed, write=(k == "a"))
                     spec = st["spec"]
-                    if not pending:
+                    if pending is None:
+                        st["status"] = Text(f"no {base} to diff against", "muted")
+                    elif not pending:
                         st["status"] = Text(
                             "no changes — board already matches", "muted"
                         )
                     elif k == "p":
-                        st["extra"] = _changes_table(pending, f"{spec} — a applies")
+                        how = "the host applies" if offline else "a applies"
+                        st["extra"] = _changes_table(pending, f"{spec} — {how}")
                     else:
                         st["extra"] = _changes_table(pending, f"{spec} — will write")
                         st["prompt"] = f"apply {len(pending)} change(s)?  y / n"
@@ -867,6 +917,7 @@ def tui(
                         if _key().lower() == "y":
                             draw(busy="writing…")
                             with client.write_errors():
+                                gl = client.gitlab(write=True)
                                 changes = apply_mod.apply(gl, parsed)
                             refetch()
                             st["extra"] = None

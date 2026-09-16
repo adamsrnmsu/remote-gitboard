@@ -23,9 +23,9 @@ scripts/bulk_demo.py                # 5 stress boards on the local instance
 CLI-only (no make target): `migrate-comments SRC DST... [--close-source]` —
 destinations are iids or `group/project#iid`; `pull --base` (also writes an
 untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
-`--force` (overwrite); `show --from FILE` and `plan FILE --against BASE`,
-the no-network pair for a container: the pulled YAML is the board, the agent
-edits it, the host runs `plan` then `apply`;
+`--force` (overwrite); `show --from FILE`, `plan FILE --against BASE`,
+`tui --from FILE` — the no-network trio for a container: the pulled YAML is
+the board, the agent edits it, the host runs `plan` then `apply`;
 `ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI

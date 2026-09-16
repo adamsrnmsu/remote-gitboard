@@ -142,6 +142,7 @@ gitboard pull group/project --notes --force  # …with comments; overwrite (refr
 gitboard plan boards/team.yaml           # what would change
 gitboard plan team.yaml --against team.yaml.base  # same, no network
 gitboard show --from boards/team.yaml    # render a YAML as the board, no network
+gitboard tui --from boards/team.yaml     # the TUI on that YAML, no network
 gitboard ingest tasks.md --into boards/team.yaml  # tasks.md -> issues + notes
 gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
 gitboard migrate-comments 12 34 35       # copy #12's comments onto #34 and #35
