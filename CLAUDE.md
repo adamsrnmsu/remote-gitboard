@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Goal — judge every change against this
+
+A task-tracking experience for the team that **offloads cognitive burden from
+the lead**, **keeps up with the pace of AI-driven work**, and **builds in the
+verification that pace demands**. The board must stay truthful without the
+lead curating it by hand; agents do the reading, sorting, drafting and
+staging; the human does review and decisions. Verification is a first-class
+state, not an afterthought: work an agent produced is not done until a person
+has checked it and the board shows that. If a feature does not reduce what
+the lead has to hold in their head, or does not make the board more truthful
+or verification cheaper, it does not belong here.
+
 ## Commands
 
 ```bash
