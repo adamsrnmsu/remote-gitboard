@@ -189,7 +189,8 @@ by adding strings under that issue's `notes:`, and `apply` posts each one
 once. A `tasks.md` from another project's agent — a heading per person,
 `- [ ]` tasks with verify steps, an optional `**Feedback**` block — goes in
 with `ingest`: open tasks land in `Verify`, checked ones in `Done`, feedback
-becomes an attributed note, and every issue gets a `Source:` footer.
+becomes an attributed note, and every issue gets a `Source:` footer. Full
+runbook: `make docs`, then `docs/_build/html/airgap.html`.
 
 `tui` is the interactive loop: `r` reload, `b` switch board — the
 project's own, plus any board a `boards/*.yaml` defines, other projects

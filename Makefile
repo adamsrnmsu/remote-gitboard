@@ -16,7 +16,7 @@ PROJECT    ?=
 SPEC       ?=
 GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help install activate link unlink up wait down reset logs seed show plan apply test fmt lint clean
+.PHONY: help install activate link unlink up wait down reset logs seed show tui snapshot report cron pull plan apply test fmt lint docs clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -24,7 +24,7 @@ help:
 $(VENV)/bin/pytest: pyproject.toml
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -q --upgrade pip
-	$(VENV)/bin/pip install -q ".[dev]"
+	$(VENV)/bin/pip install -q ".[dev,docs]"
 	@echo "installed into $(VENV)"
 
 install: $(VENV)/bin/pytest  ## create .venv and install everything
@@ -105,9 +105,12 @@ fmt: install  ## format (ruff format is black, same style)
 lint: install  ## lint, --fix to apply the safe fixes
 	$(VENV)/bin/ruff check .
 
+docs: install  ## build the HTML docs into docs/_build
+	PYTHONPATH=src $(VENV)/bin/sphinx-build -W -b html docs docs/_build/html
+
 .env:
 	@echo "no .env — cp .env.example .env and set GITLAB_ROOT_PASSWORD" >&2; exit 1
 
 clean:  ## remove venv, caches, and bytecode
-	rm -rf $(VENV) .pytest_cache .ruff_cache
+	rm -rf $(VENV) .pytest_cache .ruff_cache docs/_build
 	find . -name __pycache__ -not -path './$(VENV)/*' -exec rm -rf {} + 2>/dev/null || true

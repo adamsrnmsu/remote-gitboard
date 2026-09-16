@@ -26,7 +26,8 @@ untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
 `--force` (overwrite); `show --from FILE`, `plan FILE --against BASE`,
 `tui --from FILE` — the no-network trio for a container: the pulled YAML is
 the board, the agent edits it, the host runs `plan` then `apply`;
-`ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only). See README "Offline".
+`ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only).
+Docs: `make docs` (Sphinx, `docs/`). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI
 directly: `PYTHONPATH=src .venv/bin/python -m gitboard.cli show grp/proj -m`.

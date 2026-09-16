@@ -1,0 +1,124 @@
+# Working where GitLab is unreachable
+
+The setup this page assumes: a Linux container with Claude Code, git, python,
+and this repo checked out, but **no route to GitLab**. Files move in and out
+by hand (a bind mount or `docker cp`). The host can reach GitLab and does
+every read and write; the container thinks.
+
+The YAML is the staged change. That is the whole trick: everything the
+container produces is a file diff the host can `plan` against the live board
+before writing.
+
+## What "unreachable" costs
+
+| Needs GitLab | Works from files only |
+|---|---|
+| `show`, `plan`, `apply`, `pull`, `snapshot`, `tui`, `migrate-comments` | `show --from`, `plan --against`, `tui --from`, `report`, `ingest`, `bd` |
+
+Nothing in the right-hand column opens a connection or looks for a token.
+
+## Host, before
+
+```bash
+gitboard pull group/project --base --notes    # boards/x.yaml + boards/x.yaml.base
+gitboard snapshot group/project               # snapshots.jsonl, so report works inside
+```
+
+`--base` keeps an untouched copy for `plan --against`. `--notes` includes each
+issue's discussion as a read-only `discussion:` list, so the agent sees the
+team's comments, not just the labels.
+
+**Beads.** `bd` needs git only for `bd init`, so initialise on the host and
+copy `.beads/` in. Inside, `bd metrics off`, set `BD_NON_INTERACTIVE=1`, and
+do not run `bd doctor` (it wants the network).
+
+**Python dependencies.** If the container has a pip index, `make install`
+works as usual. If not, vendor wheels on the host:
+
+```bash
+.venv/bin/python -m pip download --dest wheels --platform manylinux2014_x86_64 --only-binary=:all: --python-version 3.11 --implementation cp python-gitlab pyyaml typer rich python-dotenv
+```
+
+arm64: `manylinux2014_aarch64`. `--python-version` must match the
+container's interpreter. glibc containers only (no Alpine/musl). Then inside:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install --no-index --find-links wheels/ python-gitlab pyyaml typer rich python-dotenv
+```
+
+**bd binary.** The Linux tarball, e.g. `beads_1.3.0_linux_amd64.tar.gz` from
+<https://github.com/gastownhall/beads/releases>. glibc-linked, single
+binary, no other files needed.
+
+**Claude Code on a locked-down box.** Per
+<https://code.claude.com/docs/en/network-config> and
+<https://code.claude.com/docs/en/env-vars>:
+
+```bash
+export HTTPS_PROXY=http://proxy:3128            # if API egress goes through one
+export ANTHROPIC_BASE_URL=https://...           # if a gateway fronts the API
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export DISABLE_AUTOUPDATER=1
+```
+
+**Never copy `.env` in.** The container has nothing to do with a token, and
+the read-only guarantee inside is that there is no token to find.
+
+## Manifest
+
+| In | Out |
+|---|---|
+| repo checkout (no `.env`) | `boards/x.yaml` (edited) |
+| `boards/x.yaml`, `boards/x.yaml.base` | `issues.jsonl` (`bd export`) |
+| `snapshots.jsonl` | any `tasks.md` the agent rewrote |
+| `.beads/` (host-initialised) | the hand-back list of host commands |
+| `wheels/` (if no pip index) | |
+| `bd` binary | |
+| `tasks.md` files to ingest | |
+| a project `CLAUDE.md` for the container, see {doc}`agent-briefing` | |
+
+## Inside
+
+```bash
+/board boards/x.yaml                                   # the AI pass, offline
+gitboard show --from boards/x.yaml                     # the board, from the file
+gitboard plan boards/x.yaml --against boards/x.yaml.base   # what is staged
+gitboard tui --from boards/x.yaml                      # r reload, e edit, p diff, q
+gitboard ingest tasks.md --into boards/x.yaml          # tasks -> issues
+bd ready                                               # the agent's own queue
+```
+
+The agent edits `boards/x.yaml` only: labels, assignees, due dates, new
+issues without `iid`, and `notes:` as replies to the team. It never runs
+`apply`.
+
+## Host, after
+
+Copy `boards/x.yaml` (and `issues.jsonl`) back. Then:
+
+```bash
+gitboard plan boards/x.yaml     # live diff: also shows anything that drifted since the pull
+gitboard apply boards/x.yaml    # write it; notes are posted, existing bodies skipped
+bd import issues.jsonl          # additive
+```
+
+`plan` against the live board is the safety net: an issue the team moved
+while the container was thinking shows up here, before anything is written.
+
+Inside, export with `bd export --all -o issues.jsonl`. Import is additive
+and deletions do not propagate, so close beads instead of deleting them.
+
+Run any `migrate-comments` lines from the Hand back section yourself.
+
+## Next round: what the team did
+
+```bash
+mv boards/x.yaml.base boards/x.yaml.base.old
+gitboard pull group/project --force --base --notes
+gitboard plan boards/x.yaml --against boards/x.yaml.base.old   # what moved on GitLab
+gitboard report group/project                                  # from the snapshot log
+```
+
+The `--against` diff of the new pull versus the old base is the team's
+changes, label by label. Then the round starts again from
+[Host, before](#host-before).

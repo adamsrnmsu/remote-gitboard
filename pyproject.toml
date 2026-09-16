@@ -17,6 +17,11 @@ gitboard = "gitboard.cli:app"
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
+docs = ["sphinx", "myst-parser", "shibuya"]
+
+[project.urls]
+Homepage = "https://github.com/adamsrnmsu/remote-gitboard"
+Source = "https://github.com/adamsrnmsu/remote-gitboard"
 
 [build-system]
 requires = ["hatchling"]
