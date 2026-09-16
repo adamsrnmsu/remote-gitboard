@@ -142,6 +142,7 @@ gitboard pull group/project --notes --force  # …with comments; overwrite (refr
 gitboard plan boards/team.yaml           # what would change
 gitboard plan team.yaml --against team.yaml.base  # same, no network
 gitboard show --from boards/team.yaml    # render a YAML as the board, no network
+gitboard ingest tasks.md --into boards/team.yaml  # tasks.md -> issues + notes
 gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
 gitboard migrate-comments 12 34 35       # copy #12's comments onto #34 and #35
 gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
@@ -184,7 +185,10 @@ scans `boards/` mistakes it for a spec.
 The board is also the conversation. `pull --notes` carries each issue's
 comments along as a read-only `discussion:` list; you (or the agent) answer
 by adding strings under that issue's `notes:`, and `apply` posts each one
-once.
+once. A `tasks.md` from another project's agent — a heading per person,
+`- [ ]` tasks with verify steps, an optional `**Feedback**` block — goes in
+with `ingest`: open tasks land in `Verify`, checked ones in `Done`, feedback
+becomes an attributed note, and every issue gets a `Source:` footer.
 
 `tui` is the interactive loop: `r` reload, `b` switch board — the
 project's own, plus any board a `boards/*.yaml` defines, other projects

@@ -26,6 +26,7 @@ from rich.table import Table
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import client
+from gitboard import ingest as ingest_mod
 from gitboard import report as report_mod
 from gitboard.config import (
     FILENAME,
@@ -407,6 +408,53 @@ def pull(
             f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
             + (f" --against {target}.base" if base else "")
         )
+
+    _run(go)
+
+
+@app.command()
+def ingest(
+    tasks: str = typer.Argument(
+        ..., help="A tasks.md: a heading per person, checkboxes."
+    ),
+    into: str | None = typer.Option(
+        None, "--into", help="Board YAML to fold it into. Defaults to the config spec."
+    ),
+    source: str | None = typer.Option(
+        None, "--source", help="Lineage label in the Source footer. Default: the file."
+    ),
+    column: str = typer.Option("Verify", "--column", help="Column for open tasks."),
+    done: str = typer.Option("Done", "--done", help="Column for checked tasks."),
+):
+    """Fold a tasks.md into a board YAML. Local files only, never GitLab."""
+
+    def go():
+        spec_path = _need(into, "spec", "spec file")
+        spec = apply_mod.load(spec_path)
+        try:
+            text = Path(tasks).read_text()
+        except OSError as e:
+            raise ConfigError(f"cannot read {tasks}: {e.strerror}") from e
+        parsed = ingest_mod.parse(text)
+        if not parsed:
+            raise ConfigError(f"{tasks}: no `- [ ]` tasks found")
+        today = datetime.now(UTC).date().isoformat()
+        out = ingest_mod.merge(
+            spec, parsed, source or _shortest(tasks), today, column=column, done=done
+        )
+        # ponytail: safe_dump drops YAML comments; pulled specs have none,
+        # hand-written ones lose theirs — fine until someone minds
+        Path(spec_path).write_text(apply_mod.dump(spec))
+        err().print(
+            f"[added]{out['added']} issue(s) added[/], {out['moved']} moved to {done}, "
+            f"{out['notes']} note(s) staged -> {_shortest(spec_path)}"
+        )
+        if out["unmapped"]:
+            err().print(
+                f"[muted]no username for {', '.join(out['unmapped'])} — add them "
+                f"under `people:` in {_shortest(spec_path)} to assign[/]"
+            )
+        err().print(f"[muted]next: gitboard plan {_shortest(spec_path)}[/]")
 
     _run(go)
 

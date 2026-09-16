@@ -25,7 +25,8 @@ destinations are iids or `group/project#iid`; `pull --base` (also writes an
 untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
 `--force` (overwrite); `show --from FILE` and `plan FILE --against BASE`,
 the no-network pair for a container: the pulled YAML is the board, the agent
-edits it, the host runs `plan` then `apply`. See README "Offline".
+edits it, the host runs `plan` then `apply`;
+`ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI
 directly: `PYTHONPATH=src .venv/bin/python -m gitboard.cli show grp/proj -m`.
@@ -81,6 +82,11 @@ PYTHONPATH away.**
 - **`report.py`** — reads `snapshots.jsonl`, no network: batches -> first/last
   diff -> per-assignee tally; `commit_counts` shells to `git log` and
   `match_author` joins heuristically (name or email local part).
+- **`ingest.py`** — pure: `parse` a tasks.md (heading per person, `- [ ]`
+  tasks, verify lines, optional `**Feedback**`) and `merge` it into a spec:
+  new titles become issues in `Verify` (checked -> `Done`), feedback becomes
+  an attributed staged note, every entry gets a `Source:` footer. Identity is
+  the title, like apply, so re-ingesting is a no-op.
 - **`apply.py`** — the only writer (`apply`, `migrate_comments`, `close_issue`), and the
   spec schema's home: `spec_from_board`/`dump` are `pull`'s read direction,
   built so pull-then-plan is always empty. `diff(spec, have)` is the pure
@@ -169,7 +175,7 @@ edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
 ## The AI pass writes now
 
 `.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
-and edit `boards/*.yaml`. Staged `notes:` widen what `apply` can
+`ingest`, and edit `boards/*.yaml`. Staged `notes:` widen what `apply` can
 write to comments — still additive, still shown in the plan table first. The contract is the flow, stated in the command: YAML
 edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
 additive-only (nothing deleted or closed), which bounds the blast radius;

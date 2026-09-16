@@ -1,7 +1,7 @@
 ---
 description: Read a GitLab board, report progress, and — after a go-ahead — apply the moves.
 argument-hint: <group/project> [board name]  |  boards/<file>.yaml (offline)
-allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Edit(boards/*.yaml)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli ingest:*), Edit(boards/*.yaml)
 ---
 
 Run `PYTHONPATH=src .venv/bin/python -m gitboard.cli show $ARGUMENTS --markdown`
@@ -21,7 +21,11 @@ edit an `iid`, and leave it off issues you add. `report` needs only
 per issue (the team's comments, read-only — never edit it). You answer by
 appending to that issue's `notes:` — plain strings, one per comment; `apply`
 posts each once and skips any body already on the issue. Address feedback
-there, not in a tasks file.
+there, not in a tasks file. If the user drops a `tasks.md` (headings per
+person, `- [ ]` tasks, verify steps, optional **Feedback**), run
+`ingest tasks.md --into <spec>` first: it adds each task as an issue in
+`Verify` (checked -> `Done`), stages feedback as attributed notes, and stamps
+a `Source:` footer. Then review what it added like any other edit.
 
 You have write access, through exactly one path: edit the YAML in `boards/`
 that defines the board, run `plan`, show its pending table, and wait for a
