@@ -22,7 +22,8 @@ scripts/bulk_demo.py                # 5 stress boards on the local instance
 
 CLI-only (no make target): `migrate-comments SRC DST... [--close-source]` —
 destinations are iids or `group/project#iid`; `pull --base` (also writes an
-untouched `<file>.base`); `show --from FILE` and `plan FILE --against BASE`,
+untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
+`--force` (overwrite); `show --from FILE` and `plan FILE --against BASE`,
 the no-network pair for a container: the pulled YAML is the board, the agent
 edits it, the host runs `plan` then `apply`. See README "Offline".
 
@@ -147,7 +148,12 @@ absence caused real bugs, each pinned by tests — **don't remove them**:
 
 Issue identity is the **title**. Renaming a title creates a second issue.
 Apply is additive: nothing is deleted or closed, so removing an issue from the
-YAML leaves it on the board. Closing exists but only as an explicit act —
+YAML leaves it on the board. Per-issue `notes:` are staged comments: `apply`
+posts each body not already on the issue (`ensure_notes`, same idempotency
+rule as `migrate_comments`); `discussion:` is what `pull --notes` read and is
+never written. `plan`/`diff` report notes as `("added", "note", ...)`; the
+online `plan` fetches notes only for issues that stage some. `people:`,
+`iid`, `discussion:` are spec keys apply ignores. Closing exists but only as an explicit act —
 `migrate-comments --close-source` / `close_issue()` — never as a side effect
 of `apply`. `migrate_comments` skips system notes and the `superseded by`
 breadcrumb `close_issue` leaves, or re-runs would copy the bookkeeping.
@@ -163,7 +169,8 @@ edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
 ## The AI pass writes now
 
 `.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
-and edit `boards/*.yaml`. The contract is the flow, stated in the command: YAML
+and edit `boards/*.yaml`. Staged `notes:` widen what `apply` can
+write to comments — still additive, still shown in the plan table first. The contract is the flow, stated in the command: YAML
 edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
 additive-only (nothing deleted or closed), which bounds the blast radius;
 `migrate-comments` and its `--close-source` are deliberately NOT in the

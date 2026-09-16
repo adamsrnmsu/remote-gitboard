@@ -138,6 +138,7 @@ gitboard show --markdown                 # stable output, for pipes and the AI
 gitboard tui group/project               # interactive: reload, snapshot, apply
 gitboard pull group/project              # save the board as boards/<name>.yaml
 gitboard pull group/project --base       # …and an untouched .base copy, for offline
+gitboard pull group/project --notes --force  # …with comments; overwrite (refresh)
 gitboard plan boards/team.yaml           # what would change
 gitboard plan team.yaml --against team.yaml.base  # same, no network
 gitboard show --from boards/team.yaml    # render a YAML as the board, no network
@@ -179,6 +180,11 @@ gitboard apply boards/x.yaml             # host: write it
 Neither `--from` nor `--against` ever opens a connection or looks for a
 token. The `.base` copy is gitignored and is not a `*.yaml`, so nothing that
 scans `boards/` mistakes it for a spec.
+
+The board is also the conversation. `pull --notes` carries each issue's
+comments along as a read-only `discussion:` list; you (or the agent) answer
+by adding strings under that issue's `notes:`, and `apply` posts each one
+once.
 
 `tui` is the interactive loop: `r` reload, `b` switch board — the
 project's own, plus any board a `boards/*.yaml` defines, other projects

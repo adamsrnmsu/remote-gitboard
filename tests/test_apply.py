@@ -477,3 +477,87 @@ def test_offline_plan_and_show_never_open_gitlab(monkeypatch, tmp_path):
     assert res.exit_code == 0, res.output
     assert "- #1 one — @unassigned" in res.output
 
+
+# --- notes: the board as the conversation ----------------------------------
+
+
+def noted_issue(title, notes=(), **kw):
+    issue = FakeIssue(title, **kw)
+    issue.notes = FakeNotes([fake_note(b) for b in notes])
+    return issue
+
+
+def test_pull_with_notes_carries_the_discussion_but_not_system_notes():
+    project, board, columns = board_fixture()
+    issue = columns[1][1][0]
+    issue.notes = FakeNotes(
+        [
+            fake_note("added label ~Doing", system=True),
+            fake_note("looks wrong\n", author="bob", created="2026-08-03T09:00:00Z"),
+        ]
+    )
+    spec = apply.spec_from_board(project, board, columns, notes=True)
+    assert spec["issues"][0]["discussion"] == [
+        {"by": "bob", "at": "2026-08-03", "body": "looks wrong"}
+    ]
+    assert (
+        "discussion" not in apply.spec_from_board(project, board, columns)["issues"][0]
+    )
+
+
+def writable_project(issue):
+    """A FakeProject with enough surface for apply() itself to run through:
+    labels with colors, a board whose lists already hold the columns."""
+    project = FakeProject(
+        labels=["Doing", "Blocked"], boards=["Dev Board"], issues=[issue]
+    )
+    for label in project.labels.list():
+        label.color, label.id = "#428bca", 1
+    project.boards.list()[0].id = 1
+    lists = [types.SimpleNamespace(label={"name": n}) for n in ("Doing", "Blocked")]
+    board = types.SimpleNamespace(id=1, name="Dev Board", lists=_lister(lists))
+    project.boards.get = lambda _id: board
+    return project
+
+
+def test_staged_note_is_planned_online_and_posted_once(monkeypatch):
+    issue = noted_issue("one", labels=["Doing"], notes=["old comment"])
+    spec = {
+        **SPEC,
+        "issues": [{"title": "one", "labels": ["Doing"], "notes": ["reply\n"]}],
+    }
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert apply.plan(gl, spec) == [("added", "note", "one: reply")]
+    assert apply.apply(gl, spec) == [("added", "note", "one: reply")]
+    assert [n.body for n in issue.notes.notes] == ["old comment", "reply"]
+    assert apply.plan(gl, spec) == []
+    assert apply.apply(gl, spec) == []
+
+
+def test_staged_note_offline_skips_what_the_base_discussion_already_has():
+    base = {
+        **SPEC,
+        "issues": [
+            {
+                "title": "one",
+                "labels": ["Doing"],
+                "discussion": [{"by": "bob", "at": "2026-08-03", "body": "seen"}],
+            }
+        ],
+    }
+    edited = {
+        **SPEC,
+        "issues": [{"title": "one", "labels": ["Doing"], "notes": ["seen", "new"]}],
+    }
+    assert apply.diff(edited, apply.have_from_spec(base)) == [
+        ("added", "note", "one: new")
+    ]
+
+
+def test_notes_on_a_new_issue_are_planned_with_it():
+    spec = {**SPEC, "issues": [{"title": "fresh", "notes": ["hello"]}]}
+    assert apply.diff(spec, apply.have_from_spec(SPEC)) == [
+        ("added", "issue", "fresh"),
+        ("added", "note", "fresh: hello"),
+    ]
+    assert ("added", "note", "fresh: hello") in apply.diff(spec, None)

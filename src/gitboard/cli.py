@@ -351,14 +351,15 @@ def _write_snapshot(proj, board, out_path="snapshots.jsonl"):
     return len(records)
 
 
-def _pull_spec(proj, board, columns, out_file):
-    """Write the live board as YAML. Refuses to clobber an existing file."""
-    if Path(out_file).exists():
+def _pull_spec(proj, board, columns, out_file, notes=False, force=False):
+    """Write the live board as YAML. Refuses to clobber unless told to."""
+    if Path(out_file).exists() and not force:
         raise ConfigError(
-            f"{out_file} already exists — edit it, or pass a different --out"
+            f"{out_file} already exists — edit it, pass a different --out, "
+            "or --force to overwrite"
         )
     Path(out_file).parent.mkdir(parents=True, exist_ok=True)
-    spec = apply_mod.spec_from_board(proj, board, columns)
+    spec = apply_mod.spec_from_board(proj, board, columns, notes=notes)
     Path(out_file).write_text(apply_mod.dump(spec))
     return out_file
 
@@ -376,6 +377,15 @@ def pull(
         help="Also keep an untouched copy as <out>.base, for `plan --against` "
         "somewhere with no network.",
     ),
+    notes: bool = typer.Option(
+        False,
+        "--notes",
+        help="Include each issue's comments as a read-only `discussion:` list "
+        "(one more request per issue).",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing file (refresh a pull)."
+    ),
 ):
     """Save the live board as YAML — the file plan/apply read. Reads only."""
 
@@ -385,12 +395,14 @@ def pull(
             proj, board = board_mod.fetch(path, board_name or get_config().board)
             columns = board_mod.board_columns(proj, board)
             target = out or f"boards/{path.rsplit('/', 1)[-1]}.yaml"
-            _pull_spec(proj, board, columns, target)
+            _pull_spec(proj, board, columns, target, notes=notes, force=force)
             if base:
                 # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
                 # and the /board command may only edit *.yaml — the copy
                 # stays pristine
-                _pull_spec(proj, board, columns, target + ".base")
+                _pull_spec(
+                    proj, board, columns, target + ".base", notes=notes, force=force
+                )
         err().print(
             f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
             + (f" --against {target}.base" if base else "")

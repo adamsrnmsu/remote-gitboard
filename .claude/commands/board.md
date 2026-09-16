@@ -17,6 +17,12 @@ informational: identity is still the title, so never retitle, never invent or
 edit an `iid`, and leave it off issues you add. `report` needs only
 `snapshots.jsonl`, so it works offline too when the file is present.
 
+**The board is the conversation.** A pulled YAML may carry `discussion:`
+per issue (the team's comments, read-only — never edit it). You answer by
+appending to that issue's `notes:` — plain strings, one per comment; `apply`
+posts each once and skips any body already on the issue. Address feedback
+there, not in a tasks file.
+
 You have write access, through exactly one path: edit the YAML in `boards/`
 that defines the board, run `plan`, show its pending table, and wait for a
 go-ahead in this conversation; on a yes, run `apply --yes`. Never run `apply`
@@ -52,6 +58,9 @@ No questions is a valid answer. Do not manufacture them to fill the section.
 ## Suggested moves
 Concrete label changes, each with its reason:
 `#iid: Doing -> Blocked (waiting on #other)`
+
+Replies you staged under `notes:` count as moves: list them as
+`#iid: note — first line…`.
 
 If one issue looks superseded by another (retitled duplicate, split work,
 a stale twin of a newer issue), suggest the migration as a copyable line —

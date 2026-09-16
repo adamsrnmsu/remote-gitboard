@@ -119,12 +119,30 @@ def close_issue(gl, path, iid, superseded_by=()):
     return True
 
 
-def spec_from_board(project, board, columns):
+def discussion(issue):
+    """An issue's comments as [{by, at, body}], oldest first, no system notes.
+
+    Pulled into the spec as `discussion:` so the team's feedback travels with
+    the board to wherever GitLab is unreachable. apply() never reads it.
+    """
+    return [
+        {
+            "by": n.author["username"],
+            "at": n.created_at[:10],
+            "body": norm_text(n.body),
+        }
+        for n in sorted(issue.notes.list(all=True), key=lambda n: n.created_at)
+        if not n.system
+    ]
+
+
+def spec_from_board(project, board, columns, notes=False):
     """The live board as an apply()-shaped spec — the pull direction.
 
     Built so the roundtrip settles: plan() of the result against the same
     board is empty. Backlog is synthesised from unlabelled issues, so it is
     not a column here; empty fields are dropped to keep the YAML editable.
+    `notes=True` adds each issue's discussion (one more request per issue).
     """
     labels = {x.name: x for x in project.labels.list(all=True)}
     seen = {}
@@ -145,6 +163,8 @@ def spec_from_board(project, board, columns):
             entry["due_date"] = issue.due_date
         if issue.assignee:
             entry["assignee"] = issue.assignee["username"]
+        if notes and (talk := discussion(issue)):
+            entry["discussion"] = talk
         spec_issues.append(entry)
 
     return {
@@ -295,6 +315,36 @@ def ensure_issues(project, issues, record, users):
             record("changed", "issue", f"{title}: {', '.join(changed)}")
 
 
+def staged_notes(spec_issue):
+    """`notes:` bodies to post, normalised; empty entries dropped."""
+    return [b for b in map(norm_text, spec_issue.get("notes") or []) if b]
+
+
+def note_line(title, body):
+    return f"{title}: {body.splitlines()[0][:60]}"
+
+
+def ensure_notes(project, issues, record):
+    """Post each staged note whose body is not already on the issue.
+
+    Same idempotency as migrate_comments: re-running posts nothing. Only
+    issues with `notes:` cost a request, so a plain apply stays cheap.
+    """
+    wanted = [(i["title"], staged_notes(i)) for i in issues]
+    wanted = [(title, bodies) for title, bodies in wanted if bodies]
+    if not wanted:
+        return
+    have = {i.title: i for i in project.issues.list(state="opened", all=True)}
+    for title, bodies in wanted:
+        issue = have[title]  # ensure_issues just created any that were missing
+        posted = {norm_text(n.body) for n in issue.notes.list(all=True)}
+        for body in bodies:
+            if body in posted:
+                continue
+            issue.notes.create({"body": body})
+            record("added", "note", note_line(title, body))
+
+
 def apply(gl, spec, on_change=None):
     """Write the spec. Returns the list of (kind, what, detail) changes."""
     changes = []
@@ -312,6 +362,7 @@ def apply(gl, spec, on_change=None):
     labels = ensure_labels(project, spec["columns"], record)
     ensure_board(project, spec["board"], spec["columns"], labels, record)
     ensure_issues(project, spec["issues"], record, users)
+    ensure_notes(project, spec["issues"], record)
     return changes
 
 
@@ -327,6 +378,14 @@ def plan(gl, spec):
         "labels": {x.name for x in project.labels.list(all=True)},
         "boards": {b.name for b in project.boards.list(all=True)},
         "issues": {title: current_issue(i) for title, i in opened.items()},
+        # only issues with staged notes are worth a request
+        "notes": {
+            i["title"]: {
+                norm_text(n.body) for n in opened[i["title"]].notes.list(all=True)
+            }
+            for i in spec["issues"]
+            if staged_notes(i) and i["title"] in opened
+        },
     }
     return diff(spec, have)
 
@@ -341,18 +400,31 @@ def have_from_spec(base):
         "labels": {c["name"] for c in base["columns"]},
         "boards": {base["board"]},
         "issues": {i["title"]: wanted_issue(i) for i in base["issues"]},
+        # what the base already carries: pulled discussion plus its own
+        # staged notes, so an already-staged reply is not reported twice
+        "notes": {
+            i["title"]: {norm_text(d["body"]) for d in i.get("discussion") or []}
+            | set(staged_notes(i))
+            for i in base["issues"]
+        },
     }
 
 
 def diff(spec, have):
     """Pure: the (kind, what, detail) list apply would write. `have` is
-    {"labels": set, "boards": set, "issues": {title: current_issue-shaped}},
-    or None for a project that does not exist yet."""
+    {"labels": set, "boards": set, "issues": {title: current_issue-shaped},
+    "notes": {title: {bodies already posted}}}, or None for a project that
+    does not exist yet."""
     if have is None:
         pending = [("added", "project", spec["project"])]
         pending += [("added", "label", c["name"]) for c in spec["columns"]]
         pending += [("added", "board", spec["board"])]
         pending += [("added", "issue", i["title"]) for i in spec["issues"]]
+        pending += [
+            ("added", "note", note_line(i["title"], b))
+            for i in spec["issues"]
+            for b in staged_notes(i)
+        ]
         return pending
 
     pending = [
@@ -370,6 +442,11 @@ def diff(spec, have):
         want, now = wanted_issue(spec_i), have["issues"][title]
         if changed := [k for k, v in want.items() if now[k] != v]:
             pending.append(("changed", "issue", f"{title}: {', '.join(changed)}"))
+    posted = have.get("notes", {})
+    for spec_i in spec["issues"]:
+        for body in staged_notes(spec_i):
+            if body not in posted.get(spec_i["title"], set()):
+                pending.append(("added", "note", note_line(spec_i["title"], body)))
     return pending
 
 
