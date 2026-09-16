@@ -137,7 +137,10 @@ gitboard show -n 20                      # 20 issues per column
 gitboard show --markdown                 # stable output, for pipes and the AI
 gitboard tui group/project               # interactive: reload, snapshot, apply
 gitboard pull group/project              # save the board as boards/<name>.yaml
+gitboard pull group/project --base       # …and an untouched .base copy, for offline
 gitboard plan boards/team.yaml           # what would change
+gitboard plan team.yaml --against team.yaml.base  # same, no network
+gitboard show --from boards/team.yaml    # render a YAML as the board, no network
 gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
 gitboard migrate-comments 12 34 35       # copy #12's comments onto #34 and #35
 gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
@@ -154,7 +157,28 @@ overdue, and names the YAML that defines the board.
 
 `pull` is `apply` in reverse: it writes the live board as a YAML spec
 (refusing to clobber an existing file), so a board born in the web UI
-becomes editable text. `pull` then `plan` is always a no-op.
+becomes editable text. `pull` then `plan` is always a no-op. Each pulled
+issue carries its `iid` for reference; `plan` and `apply` ignore it.
+
+### Offline: reason in a container, apply from the host
+
+The YAML is the staged change. When the place you think (a container with
+the repo but no network, no git) is not the place that can write:
+
+```bash
+gitboard pull group/project --base       # host: boards/x.yaml + boards/x.yaml.base
+# copy boards/ (and snapshots.jsonl, if you want `report`) into the container
+/board boards/x.yaml                     # container: the AI pass, offline
+gitboard show --from boards/x.yaml       # container: the board, from the file
+gitboard plan boards/x.yaml --against boards/x.yaml.base   # container: staged diff
+# copy boards/x.yaml back
+gitboard plan boards/x.yaml              # host: live diff — catches drift since the pull
+gitboard apply boards/x.yaml             # host: write it
+```
+
+Neither `--from` nor `--against` ever opens a connection or looks for a
+token. The `.base` copy is gitignored and is not a `*.yaml`, so nothing that
+scans `boards/` mistakes it for a spec.
 
 `tui` is the interactive loop: `r` reload, `b` switch board — the
 project's own, plus any board a `boards/*.yaml` defines, other projects
@@ -262,9 +286,11 @@ which made every apply report a phantom description change.
 ```
 /board group/project
 /board group/project "Dev Board"
+/board boards/x.yaml                # offline: the file is the board
 ```
 
-Four sections: Progress, Needs follow-up, Questions for you, Suggested moves.
+Four sections: Progress, Needs follow-up, Questions for you, Suggested moves
+(plus Hand back, offline: the `plan`/`apply` lines to run on the host).
 The command can also **apply** the moves, through one path only: it edits the
 board's YAML, runs `plan`, shows you the pending table, and waits for a yes
 in the conversation before `apply --yes`. `apply` is additive-only — nothing

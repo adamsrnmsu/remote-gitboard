@@ -1,4 +1,4 @@
-# Edit this, then: ./apply.py boards/test.yaml --dry-run   (then without --dry-run)
+# Edit this, then: gitboard plan boards/test.yaml   (then gitboard apply)
 project: test/test
 board: Dev Board
 

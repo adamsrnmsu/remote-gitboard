@@ -21,7 +21,10 @@ scripts/bulk_demo.py                # 5 stress boards on the local instance
 ```
 
 CLI-only (no make target): `migrate-comments SRC DST... [--close-source]` —
-destinations are iids or `group/project#iid`.
+destinations are iids or `group/project#iid`; `pull --base` (also writes an
+untouched `<file>.base`); `show --from FILE` and `plan FILE --against BASE`,
+the no-network pair for a container: the pulled YAML is the board, the agent
+edits it, the host runs `plan` then `apply`. See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI
 directly: `PYTHONPATH=src .venv/bin/python -m gitboard.cli show grp/proj -m`.
@@ -79,7 +82,10 @@ PYTHONPATH away.**
   `match_author` joins heuristically (name or email local part).
 - **`apply.py`** — the only writer (`apply`, `migrate_comments`, `close_issue`), and the
   spec schema's home: `spec_from_board`/`dump` are `pull`'s read direction,
-  built so pull-then-plan is always empty. Uses `Config.token(write=True)`: the
+  built so pull-then-plan is always empty. `diff(spec, have)` is the pure
+  core; `plan` builds `have` from the API, `have_from_spec` from a pulled
+  YAML (offline). Assignees compare by username on both sides; ids are
+  resolved by `resolve_users` before any write, never inside the diff. Uses `Config.token(write=True)`: the
   separate `GITLAB_WRITE_TOKEN` / `--write-token` / `gitlab-write-token`
   keychain slot, falling back to the read token when unset (a single `api`
   token is a valid setup). Two slots exist so a `read_api` token can be the
@@ -120,7 +126,9 @@ columns (the web UI does the same, no tiebreak invented); `Backlog` is
 synthesised for issues with no list label.
 
 `as_markdown` is the stable rendering the `/board` prompt parses. Changing its
-shape breaks that command — treat it as an interface.
+shape breaks that command — treat it as an interface. `columns_from_spec`
+builds the same column shape from a YAML so every renderer works offline;
+entries with no `iid` yet print as `(new)`.
 
 ## apply.py invariants
 
@@ -154,8 +162,8 @@ edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
 
 ## The AI pass writes now
 
-`.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`, and
-edit `boards/*.yaml`. The contract is the flow, stated in the command: YAML
+`.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
+and edit `boards/*.yaml`. The contract is the flow, stated in the command: YAML
 edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
 additive-only (nothing deleted or closed), which bounds the blast radius;
 `migrate-comments` and its `--close-source` are deliberately NOT in the

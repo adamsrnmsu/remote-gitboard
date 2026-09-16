@@ -6,6 +6,7 @@ label', so the column mapping has to be reassembled from board.lists +
 project.issues.
 """
 
+import types
 from datetime import date
 
 from rich.console import Group
@@ -43,12 +44,56 @@ def _urgency(issue):
     """Overdue first, then soonest due, then newest.
 
     Deterministic — the API's own order is not — and it means a truncated
-    column shows the issues you would have gone looking for.
+    column shows the issues you would have gone looking for. An issue with
+    no iid yet (a spec entry not applied) sorts last, in spec order.
     """
     return (
         not is_overdue(issue),
         issue.due_date or "9999-12-31",
-        -issue.iid,
+        -(issue.iid or 0),
+    )
+
+
+def ref(issue):
+    """`#12`, or `(new)` for a spec entry GitLab has not seen yet."""
+    return f"#{issue.iid}" if issue.iid else "(new)"
+
+
+def columns_from_spec(spec, url):
+    """board_columns, but from a pulled YAML — the no-network path.
+
+    Same shape, same Backlog rule, same sort, so every renderer works
+    unchanged. Issues are duck-typed; `url` is the GitLab base for the
+    per-issue links (only entries carrying an iid get one).
+    """
+    names = [c["name"] for c in spec["columns"]]
+    issues = []
+    for entry in spec["issues"]:
+        iid = entry.get("iid")
+        who = entry.get("assignee")
+        due = entry.get("due_date")
+        issues.append(
+            types.SimpleNamespace(
+                iid=iid,
+                title=entry["title"],
+                labels=list(entry.get("labels", [])),
+                description=entry.get("description") or "",
+                due_date=due.isoformat() if hasattr(due, "isoformat") else due,
+                assignee={"username": who} if who else None,
+                web_url=f"{url}/{spec['project']}/-/issues/{iid}" if iid else None,
+            )
+        )
+    backlog = [i for i in issues if not (set(i.labels) & set(names))]
+    cols = [("Backlog", backlog)]
+    cols += [(n, [i for i in issues if n in i.labels]) for n in names]
+    return [(name, sorted(col, key=_urgency)) for name, col in cols]
+
+
+def spec_stand_ins(spec):
+    """(project, board) look-alikes so the renderers need no API objects."""
+    return (
+        types.SimpleNamespace(path_with_namespace=spec["project"]),
+        types.SimpleNamespace(name=spec["board"]),
     )
 
 
@@ -67,18 +112,20 @@ def fetch(path, board_name=None):
     return project, project.boards.get(boards[0].id)
 
 
-def as_markdown(project, board):
+def as_markdown(project, board, columns=None):
     """The stable, parseable rendering. The /board prompt reads this."""
+    columns = board_columns(project, board) if columns is None else columns
     lines = [f"# {project.path_with_namespace} — {board.name}\n"]
-    for name, issues in board_columns(project, board):
+    for name, issues in columns:
         lines.append(f"## {name} ({len(issues)})\n")
         for i in issues:
             who = i.assignee["username"] if i.assignee else "unassigned"
             extra = [x for x in i.labels if x != name]
             tags = f" `{'` `'.join(extra)}`" if extra else ""
             due = f" due:{i.due_date}" if i.due_date else ""
-            lines.append(f"- #{i.iid} {i.title} — @{who}{due}{tags}")
-            lines.append(f"  {i.web_url}")
+            lines.append(f"- {ref(i)} {i.title} — @{who}{due}{tags}")
+            if i.web_url:
+                lines.append(f"  {i.web_url}")
         lines.append("")
     return "\n".join(lines)
 
@@ -87,7 +134,7 @@ def issue_line(issue, column):
     """One issue as a styled line. Extra labels are the ones from *other*
     columns — the column's own label is redundant inside it."""
     line = Text.assemble(
-        (f"#{issue.iid} ", "muted"),
+        (f"{ref(issue)} ", "muted"),
         issue.title,
         (
             f"  @{issue.assignee['username']}"
@@ -115,7 +162,7 @@ def summarise(columns):
     seen = {}
     for _, issues in columns:
         for issue in issues:
-            seen[issue.iid] = issue
+            seen[issue.iid or issue.title] = issue
     issues = list(seen.values())
     return {
         "issues": len(issues),
@@ -192,9 +239,9 @@ def board_view(project, board, limit=5, columns=None):
     return Group(tree, line), hidden
 
 
-def print_rich(project, board, spec_path=None, limit=5):
+def print_rich(project, board, spec_path=None, limit=5, columns=None):
     """The human rendering: the view, then the where-to-edit footer."""
-    view, hidden = board_view(project, board, limit)
+    view, hidden = board_view(project, board, limit, columns=columns)
     console = out()
     console.print()
     console.print(view)

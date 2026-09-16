@@ -203,3 +203,43 @@ def test_snapshot_records_assignee_and_backlog():
     )
     assert records[0]["assignee"] == "alice"
     assert records[0]["columns"] == ["Backlog"]
+
+
+# --- offline: columns from a pulled spec -----------------------------------
+
+
+SPEC = {
+    "project": "grp/proj",
+    "board": "Dev Board",
+    "columns": [{"name": "Doing"}, {"name": "Review"}],
+    "issues": [
+        {"title": "both", "iid": 3, "labels": ["Doing", "Review"]},
+        {"title": "loose", "iid": 4},
+        {"title": "doing", "iid": 5, "labels": ["Doing"], "assignee": "bob"},
+    ],
+}
+
+
+def test_columns_from_spec_matches_board_columns():
+    live = columns(
+        [
+            FakeIssue(3, ["Doing", "Review"]),
+            FakeIssue(4, []),
+            FakeIssue(5, ["Doing"]),
+        ],
+        [FakeList("Doing", 1), FakeList("Review", 2)],
+    )
+    offline = board.columns_from_spec(SPEC, "http://gl")
+    shape = lambda cols: [(n, [i.iid for i in issues]) for n, issues in cols]  # noqa: E731
+    assert shape(offline) == shape(live)
+    assert offline[0][0] == "Backlog"
+    assert offline[1][1][0].web_url == "http://gl/grp/proj/-/issues/5"
+
+
+def test_markdown_from_spec_handles_new_issues():
+    spec = {**SPEC, "issues": [{"title": "a"}, {"title": "b", "labels": ["Doing"]}]}
+    cols = board.columns_from_spec(spec, "http://gl")
+    text = board.as_markdown(*board.spec_stand_ins(spec), columns=cols)
+    assert "(new) a" in text and "(new) b" in text
+    assert "None" not in text
+    assert board.summarise(cols)["issues"] == 2

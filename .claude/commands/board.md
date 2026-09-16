@@ -1,11 +1,21 @@
 ---
 description: Read a GitLab board, report progress, and — after a go-ahead — apply the moves.
-argument-hint: <group/project> [board name]
+argument-hint: <group/project> [board name]  |  boards/<file>.yaml (offline)
 allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Edit(boards/*.yaml)
 ---
 
 Run `PYTHONPATH=src .venv/bin/python -m gitboard.cli show $ARGUMENTS --markdown`
 and analyse the board it prints. (Run `make install` first if .venv is missing.)
+
+**Offline mode.** If `$ARGUMENTS` ends in `.yaml`, there is no GitLab here
+(a container without network): the file *is* the board. Run
+`show --from $ARGUMENTS --markdown` instead, and for the staged diff
+`plan $ARGUMENTS --against $ARGUMENTS.base` (if the `.base` copy is missing,
+say so — you can show your edits but not a diff). Never run `apply` in
+offline mode; the host does that. `iid:` values come from `pull` and are
+informational: identity is still the title, so never retitle, never invent or
+edit an `iid`, and leave it off issues you add. `report` needs only
+`snapshots.jsonl`, so it works offline too when the file is present.
 
 You have write access, through exactly one path: edit the YAML in `boards/`
 that defines the board, run `plan`, show its pending table, and wait for a
@@ -15,7 +25,7 @@ write tools, no direct API calls. `apply` is additive-only: it never deletes
 or closes anything, and issues are matched by title, so never retitle an
 issue in the YAML (that creates a second issue).
 
-Report exactly these four sections, and keep each one short:
+Report exactly these four sections (five offline), and keep each one short:
 
 ## Progress
 If a `snapshots.jsonl` exists, first run
@@ -51,6 +61,13 @@ You cannot run it yourself, and should not try.
 Then offer to apply them: make the YAML edit, run `plan`, show the table, and
 ask. An issue missing from the YAML can be added to it (title must match the
 board exactly). If the user declines, leave the YAML as you found it.
+
+## Hand back
+Offline mode only. Once the edits are staged in the YAML, the user copies it
+back to the host and runs there, in this order:
+`gitboard plan boards/<file>.yaml` (live — shows anything that drifted since
+the pull) then `gitboard apply boards/<file>.yaml`. List any
+`migrate-comments` lines under it. Nothing you did here has touched GitLab.
 
 Ground every claim in an issue number from the output. If the board is empty
 or the script errors, say so and stop — do not infer a board from the repo.

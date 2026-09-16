@@ -69,6 +69,25 @@ def get_project(gl, path):
         raise GitlabProblem(f"cannot reach {url}: {e.__class__.__name__}") from e
 
 
+def find_user(gl, username):
+    """The user with that username, or None. Auth and network failures are
+    explained the same way get_project explains them."""
+    import gitlab as gitlab_pkg
+
+    url = get_config().url
+    try:
+        found = gl.users.list(username=username)
+    except gitlab_pkg.exceptions.GitlabAuthenticationError as e:
+        raise GitlabProblem(
+            f"{url} rejected the token — expired, or minted on another instance?"
+        ) from e
+    except gitlab_pkg.exceptions.GitlabError as e:
+        raise GitlabProblem(str(e)) from e
+    except OSError as e:
+        raise GitlabProblem(f"cannot reach {url}: {e.__class__.__name__}") from e
+    return found[0] if found else None
+
+
 def get_issue(project, iid):
     """Fetch an issue by iid, or say which one is missing."""
     import gitlab as gitlab_pkg

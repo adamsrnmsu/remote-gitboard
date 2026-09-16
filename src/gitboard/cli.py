@@ -176,31 +176,58 @@ def show(
     limit: int = typer.Option(
         5, "--limit", "-n", help="Issues shown per column. 0 for no limit."
     ),
+    from_file: str | None = typer.Option(
+        None, "--from", help="Render a board YAML instead of GitLab. No network."
+    ),
 ):
     """Print an issue board, grouped into its columns."""
 
     def go():
-        path = _need(project, "project", "project")
-        project_obj, board_obj = board_mod.fetch(path, board_name or get_config().board)
+        columns = None
+        if from_file:
+            # offline: the pulled YAML is the board; never touches the token
+            spec = apply_mod.load(from_file)
+            project_obj, board_obj = board_mod.spec_stand_ins(spec)
+            columns = board_mod.columns_from_spec(spec, get_config().url)
+            spec_path = from_file
+        else:
+            path = _need(project, "project", "project")
+            project_obj, board_obj = board_mod.fetch(
+                path, board_name or get_config().board
+            )
+            spec_path = find_spec(path)
         if markdown:
-            print(board_mod.as_markdown(project_obj, board_obj))
+            print(board_mod.as_markdown(project_obj, board_obj, columns=columns))
         else:
             board_mod.print_rich(
                 project_obj,
                 board_obj,
-                spec_path=find_spec(path),
+                spec_path=spec_path,
                 limit=0 if all_issues else limit,
+                columns=columns,
             )
 
     _run(go)
 
 
 @app.command()
-def plan(spec: str | None = typer.Argument(None, help="Path to a board YAML file.")):
+def plan(
+    spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
+    against: str | None = typer.Option(
+        None,
+        "--against",
+        help="Diff against another board YAML (a pull --base copy) instead of "
+        "GitLab. No network.",
+    ),
+):
     """Show what apply would change. Never writes."""
 
     def go():
         parsed = apply_mod.load(_need(spec, "spec", "spec file"))
+        if against:
+            base = apply_mod.have_from_spec(apply_mod.load(against))
+            _print_changes(apply_mod.diff(parsed, base), f"pending against {against}")
+            return
         with err().status(f"reading {parsed['project']}…"):
             pending = apply_mod.plan(client.gitlab(), parsed)
         _print_changes(pending, f"pending against {get_config().url}")
@@ -343,6 +370,12 @@ def pull(
     out: str | None = typer.Option(
         None, "--out", "-o", help="Where to write. Default: boards/<project>.yaml"
     ),
+    base: bool = typer.Option(
+        False,
+        "--base",
+        help="Also keep an untouched copy as <out>.base, for `plan --against` "
+        "somewhere with no network.",
+    ),
 ):
     """Save the live board as YAML — the file plan/apply read. Reads only."""
 
@@ -351,10 +384,16 @@ def pull(
         with err().status(f"reading {path}…"):
             proj, board = board_mod.fetch(path, board_name or get_config().board)
             columns = board_mod.board_columns(proj, board)
-        target = out or f"boards/{path.rsplit('/', 1)[-1]}.yaml"
-        _pull_spec(proj, board, columns, target)
+            target = out or f"boards/{path.rsplit('/', 1)[-1]}.yaml"
+            _pull_spec(proj, board, columns, target)
+            if base:
+                # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
+                # and the /board command may only edit *.yaml — the copy
+                # stays pristine
+                _pull_spec(proj, board, columns, target + ".base")
         err().print(
             f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
+            + (f" --against {target}.base" if base else "")
         )
 
     _run(go)

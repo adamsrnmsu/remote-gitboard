@@ -134,7 +134,9 @@ def spec_from_board(project, board, columns):
 
     spec_issues = []
     for issue in sorted(seen.values(), key=lambda i: i.iid):
-        entry = {"title": issue.title}
+        # iid is informational: it lets an offline `show --from` name issues,
+        # and plan/apply never read it (identity stays the title).
+        entry = {"title": issue.title, "iid": issue.iid}
         if issue.labels:
             entry["labels"] = sorted(issue.labels)
         if body := norm_text(issue.description):
@@ -173,34 +175,46 @@ def norm_text(s):
     return (s or "").replace("\r\n", "\n").strip()
 
 
-def wanted_issue(gl, spec):
+def wanted_issue(spec):
     """The fields we manage, normalised so they compare cleanly.
 
     YAML parses an unquoted 2026-09-01 into a date object, which is neither
     JSON-serialisable nor comparable to the ISO string the API returns.
+    Assignee is the username here; ids are resolved only when writing, so
+    this and plan()/diff() need no network.
     """
     due = spec.get("due_date")
-    want = {
+    return {
         "labels": sorted(spec.get("labels", [])),
         "description": norm_text(spec.get("description")),
         "due_date": due.isoformat() if hasattr(due, "isoformat") else due,
-        "assignee_ids": [],
+        "assignee": spec.get("assignee") or None,
     }
-    if who := spec.get("assignee"):
-        users = gl.users.list(username=who)
-        if not users:
-            raise SpecError(f"no such user {who!r} (issue {spec['title']!r})")
-        want["assignee_ids"] = [users[0].id]
-    return want
 
 
 def current_issue(issue):
+    # ponytail: first assignee only — a second one is invisible here and a
+    # save would drop it. Boards here are single-assignee.
     return {
         "labels": sorted(issue.labels),
         "description": norm_text(issue.description),
         "due_date": issue.due_date,
-        "assignee_ids": [a["id"] for a in issue.assignees],
+        "assignee": issue.assignee["username"] if issue.assignee else None,
     }
+
+
+def resolve_users(gl, spec):
+    """{username: id} for every assignee in the spec. Runs before any write
+    so a typo'd username fails the whole run, not the middle of it."""
+    users = {}
+    for issue in spec["issues"]:
+        who = issue.get("assignee")
+        if who and who not in users:
+            found = client.find_user(gl, who)
+            if found is None:
+                raise SpecError(f"no such user {who!r} (issue {issue['title']!r})")
+            users[who] = found.id
+    return users
 
 
 def ensure_project(gl, path, create):
@@ -256,19 +270,27 @@ def ensure_board(project, name, columns, labels, record):
             record("added", "column", col["name"])
 
 
-def ensure_issues(gl, project, issues, record):
+def _payload(want, users):
+    """What the API takes: assignee_ids, not a username."""
+    fields = dict(want)
+    who = fields.pop("assignee")
+    fields["assignee_ids"] = [users[who]] if who else []
+    return fields
+
+
+def ensure_issues(project, issues, record, users):
     have = {i.title: i for i in project.issues.list(state="opened", all=True)}
     for spec in issues:
-        title, want = spec["title"], wanted_issue(gl, spec)
+        title, want = spec["title"], wanted_issue(spec)
         if title not in have:
-            project.issues.create({"title": title, **want})
+            project.issues.create({"title": title, **_payload(want, users)})
             record("added", "issue", title)
             continue
         issue = have[title]
         now = current_issue(issue)
         if changed := [k for k, v in want.items() if now[k] != v]:
-            for k in changed:
-                setattr(issue, k, want[k])
+            for k, v in _payload(want, users).items():
+                setattr(issue, k, v)
             issue.save()
             record("changed", "issue", f"{title}: {', '.join(changed)}")
 
@@ -285,44 +307,67 @@ def apply(gl, spec, on_change=None):
         if on_change:
             on_change(kind, what, detail)
 
+    users = resolve_users(gl, spec)
     project = ensure_project(gl, spec["project"], spec.get("create_project", False))
     labels = ensure_labels(project, spec["columns"], record)
     ensure_board(project, spec["board"], spec["columns"], labels, record)
-    ensure_issues(gl, project, spec["issues"], record)
+    ensure_issues(project, spec["issues"], record, users)
     return changes
 
 
 def plan(gl, spec):
     """Read-only: what apply would do. Never writes."""
+    resolve_users(gl, spec)
     try:
         project = client.get_project(gl, spec["project"])
     except client.GitlabProblem:
-        project = None
+        return diff(spec, None)
+    opened = {i.title: i for i in project.issues.list(state="opened", all=True)}
+    have = {
+        "labels": {x.name for x in project.labels.list(all=True)},
+        "boards": {b.name for b in project.boards.list(all=True)},
+        "issues": {title: current_issue(i) for title, i in opened.items()},
+    }
+    return diff(spec, have)
 
-    if project is None:
+
+def have_from_spec(base):
+    """A pulled spec as the `have` side of diff() — plan with no network.
+
+    Both sides go through wanted_issue, so dates, trailing newlines and label
+    order agree by construction.
+    """
+    return {
+        "labels": {c["name"] for c in base["columns"]},
+        "boards": {base["board"]},
+        "issues": {i["title"]: wanted_issue(i) for i in base["issues"]},
+    }
+
+
+def diff(spec, have):
+    """Pure: the (kind, what, detail) list apply would write. `have` is
+    {"labels": set, "boards": set, "issues": {title: current_issue-shaped}},
+    or None for a project that does not exist yet."""
+    if have is None:
         pending = [("added", "project", spec["project"])]
         pending += [("added", "label", c["name"]) for c in spec["columns"]]
         pending += [("added", "board", spec["board"])]
         pending += [("added", "issue", i["title"]) for i in spec["issues"]]
         return pending
 
-    labels = {x.name for x in project.labels.list(all=True)}
-    boards = {b.name for b in project.boards.list(all=True)}
-    issues = {i.title: i for i in project.issues.list(state="opened", all=True)}
-
     pending = [
         ("added", "label", c["name"])
         for c in spec["columns"]
-        if c["name"] not in labels
+        if c["name"] not in have["labels"]
     ]
-    if spec["board"] not in boards:
+    if spec["board"] not in have["boards"]:
         pending.append(("added", "board", spec["board"]))
     for spec_i in spec["issues"]:
         title = spec_i["title"]
-        if title not in issues:
+        if title not in have["issues"]:
             pending.append(("added", "issue", title))
             continue
-        want, now = wanted_issue(gl, spec_i), current_issue(issues[title])
+        want, now = wanted_issue(spec_i), have["issues"][title]
         if changed := [k for k, v in want.items() if now[k] != v]:
             pending.append(("changed", "issue", f"{title}: {', '.join(changed)}"))
     return pending

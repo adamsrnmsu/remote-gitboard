@@ -14,10 +14,12 @@ from gitboard import apply, client
 
 
 class FakeIssue:
-    def __init__(self, title, labels=(), description="", due_date=None, assignees=()):
-        self.title, self.labels = title, list(labels)
+    def __init__(
+        self, title, labels=(), description="", due_date=None, assignee=None, iid=1
+    ):
+        self.title, self.labels, self.iid = title, list(labels), iid
         self.description, self.due_date = description, due_date
-        self.assignees = [{"id": a} for a in assignees]
+        self.assignee = {"username": assignee} if assignee else None
 
 
 class FakeProject:
@@ -69,20 +71,18 @@ def test_norm_text_handles_none():
 
 def test_yaml_date_becomes_an_iso_string():
     """PyYAML gives a date object; requests cannot JSON-encode it."""
-    want = apply.wanted_issue(
-        None, {"title": "t", "due_date": datetime.date(2026, 9, 1)}
-    )
+    want = apply.wanted_issue({"title": "t", "due_date": datetime.date(2026, 9, 1)})
     assert want["due_date"] == "2026-09-01"
 
 
 def test_quoted_date_passes_through_unchanged():
-    want = apply.wanted_issue(None, {"title": "t", "due_date": "2026-09-01"})
+    want = apply.wanted_issue({"title": "t", "due_date": "2026-09-01"})
     assert want["due_date"] == "2026-09-01"
 
 
 def test_labels_are_sorted_so_yaml_order_is_not_a_diff():
-    a = apply.wanted_issue(None, {"title": "t", "labels": ["b", "a"]})
-    b = apply.wanted_issue(None, {"title": "t", "labels": ["a", "b"]})
+    a = apply.wanted_issue({"title": "t", "labels": ["b", "a"]})
+    b = apply.wanted_issue({"title": "t", "labels": ["a", "b"]})
     assert a["labels"] == b["labels"]
 
 
@@ -90,7 +90,7 @@ def test_a_settled_issue_shows_no_drift():
     """wanted_issue and current_issue must agree, or apply is never idempotent."""
     spec = {"title": "t", "labels": ["Doing"], "description": "body\n"}
     issue = FakeIssue("t", labels=["Doing"], description="body")
-    assert apply.wanted_issue(None, spec) == apply.current_issue(issue)
+    assert apply.wanted_issue(spec) == apply.current_issue(issue)
 
 
 # --- plan ------------------------------------------------------------------
@@ -219,9 +219,8 @@ def test_migration_is_idempotent(monkeypatch):
 
 def board_fixture():
     issue = FakeIssue(
-        "one", labels=["Doing"], description="body\n", due_date="2026-09-01"
+        "one", labels=["Doing"], description="body\n", due_date="2026-09-01", iid=7
     )
-    issue.iid, issue.assignee = 7, None
     project = FakeProject(labels=["Doing"], boards=["Dev Board"], issues=[issue])
     project.labels.list()[0].color = "#428bca"
     project.path_with_namespace = "grp/proj"
@@ -245,6 +244,106 @@ def test_pulled_spec_drops_empty_fields():
     assert spec["columns"] == [{"name": "Doing", "color": "gitlab blue"}]
     assert "assignee" not in spec["issues"][0]
     assert spec["issues"][0]["description"] == "body"
+    assert spec["issues"][0]["iid"] == 7
+
+
+# --- offline: diff against a pulled spec -----------------------------------
+
+
+def reload(spec, tmp_path, name):
+    f = tmp_path / name
+    f.write_text(apply.dump(spec))
+    return apply.load(str(f))
+
+
+def test_pulled_spec_diffs_empty_against_itself(tmp_path):
+    project, board, columns = board_fixture()
+    spec = apply.spec_from_board(project, board, columns)
+    base = reload(spec, tmp_path, "base.yaml")
+    edited = reload(spec, tmp_path, "edited.yaml")
+    assert apply.diff(edited, apply.have_from_spec(base)) == []
+
+
+def test_offline_plan_spots_a_move_and_a_new_issue():
+    base = {**SPEC, "issues": [{"title": "one", "labels": ["Doing"], "iid": 1}]}
+    edited = {
+        **SPEC,
+        "issues": [{"title": "one", "labels": ["Blocked"], "iid": 1}, {"title": "two"}],
+    }
+    assert apply.diff(edited, apply.have_from_spec(base)) == [
+        ("changed", "issue", "one: labels"),
+        ("added", "issue", "two"),
+    ]
+
+
+def test_unquoted_date_in_edited_spec_is_not_a_diff():
+    base = {**SPEC, "issues": [{"title": "one", "due_date": "2026-09-01"}]}
+    edited = {
+        **SPEC,
+        "issues": [{"title": "one", "due_date": datetime.date(2026, 9, 1)}],
+    }
+    assert apply.diff(edited, apply.have_from_spec(base)) == []
+
+
+def test_diff_reports_assignee_by_username():
+    base = {
+        **SPEC,
+        "issues": [{"title": "one", "labels": ["Doing"], "assignee": "alice"}],
+    }
+    assert apply.diff(SPEC, apply.have_from_spec(base)) == [
+        ("changed", "issue", "one: assignee")
+    ]
+    assert apply.diff(SPEC, apply.have_from_spec(SPEC)) == []
+
+
+def fake_gl(users):
+    """gl.users.list(username=...) over a {username: id} table."""
+    return types.SimpleNamespace(
+        users=types.SimpleNamespace(
+            list=lambda username: (
+                [types.SimpleNamespace(id=users[username])] if username in users else []
+            )
+        )
+    )
+
+
+def test_plan_explains_a_rejected_token_from_the_user_lookup(monkeypatch):
+    """The users lookup runs first now; its 401 must not become a traceback."""
+    import gitlab as gitlab_pkg
+
+    def rejected(**_):
+        raise gitlab_pkg.exceptions.GitlabAuthenticationError(
+            response_code=401, error_message="invalid_token"
+        )
+
+    gl = types.SimpleNamespace(users=types.SimpleNamespace(list=rejected))
+    spec = {**SPEC, "issues": [{"title": "one", "assignee": "root"}]}
+    with pytest.raises(client.GitlabProblem, match="rejected the token"):
+        apply.plan(gl, spec)
+
+
+def test_ensure_issues_sends_assignee_ids_not_username():
+    created = []
+    project = FakeProject(issues=[])
+    project.issues.create = created.append
+    issues = [{"title": "one", "assignee": "alice", "iid": 9}]
+    apply.ensure_issues(project, issues, lambda *_: None, {"alice": 42})
+    assert created == [
+        {
+            "title": "one",
+            "labels": [],
+            "description": "",
+            "due_date": None,
+            "assignee_ids": [42],
+        }
+    ]
+
+
+def test_plan_rejects_an_unknown_user_before_touching_the_project(monkeypatch):
+    spec = {**SPEC, "issues": [{"title": "one", "assignee": "nobody"}]}
+    use_project(monkeypatch, None)
+    with pytest.raises(apply.SpecError, match="nobody"):
+        apply.plan(fake_gl({}), spec)
 
 
 def test_dump_load_roundtrip(tmp_path):
@@ -350,3 +449,31 @@ def test_the_superseded_breadcrumb_is_not_migrated(monkeypatch):
     )
     assert apply.migrate_comments(None, "grp/proj", 1, 2) == 1
     assert len(issues[2].notes.notes) == 1
+
+
+# --- cli: the offline paths never open a connection -------------------------
+
+
+def test_offline_plan_and_show_never_open_gitlab(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from gitboard import cli, client
+
+    def boom(*_, **__):
+        raise AssertionError("client.gitlab() called on an offline path")
+
+    monkeypatch.setattr(client, "gitlab", boom)
+    base, edited = tmp_path / "b.yaml", tmp_path / "e.yaml"
+    base.write_text(apply.dump({**SPEC, "issues": [{"title": "one", "iid": 1}]}))
+    edited.write_text(
+        apply.dump(
+            {**SPEC, "issues": [{"title": "one", "iid": 1, "labels": ["Doing"]}]}
+        )
+    )
+    runner = CliRunner()
+    res = runner.invoke(cli.app, ["plan", str(edited), "--against", str(base)])
+    assert res.exit_code == 0, res.output
+    res = runner.invoke(cli.app, ["show", "--from", str(edited), "--markdown"])
+    assert res.exit_code == 0, res.output
+    assert "- #1 one — @unassigned" in res.output
+
