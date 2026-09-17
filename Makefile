@@ -16,7 +16,7 @@ PROJECT    ?=
 SPEC       ?=
 GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help install activate link unlink up wait down reset logs seed show tui snapshot report cron pull plan apply test fmt lint docs clean
+.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land test fmt lint docs clean
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -84,8 +84,11 @@ snapshot: install  ## append board state to snapshots.jsonl: make snapshot PROJE
 report: install  ## what moved, from the snapshot log: make report PROJECT=group/project
 	@$(GITBOARD) report $(PROJECT)
 
-cron:  ## print a crontab line that snapshots every 30 minutes
-	@echo '*/30 * * * * cd $(CURDIR) && /usr/bin/make -s snapshot >/dev/null 2>&1'
+status: install  ## every local board YAML at a glance, no network
+	@$(GITBOARD) status
+
+cron:  ## print a crontab line that snapshots every local board every 30 minutes
+	@echo '*/30 * * * * cd $(CURDIR) && $(GITBOARD) snapshot --all >/dev/null 2>&1'
 
 pull: install  ## save the board as YAML: make pull PROJECT=group/project
 	@$(GITBOARD) pull $(PROJECT)
@@ -95,6 +98,9 @@ plan: install  ## preview YAML changes: make plan SPEC=boards/test.yaml
 
 apply: install  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
 	@$(GITBOARD) apply $(SPEC)
+
+land: install  ## apply, snapshot, refresh SPEC.base: make land SPEC=boards/test.yaml
+	@$(GITBOARD) land $(SPEC)
 
 test: install  ## run the test suite
 	PYTHONPATH=src $(VENV)/bin/pytest -q

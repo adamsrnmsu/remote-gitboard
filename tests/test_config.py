@@ -533,3 +533,17 @@ def test_legacy_keychain_service_is_the_fallback(monkeypatch):
     monkeypatch.setattr(config.subprocess, "run", keychain)
     assert config.get_config().token() == "legacy"
     assert asked == [config.READ_KEYCHAIN_SERVICE, config.LEGACY_KEYCHAIN_SERVICE]
+
+
+def test_no_security_binary_is_just_no_keychain(monkeypatch):
+    """Linux, a container: `security` does not exist. That is a missing
+    token, not a traceback."""
+    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
+
+    def no_security(*a, **k):
+        raise FileNotFoundError("security")
+
+    monkeypatch.setattr(config.subprocess, "run", no_security)
+    with pytest.raises(config.ConfigError) as e:
+        config.get_config().token()
+    assert "GITLAB_READ_TOKEN" in str(e.value)

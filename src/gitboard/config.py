@@ -98,11 +98,14 @@ class Config:
 
 
 def _keychain_lookup(service):
-    out = subprocess.run(
-        ["security", "find-generic-password", "-s", service, "-w"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:  # no `security` binary (Linux, a container) — not an error
+        return None
     return None if out.returncode else out.stdout.strip()
 
 

@@ -22,6 +22,7 @@ from pathlib import Path
 
 import typer
 from rich.table import Table
+from rich.text import Text
 
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
@@ -45,7 +46,15 @@ app = typer.Typer(
 )
 log = get_logger()
 
-SIGN = {"added": "+", "changed": "~"}
+SIGN = {"added": "+", "changed": "~", "skipped": "-", "drift": "!"}
+STYLE = {
+    "added": "added",
+    "changed": "changed",
+    "skipped": "muted",
+    "drift": "bold red",
+}
+SNAPSHOTS = "snapshots.jsonl"
+AGE_WINDOW = 365  # days of snapshot history a time-in-column reading may span
 
 
 @app.callback()
@@ -139,29 +148,80 @@ def _shortest(path):
     return rel if not rel.startswith("..") else str(path)
 
 
-def find_spec(project_path):
-    """The boards/*.yaml that defines this project, if one is sitting around.
+def local_specs():
+    """[(path, spec)] for every board YAML in reach, one per (project, board).
 
-    Config first; otherwise scan boards/ next to the config or the cwd. Purely
-    for the "go look here" footer, so any failure just means no footer.
+    The config's own spec first, then boards/ next to the config file, then
+    boards/ under the cwd. Unreadable files are skipped: this feeds footers,
+    pickers and --all, none of which should die because one YAML is broken.
     """
     cfg = get_config()
-    for candidate in filter(None, [cfg.spec]):
+    paths = [Path(cfg.spec)] if cfg.spec else []
+    for root in [p.parent for p in [cfg.source] if p] + [Path.cwd()]:
+        paths += sorted((root / "boards").glob("*.yaml"))
+    found, seen = [], set()
+    for path in paths:
         try:
-            if apply_mod.load(candidate)["project"] == project_path:
-                return _shortest(candidate)
-        except (apply_mod.SpecError, KeyError):
-            pass
+            spec = apply_mod.load(str(path))
+        except apply_mod.SpecError:
+            continue
+        key = (spec["project"], spec["board"])
+        if key not in seen:
+            seen.add(key)
+            found.append((_shortest(path), spec))
+    return found
 
-    roots = [p.parent for p in [cfg.source] if p] + [Path.cwd()]
-    for root in roots:
-        for path in sorted((root / "boards").glob("*.yaml")):
-            try:
-                if apply_mod.load(str(path))["project"] == project_path:
-                    return _shortest(path)
-            except (apply_mod.SpecError, KeyError):
-                continue
+
+def find_spec(project_path):
+    """The boards/*.yaml that defines this project, for the "go look here"
+    footer — None means no footer."""
+    for path, spec in local_specs():
+        if spec["project"] == project_path:
+            return path
     return None
+
+
+def _base_of(spec_path):
+    """The pull's untouched `<spec>.base`, loaded, or None when there is none."""
+    path = Path(f"{spec_path}.base")
+    return apply_mod.load(str(path)) if path.exists() else None
+
+
+def _rotate_base(spec_path):
+    """<spec>.base -> <spec>.base.old, so the previous pull stays diffable."""
+    base = Path(f"{spec_path}.base")
+    if base.exists():
+        base.replace(f"{spec_path}.base.old")
+
+
+def _ages(project, db=SNAPSHOTS):
+    """{iid: (column, days)} from the snapshot log, or None without one."""
+    if not Path(db).exists():
+        return None
+    batches = report_mod.load(db, project=project, days=AGE_WINDOW)
+    return report_mod.age_days(report_mod.column_ages(batches))
+
+
+def _ago(then, now):
+    secs = (now - then).total_seconds()
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 48 * 3600:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
+
+
+def _for_each(fn, items):
+    """--all: run fn over every item, report failures, stop for none of them."""
+    failed = 0
+    for item in items:
+        try:
+            fn(item)
+        except (client.GitlabProblem, apply_mod.SpecError, ConfigError) as e:
+            err().print(f"[logging.level.error]error[/] {e}")
+            failed += 1
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -197,8 +257,13 @@ def show(
                 path, board_name or get_config().board
             )
             spec_path = find_spec(path)
+        ages = _ages(project_obj.path_with_namespace)
         if markdown:
-            print(board_mod.as_markdown(project_obj, board_obj, columns=columns))
+            print(
+                board_mod.as_markdown(
+                    project_obj, board_obj, columns=columns, ages=ages
+                )
+            )
         else:
             board_mod.print_rich(
                 project_obj,
@@ -206,6 +271,7 @@ def show(
                 spec_path=spec_path,
                 limit=0 if all_issues else limit,
                 columns=columns,
+                ages=ages,
             )
 
     _run(go)
@@ -220,48 +286,141 @@ def plan(
         help="Diff against another board YAML (a pull --base copy) instead of "
         "GitLab. No network.",
     ),
+    base: str | None = typer.Option(
+        None,
+        "--base",
+        help="The pull's untouched copy. Fields GitLab changed since it show as "
+        "drift (!), fields it already has as skipped (-). Default: <spec>.base "
+        "when it exists.",
+    ),
 ):
     """Show what apply would change. Never writes."""
 
     def go():
-        parsed = apply_mod.load(_need(spec, "spec", "spec file"))
+        spec_path = _need(spec, "spec", "spec file")
+        parsed = apply_mod.load(spec_path)
         if against:
-            base = apply_mod.have_from_spec(apply_mod.load(against))
-            _print_changes(apply_mod.diff(parsed, base), f"pending against {against}")
+            have = apply_mod.have_from_spec(apply_mod.load(against))
+            _print_changes(apply_mod.diff(parsed, have), f"pending against {against}")
             return
+        base_spec = apply_mod.load(base) if base else _base_of(spec_path)
         with err().status(f"reading {parsed['project']}…"):
-            pending = apply_mod.plan(client.gitlab(), parsed)
-        _print_changes(pending, f"pending against {get_config().url}")
+            pending = apply_mod.plan(client.gitlab(), parsed, base=base_spec)
+        title = f"pending against {get_config().url}"
+        if base_spec:
+            title += f" — drift is what moved since {base or spec_path + '.base'}"
+        _print_changes(pending, title)
 
     _run(go)
+
+
+IGNORE_DRIFT = typer.Option(
+    False,
+    "--ignore-drift",
+    help="Overwrite fields that changed on GitLab since the pull (<spec>.base).",
+)
+
+
+def _confirm_writes(pending, title, yes, ignore_drift):
+    """Table, drift guard, y/n. The rows that will be written; [] for none."""
+    drift = [c for c in pending if c[0] == "drift"]
+    writes = [c for c in pending if c[0] in ("added", "changed")]
+    _print_changes(pending, title)
+    if drift and not ignore_drift:
+        err().print(
+            f"[logging.level.error]{len(drift)} field(s) changed on GitLab since "
+            "the pull[/] — review, re-run with --ignore-drift to overwrite, or "
+            "re-pull"
+        )
+        raise typer.Exit(1)
+    writes += drift if ignore_drift else []
+    if not writes:
+        if pending:
+            err().print("[muted]nothing to write[/]")
+        return []
+    if not yes and not typer.confirm(f"apply {len(writes)} change(s)?"):
+        raise typer.Abort()
+    return writes
+
+
+def _write_spec(parsed, base, yes, ignore_drift):
+    """plan -> table -> y/n -> apply -> snapshot: the core of apply and land.
+
+    Returns (changes, project, board); the last two are None when nothing was
+    written, so the caller knows whether the board was fetched.
+    """
+    gl = client.gitlab(write=True)
+    with err().status(f"reading {parsed['project']}…"):
+        pending = apply_mod.plan(gl, parsed, base=base)
+    title = f"will write to {get_config().url}"
+    if not _confirm_writes(pending, title, yes, ignore_drift):
+        return [], None, None
+    with client.write_errors():
+        changes = apply_mod.apply(gl, parsed, base=base, force=ignore_drift)
+    err().print(
+        f"[added]{len(changes)} change(s) written[/] — "
+        f"gitboard show {parsed['project']}"
+    )
+    proj, board = board_mod.fetch(parsed["project"], parsed["board"])
+    n = _write_snapshot(proj, board)
+    err().print(f"[muted]{n} issue(s) appended to {SNAPSHOTS}[/]")
+    return changes, proj, board
 
 
 @app.command()
 def apply(
     spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+    ignore_drift: bool = IGNORE_DRIFT,
 ):
-    """Make the board match the YAML. Writes — needs an api-scope token."""
+    """Make the board match the YAML. Writes — needs an api-scope token.
+
+    With a <spec>.base from `pull --base`, a field the team changed on GitLab
+    since the pull is drift: shown, and refused unless --ignore-drift.
+    """
 
     def go():
-        parsed = apply_mod.load(_need(spec, "spec", "spec file"))
-        gl = client.gitlab(write=True)
-        with err().status(f"reading {parsed['project']}…"):
-            pending = apply_mod.plan(gl, parsed)
+        spec_path = _need(spec, "spec", "spec file")
+        parsed = apply_mod.load(spec_path)
+        _write_spec(parsed, _base_of(spec_path), yes, ignore_drift)
 
-        if not pending:
-            err().print("[muted]no changes — board already matches[/]")
-            return
-        _print_changes(pending, f"will write to {get_config().url}")
-        if not yes and not typer.confirm(f"apply {len(pending)} change(s)?"):
-            raise typer.Abort()
+    _run(go)
 
-        with client.write_errors():
-            changes = apply_mod.apply(gl, parsed)
+
+@app.command()
+def land(
+    spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+    ignore_drift: bool = IGNORE_DRIFT,
+):
+    """apply, snapshot, then refresh the YAML and <spec>.base from GitLab.
+
+    The host's end-of-round step: what the container staged is written, the
+    log gets a line, and both files move forward to the live board so the
+    next `status`, `plan` and `pull` measure from now. Posted `notes:` come
+    back as `discussion:`; a field GitLab kept (skipped) comes back as
+    GitLab has it. Nothing is staged after a land, by construction.
+    """
+
+    def go():
+        spec_path = _need(spec, "spec", "spec file")
+        parsed = apply_mod.load(spec_path)
+        base = _base_of(spec_path)
+        _, proj, board = _write_spec(parsed, base, yes, ignore_drift)
+        if proj is None:
+            proj, board = board_mod.fetch(parsed["project"], parsed["board"])
+        columns = board_mod.board_columns(proj, board)
+        notes = any("discussion" in i for i in (base or parsed)["issues"])
+        _rotate_base(spec_path)
+        _pull_spec(proj, board, columns, spec_path, notes=notes, force=True)
+        _pull_spec(proj, board, columns, f"{spec_path}.base", notes=notes)
         err().print(
-            f"[added]{len(changes)} change(s) written[/] — "
-            f"gitboard show {parsed['project']}"
+            f"[added]refreshed {spec_path} and its .base[/] from the live board"
         )
+        if (Path(spec_path).parent / "issues.jsonl").exists():
+            err().print(
+                f"[muted]next: bd import {Path(spec_path).parent / 'issues.jsonl'}[/]"
+            )
 
     _run(go)
 
@@ -329,21 +488,29 @@ def snapshot(
     project: str | None = typer.Argument(None, help="group/project"),
     board_name: str | None = typer.Argument(None, help="Board name, if several."),
     out_path: str = typer.Option(
-        "snapshots.jsonl", "--out", "-o", help="JSONL file to append to."
+        SNAPSHOTS, "--out", "-o", help="JSONL file to append to."
+    ),
+    all_boards: bool = typer.Option(
+        False, "--all", help="Every board a local boards/*.yaml defines."
     ),
 ):
     """Append the board's current state to a JSONL log, one line per issue."""
 
-    def go():
-        path = _need(project, "project", "project")
-        proj, board = board_mod.fetch(path, board_name or get_config().board)
+    def one(path, name):
+        proj, board = board_mod.fetch(path, name)
         n = _write_snapshot(proj, board, out_path)
-        err().print(f"[added]{n} issue(s)[/] appended to {out_path}")
+        err().print(f"[added]{n} issue(s)[/] of {path} appended to {out_path}")
+
+    def go():
+        if all_boards:
+            _for_each(lambda ps: one(ps[1]["project"], ps[1]["board"]), local_specs())
+            return
+        one(_need(project, "project", "project"), board_name or get_config().board)
 
     _run(go)
 
 
-def _write_snapshot(proj, board, out_path="snapshots.jsonl"):
+def _write_snapshot(proj, board, out_path=SNAPSHOTS):
     ts = datetime.now(UTC).isoformat(timespec="seconds")
     records = board_mod.snapshot_records(proj, board, ts)
     with open(out_path, "a") as f:
@@ -387,27 +554,72 @@ def pull(
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing file (refresh a pull)."
     ),
+    discard_edits: bool = typer.Option(
+        False,
+        "--discard-edits",
+        help="With --force: overwrite even when the file has edits its .base "
+        "does not (edits that were never applied).",
+    ),
+    no_snapshot: bool = typer.Option(
+        False, "--no-snapshot", help=f"Do not append the board to {SNAPSHOTS}."
+    ),
+    all_boards: bool = typer.Option(
+        False,
+        "--all",
+        help="Refresh every local boards/*.yaml in place (implies --force; the "
+        "edits guard still holds).",
+    ),
 ):
     """Save the live board as YAML — the file plan/apply read. Reads only."""
 
-    def go():
-        path = _need(project, "project", "project")
+    def one(path, name, target, force):
+        if Path(target).exists():
+            try:
+                existing = apply_mod.load(target)
+            except apply_mod.SpecError:
+                existing = None  # unreadable: nothing to protect, --force decides
+            if existing and existing["project"] != path:
+                raise ConfigError(
+                    f"{target} is the board of {existing['project']}, not {path} "
+                    "— pass a different --out"
+                )
+            base_file = Path(f"{target}.base")
+            if existing and force and base_file.exists() and not discard_edits:
+                staged = apply_mod.diff(
+                    existing, apply_mod.have_from_spec(apply_mod.load(str(base_file)))
+                )
+                if staged:
+                    raise ConfigError(
+                        f"{target} has edits not in {target}.base — apply them "
+                        "first, or --discard-edits"
+                    )
         with err().status(f"reading {path}…"):
-            proj, board = board_mod.fetch(path, board_name or get_config().board)
+            proj, board = board_mod.fetch(path, name)
             columns = board_mod.board_columns(proj, board)
-            target = out or f"boards/{path.rsplit('/', 1)[-1]}.yaml"
             _pull_spec(proj, board, columns, target, notes=notes, force=force)
             if base:
                 # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
                 # and the /board command may only edit *.yaml — the copy
-                # stays pristine
-                _pull_spec(
-                    proj, board, columns, target + ".base", notes=notes, force=force
-                )
+                # stays pristine. The previous one becomes .base.old.
+                _rotate_base(target)
+                _pull_spec(proj, board, columns, f"{target}.base", notes=notes)
+            if not no_snapshot:
+                _write_snapshot(proj, board)
         err().print(
             f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
             + (f" --against {target}.base" if base else "")
         )
+
+    def go():
+        if all_boards:
+            _for_each(
+                lambda ps: one(ps[1]["project"], ps[1]["board"], ps[0], True),
+                local_specs(),
+            )
+            return
+        path = _need(project, "project", "project")
+        target = out or f"boards/{path.rsplit('/', 1)[-1]}.yaml"
+        one(path, board_name or get_config().board, target, force)
 
     _run(go)
 
@@ -467,71 +679,131 @@ def report(
     repo: str | None = typer.Option(
         None, "--repo", help="Git repo to correlate commits against."
     ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        metavar="SPEC",
+        help="Window starts at the pull: SPEC.base's mtime. Replaces --days; "
+        "the project defaults to SPEC's.",
+    ),
+    all_boards: bool = typer.Option(
+        False,
+        "--all",
+        help="Every project a local boards/*.yaml defines, each since its own "
+        ".base when it has one.",
+    ),
 ):
     """What moved on the board, from the snapshot log. Reads only local files."""
 
+    def since_ts(spec_path):
+        base_file = Path(f"{spec_path}.base")
+        if not base_file.exists():
+            return None
+        mtime = datetime.fromtimestamp(base_file.stat().st_mtime, UTC)
+        return mtime.isoformat(timespec="seconds")
+
     def go():
-        path = _need(project, "project", "project")
-        batches = report_mod.load(db, project=path, days=days)
-        if len(batches) < 2:
-            err().print(
-                f"[muted]need two snapshots of {path} within {days} day(s) in "
-                f"{db} — run `gitboard snapshot`, wait for movement, run it "
-                "again[/]"
+        if all_boards:
+            _for_each(
+                lambda ps: _report(ps[1]["project"], days, db, repo, since_ts(ps[0])),
+                local_specs(),
             )
             return
-        changes = report_mod.diff(batches)
-        console = out()
-        console.print(f"[bold]{path}[/] — {len(batches)} snapshots over {days} day(s)")
-
-        table = Table(box=None)
-        table.add_column("", style="muted", width=8)
-        table.add_column("")
-        for before, after in changes["moved"]:
-            table.add_row(
-                f"#{after['iid']}",
-                f"{after['title']}  [muted]{'+'.join(before['columns'])} ->[/] "
-                f"{'+'.join(after['columns'])}",
-            )
-        for rec in changes["new"]:
-            table.add_row(
-                f"#{rec['iid']}",
-                f"{rec['title']}  [added]new[/] [muted]in "
-                f"{'+'.join(rec['columns'])}[/]",
-            )
-        for rec in changes["closed"]:
-            table.add_row(f"#{rec['iid']}", f"{rec['title']}  [muted]closed[/]")
-        if table.row_count:
-            console.print(table)
+        ts = None
+        if since:
+            ts = since_ts(since)
+            if ts is None:
+                raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
+            path = project or apply_mod.load(since)["project"]
         else:
-            console.print("[muted]no movement in the window[/]")
-        console.print(f"[muted]{len(changes['unchanged'])} issue(s) did not move[/]")
-
-        tally = report_mod.by_assignee(changes)
-        if tally:
-            authors = report_mod.commit_counts(repo, days) if repo else {}
-            who = Table(box=None)
-            who.add_column("assignee", style="bold")
-            for col in ("moved", "new", "closed"):
-                who.add_column(col, justify="right")
-            if repo:
-                who.add_column("commits", justify="right")
-            for name in sorted(tally, key=lambda n: -sum(tally[n].values())):
-                row = [name] + [
-                    str(tally[name][c] or "") for c in ("moved", "new", "closed")
-                ]
-                if repo:
-                    author = report_mod.match_author(name, authors)
-                    row.append(str(authors.pop(author)) if author else "?")
-                who.add_row(*row)
-            console.print(who)
-            for (a_name, email), count in sorted(authors.items()):
-                console.print(
-                    f"[muted]{count} commit(s) by {a_name} <{email}> matched "
-                    "no assignee[/]"
-                )
+            path = _need(project, "project", "project")
+        _report(path, days, db, repo, ts)
 
     _run(go)
+
+
+def _report(path, days, db, repo, since_ts=None):
+    """One project's report; `since_ts` (ISO) replaces the --days window."""
+    if since_ts:
+        batches = report_mod.since(
+            report_mod.load(db, project=path, days=AGE_WINDOW), since_ts
+        )
+        window = f"since the pull at {since_ts[:16]}"
+    else:
+        batches = report_mod.load(db, project=path, days=days)
+        window = f"within {days} day(s)"
+    console = out()
+    if not batches:
+        err().print(
+            f"[muted]no snapshot of {path} {window} in {db} — run "
+            "`gitboard snapshot`[/]"
+        )
+        return
+    if len(batches) < 2:
+        err().print(
+            f"[muted]need two snapshots of {path} {window} in {db} — run "
+            "`gitboard snapshot`, wait for movement, run it again[/]"
+        )
+    else:
+        console.print(f"[bold]{path}[/] — {len(batches)} snapshots {window}")
+        _movement(console, batches, days, repo)
+    latest = batches[-1]
+    hits = report_mod.stuck(report_mod.column_ages(batches))
+    if hits:
+        console.print("[bold red]stuck[/] [muted]— past the column's threshold[/]")
+        for iid, col, age in hits:
+            console.print(
+                f"  [muted]#{iid}[/] {latest[iid]['title']}  [muted]{col} for {age}d[/]"
+            )
+
+
+def _movement(console, batches, days, repo):
+    """The moved/new/closed table and the per-assignee tally."""
+    changes = report_mod.diff(batches)
+
+    table = Table(box=None)
+    table.add_column("", style="muted", width=8)
+    table.add_column("")
+    for before, after in changes["moved"]:
+        table.add_row(
+            f"#{after['iid']}",
+            f"{after['title']}  [muted]{'+'.join(before['columns'])} ->[/] "
+            f"{'+'.join(after['columns'])}",
+        )
+    for rec in changes["new"]:
+        table.add_row(
+            f"#{rec['iid']}",
+            f"{rec['title']}  [added]new[/] [muted]in {'+'.join(rec['columns'])}[/]",
+        )
+    for rec in changes["closed"]:
+        table.add_row(f"#{rec['iid']}", f"{rec['title']}  [muted]closed[/]")
+    if table.row_count:
+        console.print(table)
+    else:
+        console.print("[muted]no movement in the window[/]")
+    console.print(f"[muted]{len(changes['unchanged'])} issue(s) did not move[/]")
+
+    tally = report_mod.by_assignee(changes)
+    if not tally:
+        return
+    authors = report_mod.commit_counts(repo, days) if repo else {}
+    who = Table(box=None)
+    who.add_column("assignee", style="bold")
+    for col in ("moved", "new", "closed"):
+        who.add_column(col, justify="right")
+    if repo:
+        who.add_column("commits", justify="right")
+    for name in sorted(tally, key=lambda n: -sum(tally[n].values())):
+        row = [name] + [str(tally[name][c] or "") for c in ("moved", "new", "closed")]
+        if repo:
+            author = report_mod.match_author(name, authors)
+            row.append(str(authors.pop(author)) if author else "?")
+        who.add_row(*row)
+    console.print(who)
+    for (a_name, email), count in sorted(authors.items()):
+        console.print(
+            f"[muted]{count} commit(s) by {a_name} <{email}> matched no assignee[/]"
+        )
 
 
 def _key():
@@ -590,10 +862,12 @@ def tui(
                 st["proj"], st["board"] = board_mod.spec_stand_ins(spec)
                 st["columns"] = board_mod.columns_from_spec(spec, get_config().url)
                 st["spec"] = offline
+                st["ages"] = _ages(spec["project"])
                 return
             st["proj"], st["board"] = board_mod.fetch(st["path"], st["name"])
             st["columns"] = board_mod.board_columns(st["proj"], st["board"])
             st["spec"] = find_spec(st["path"])
+            st["ages"] = _ages(st["proj"].path_with_namespace)
 
         def staged(parsed, write=False):
             """What apply would do: against GitLab, or offline against .base."""
@@ -632,7 +906,7 @@ def tui(
             usable = console.size.height - 7 - (2 * len(cols))
             limit = max(2, usable // max(len(cols), 1))
             body, hidden = board_mod.board_view(
-                st["proj"], st["board"], limit=limit, columns=cols
+                st["proj"], st["board"], limit=limit, columns=cols, ages=st["ages"]
             )
             spec = st["spec"]
             if offline:
@@ -663,18 +937,11 @@ def tui(
         def board_choices():
             choices = [(st["path"], b.name) for b in st["proj"].boards.list(all=True)]
             seen = set(choices)
-            cfg = get_config()
-            roots = [c.parent for c in [cfg.source] if c] + [Path.cwd()]
-            for root in roots:
-                for f in sorted((root / "boards").glob("*.yaml")):
-                    try:
-                        parsed = apply_mod.load(str(f))
-                        entry = (parsed["project"], parsed["board"])
-                    except (apply_mod.SpecError, KeyError):
-                        continue
-                    if entry not in seen:
-                        seen.add(entry)
-                        choices.append(entry)
+            for _, parsed in local_specs():
+                entry = (parsed["project"], parsed["board"])
+                if entry not in seen:
+                    seen.add(entry)
+                    choices.append(entry)
             return choices
 
         def read_iid(label, hint="enter confirms, esc cancels", extra=""):
@@ -938,7 +1205,7 @@ def _changes_table(pending, title):
     table.add_column("", style="muted", width=7)
     table.add_column("")
     for kind, what, detail in pending:
-        table.add_row(f"[{kind}]{SIGN[kind]}[/]", what, detail)
+        table.add_row(Text(SIGN.get(kind, "?"), STYLE.get(kind, "")), what, detail)
     return table
 
 
@@ -947,6 +1214,88 @@ def _print_changes(pending, title):
         err().print("[muted]no changes — board already matches[/]")
         return
     err().print(_changes_table(pending, title))
+
+
+@app.command()
+def status(
+    db: str = typer.Option(SNAPSHOTS, "--db", help="Snapshot log to read."),
+):
+    """Every local board YAML at a glance. No network.
+
+    pulled: age of <spec>.base. staged: what plan would write, minus notes.
+    notes: staged replies not yet in the discussion. verify: the oldest issue
+    waiting in Verify, from the snapshot log. overdue: past-due issues in
+    the YAML. snapshot: age of the last log line for the project.
+    """
+
+    def go():
+        now = datetime.now(UTC)
+        today = now.date().isoformat()
+        rows = []
+        for path, spec in local_specs():
+            base_file = Path(f"{path}.base")
+            staged = pulled = None
+            if base_file.exists():
+                pulled = datetime.fromtimestamp(base_file.stat().st_mtime, UTC)
+                have = apply_mod.have_from_spec(apply_mod.load(str(base_file)))
+                staged = sum(
+                    1 for _, what, _ in apply_mod.diff(spec, have) if what != "note"
+                )
+            notes = sum(
+                1
+                for i in spec["issues"]
+                for b in apply_mod.staged_notes(i)
+                if b
+                not in {
+                    apply_mod.norm_text(d["body"]) for d in i.get("discussion") or []
+                }
+            )
+            batches = report_mod.load(db, project=spec["project"], days=AGE_WINDOW)
+            ages = report_mod.age_days(report_mod.column_ages(batches), now)
+            verify = [d for col, d in ages.values() if "Verify" in col.split("+")]
+            overdue = sum(
+                1
+                for i in spec["issues"]
+                if i.get("due_date") and str(i["due_date"]) < today
+            )
+            last = None
+            if batches:
+                last = datetime.fromisoformat(next(iter(batches[-1].values()))["ts"])
+            rows.append(
+                (
+                    f"{spec['project']} · {spec['board']}",
+                    pulled,
+                    staged,
+                    notes,
+                    verify,
+                    overdue,
+                    last,
+                )
+            )
+
+        rows.sort(key=lambda r: -1 if r[2] is None else -r[2])
+        table = Table(box=None)
+        table.add_column("board", style="bold")
+        table.add_column("pulled", style="muted")
+        for name in ("staged", "notes", "verify", "overdue"):
+            table.add_column(name, justify="right")
+        table.add_column("snapshot", style="muted")
+        for name, pulled, staged, notes, verify, overdue, last in rows:
+            table.add_row(
+                name,
+                _ago(pulled, now) if pulled else "never",
+                "-" if staged is None else f"[changed]{staged}[/]" if staged else "0",
+                f"[added]{notes}[/]" if notes else "0",
+                f"[bold red]{max(verify)}d[/]" if verify else "-",
+                f"[bold red]{overdue}[/]" if overdue else "0",
+                _ago(last, now) if last else "never",
+            )
+        if not rows:
+            err().print("[muted]no boards/*.yaml here — `gitboard pull` one[/]")
+            return
+        out().print(table)
+
+    _run(go)
 
 
 @app.command()
