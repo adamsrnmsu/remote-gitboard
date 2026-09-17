@@ -45,7 +45,9 @@ overdue); `land SPEC` (plan, y/n, apply, snapshot, rotate `.base`);
 (team markdown: open by column/epic/story, done, cycle time, verify
 queue/times/coverage, stuck, questions; `--dump`/`--from` for offline) and
 `digest` (writes `reports/<date>/<board>/{team,<user>}.md` + `.eml` for
-users named under `emails:`; `--all`; Monday 07:00 in `make cron`).
+users named under `emails:`; `--all`; Monday 07:00 in `make cron`). Every
+`stats`/`digest` run appends one row per board to `reports/stats.jsonl`
+(deduped per week); `stats --weeks N` and the mails' "8-week trend" read it.
 Docs: `make docs` (Sphinx, `docs/`). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI

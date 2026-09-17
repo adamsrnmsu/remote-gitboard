@@ -412,6 +412,26 @@ def test_stats_dump_round_trips_through_from(gl, tmp_path, monkeypatch):
     assert again.stdout == r.stdout
 
 
+def test_stats_logs_one_row_per_board_week_and_weeks_reads_it_offline(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        board_mod, "fetch_history", lambda *a, **k: pytest.fail("network")
+    )
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path, _ = history_file(tmp_path)
+    runner.invoke(app, ["stats", "--from", path])
+    runner.invoke(app, ["stats", "--from", path])  # same week: no second row
+    log = tmp_path / "reports/stats.jsonl"
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["project"] == "grp/proj"
+    assert rows[0]["done"] == 1
+    r = runner.invoke(app, ["stats", "grp/proj", "--weeks", "8"])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.startswith("# grp/proj — last 8 weeks")
+    assert "| week |" in r.stdout and "2026-09-14" in r.stdout
+
+
 def test_digest_writes_md_for_everyone_and_eml_where_there_is_an_address(
     tmp_path, monkeypatch
 ):

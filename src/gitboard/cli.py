@@ -56,7 +56,9 @@ STYLE = {
     "drift": "bold red",
 }
 SNAPSHOTS = "snapshots.jsonl"
+STATS_LOG = "reports/stats.jsonl"  # one summary row per board per stats/digest run
 AGE_WINDOW = 365  # days of snapshot history a time-in-column reading may span
+TREND_WEEKS = 8
 
 
 @app.callback()
@@ -868,12 +870,27 @@ def _history(project, board_name, days, from_file=None, dump=None):
     return history, columns, meta
 
 
-def _summary(history, columns, meta, days):
-    """(summary, now) for the `days` ending at the fetch."""
+def _summary(history, columns, meta, days, log=STATS_LOG):
+    """(summary, now) for the `days` ending at the fetch.
+
+    Every run leaves one row in the stats log — one per board per week, the
+    latest run winning — so trends accumulate without a second fetch.
+    """
     now = stats_mod.parse_ts(meta["fetched_at"])
-    return stats_mod.summarise(
+    summary = stats_mod.summarise(
         history, columns, now - timedelta(days=days), now, now
-    ), now
+    )
+    stats_mod.append_row(
+        log,
+        stats_mod.stat_row(summary, meta["project"], meta["board"], meta["fetched_at"]),
+    )
+    return summary, now
+
+
+def _weekly(project, board=None, log=STATS_LOG):
+    """The last TREND_WEEKS rows for a board, or None when nothing is logged."""
+    rows = stats_mod.weekly(stats_mod.load_rows(log), project, TREND_WEEKS, board)
+    return rows or None
 
 
 @app.command()
@@ -888,10 +905,23 @@ def stats(
         None, "--dump", help="Save the fetched history as JSON for --from."
     ),
     as_json: bool = typer.Option(False, "--json", help="The summary dict as JSON."),
+    weeks: int | None = typer.Option(
+        None,
+        "--weeks",
+        help="Only the trend table for the last N weeks, from reports/stats.jsonl. "
+        "No network.",
+    ),
 ):
     """Team numbers: open, done, cycle and verify times, flow. Markdown to stdout."""
 
     def go():
+        if weeks:
+            path = _need(project, "project", "project")
+            rows = stats_mod.weekly(stats_mod.load_rows(STATS_LOG), path, weeks)
+            print(
+                f"# {path} — last {weeks} weeks\n\n" + stats_mod.render_weekly_md(rows)
+            )
+            return
         path = None if from_file else _need(project, "project", "project")
         history, columns, meta = _history(
             path, board_name or get_config().board, days, from_file, dump
@@ -900,7 +930,8 @@ def stats(
         if as_json:
             print(json.dumps(summary, default=str, indent=2))
         else:
-            print(stats_mod.render_team_md(summary))
+            weekly = _weekly(meta["project"], meta["board"])
+            print(stats_mod.render_team_md(summary, weekly=weekly))
 
     _run(go)
 
@@ -947,15 +978,19 @@ def digest(
             None if md_only else stats_mod.daily_series(history, columns, start, now)
         )
         week = summary["period"]["start"][:10]
+        weekly = _weekly(meta["project"], meta["board"])
 
         def write(name, text):
             (folder / name).write_text(text)
             written.append(folder / name)
 
         written, entries = [], []
-        write("team.md", stats_mod.render_team_md(summary))
+        write("team.md", stats_mod.render_team_md(summary, weekly=weekly))
         if series is not None:
-            write("team.html", mail_mod.render_team_html(summary, series, svg=True))
+            write(
+                "team.html",
+                mail_mod.render_team_html(summary, series, svg=True, weekly=weekly),
+            )
             entries.append(
                 {"name": "team", "files": {"md": "team.md", "html": "team.html"}}
             )
@@ -972,10 +1007,18 @@ def digest(
                 write(
                     f"{who}.html",
                     mail_mod.render_person_html(
-                        person, summary, who, series, svg=True, headers=heads
+                        person,
+                        summary,
+                        who,
+                        series,
+                        svg=True,
+                        headers=heads,
+                        weekly=weekly,
                     ),
                 )
-                html = mail_mod.render_person_html(person, summary, who, series)
+                html = mail_mod.render_person_html(
+                    person, summary, who, series, weekly=weekly
+                )
                 files["html"] = f"{who}.html"
             if to:
                 write(f"{who}.eml", stats_mod.eml(to, subject, body, sender, now, html))
