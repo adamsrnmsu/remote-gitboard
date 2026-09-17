@@ -769,8 +769,19 @@ def report(
         help="Every project a local boards/*.yaml defines, each since its own "
         ".base when it has one.",
     ),
+    history: str | None = typer.Option(
+        None,
+        "--history",
+        metavar="FILE",
+        help="A `stats --dump` file: adds a verified column crediting verdict "
+        "notes to whoever wrote them, over the same window.",
+    ),
 ):
-    """What moved on the board, from the snapshot log. Reads only local files."""
+    """What moved on the board, from the snapshot log. Reads only local files.
+
+    The tally credits the issue's assignee; `--history` adds a verified
+    column crediting the verifiers, which the snapshot log cannot see.
+    """
 
     def since_ts(spec_path):
         base_file = Path(f"{spec_path}.base")
@@ -782,7 +793,9 @@ def report(
     def go():
         if all_boards:
             _for_each(
-                lambda ps: _report(ps[1]["project"], days, db, repo, since_ts(ps[0])),
+                lambda ps: _report(
+                    ps[1]["project"], days, db, repo, since_ts(ps[0]), history
+                ),
                 local_specs(),
             )
             return
@@ -794,13 +807,23 @@ def report(
             path = project or apply_mod.load(since)["project"]
         else:
             path = _need(project, "project", "project")
-        _report(path, days, db, repo, ts)
+        _report(path, days, db, repo, ts, history)
 
     _run(go)
 
 
-def _report(path, days, db, repo, since_ts=None):
-    """One project's report; `since_ts` (ISO) replaces the --days window."""
+def _report(path, days, db, repo, since_ts=None, history=None):
+    """One project's report; `since_ts` (ISO) replaces the --days window.
+
+    `history` is a `stats --dump` path; its verdicts are windowed against
+    the dump's `fetched_at`, so a replay gives the same numbers.
+    """
+    verifiers = None
+    if history:
+        hist, _, meta = _history(path, None, days, from_file=history)
+        end = stats_mod.parse_ts(meta["fetched_at"])
+        start = stats_mod.parse_ts(since_ts) if since_ts else end - timedelta(days=days)
+        verifiers = report_mod.verifier_counts(hist, start, end)
     if since_ts:
         batches = report_mod.since(
             report_mod.load(db, project=path, days=AGE_WINDOW), since_ts
@@ -823,7 +846,7 @@ def _report(path, days, db, repo, since_ts=None):
         )
     else:
         console.print(f"[bold]{path}[/] — {len(batches)} snapshots {window}")
-        _movement(console, batches, days, repo)
+        _movement(console, batches, days, repo, verifiers)
     latest = batches[-1]
     hits = report_mod.stuck(report_mod.column_ages(batches))
     if hits:
@@ -834,8 +857,13 @@ def _report(path, days, db, repo, since_ts=None):
             )
 
 
-def _movement(console, batches, days, repo):
-    """The moved/new/closed table and the per-assignee tally."""
+def _movement(console, batches, days, repo, verifiers=None):
+    """The moved/new/closed table and the per-assignee tally.
+
+    `verifiers` ({username: verdicts}, from --history) adds a verified
+    column; verifiers who are not assignees are listed after, like
+    unmatched git authors.
+    """
     changes = report_mod.diff(batches)
 
     table = Table(box=None)
@@ -861,7 +889,7 @@ def _movement(console, batches, days, repo):
     console.print(f"[muted]{len(changes['unchanged'])} issue(s) did not move[/]")
 
     tally = report_mod.by_assignee(changes)
-    if not tally:
+    if not tally and not verifiers:
         return
     authors = report_mod.commit_counts(repo, days) if repo else {}
     who = Table(box=None)
@@ -870,17 +898,23 @@ def _movement(console, batches, days, repo):
         who.add_column(col, justify="right")
     if repo:
         who.add_column("commits", justify="right")
+    if verifiers is not None:
+        who.add_column("verified", justify="right")
     for name in sorted(tally, key=lambda n: -sum(tally[n].values())):
         row = [name] + [str(tally[name][c] or "") for c in ("moved", "new", "closed")]
         if repo:
             author = report_mod.match_author(name, authors)
             row.append(str(authors.pop(author)) if author else "?")
+        if verifiers is not None:
+            row.append(str(verifiers.pop(name, "") or ""))
         who.add_row(*row)
     console.print(who)
     for (a_name, email), count in sorted(authors.items()):
         console.print(
             f"[muted]{count} commit(s) by {a_name} <{email}> matched no assignee[/]"
         )
+    for name, count in sorted((verifiers or {}).items()):
+        console.print(f"[muted]{count} verdict(s) by {name} matched no assignee[/]")
 
 
 def _history(project, board_name, days, from_file=None, dump=None):
@@ -1493,6 +1527,29 @@ def _print_changes(pending, title):
     err().print(_changes_table(pending, title))
 
 
+def _asks(body):
+    """True if a note's first line (past the staged marker) starts with `Q:`."""
+    lines = [ln for ln in body.splitlines() if ln.strip()]
+    if lines and lines[0].startswith(apply_mod.MARKER):
+        lines = lines[1:]
+    return bool(lines) and lines[0].lstrip().startswith(stats_mod.QUESTION)
+
+
+def waiting_questions(spec_issue):
+    """`Q:` entries in the discussion or staged notes nobody else answered since.
+
+    Staged notes come after the pulled discussion and count as their own
+    author, so a staged reply answers a pulled question.
+    """
+    entries = [(d["by"], d["body"]) for d in spec_issue.get("discussion") or []]
+    entries += [(None, b) for b in apply_mod.staged_notes(spec_issue)]
+    return sum(
+        1
+        for k, (who, body) in enumerate(entries)
+        if _asks(body) and all(a == who for a, _ in entries[k + 1 :])
+    )
+
+
 @app.command()
 def status(
     db: str = typer.Option(SNAPSHOTS, "--db", help="Snapshot log to read."),
@@ -1500,9 +1557,10 @@ def status(
     """Every local board YAML at a glance. No network.
 
     pulled: age of <spec>.base. staged: what plan would write, minus notes.
-    notes: staged replies not yet in the discussion. verify: the oldest issue
-    waiting in Verify, from the snapshot log. overdue: past-due issues in
-    the YAML. snapshot: age of the last log line for the project.
+    notes: staged replies not yet in the discussion. questions: `Q:` notes
+    still waiting (- when the YAML was pulled without --notes). verify: the
+    oldest issue waiting in Verify, from the snapshot log. overdue: past-due
+    issues in the YAML. snapshot: age of the last log line for the project.
     """
 
     def go():
@@ -1527,6 +1585,9 @@ def status(
                     apply_mod.norm_text(d["body"]) for d in i.get("discussion") or []
                 }
             )
+            questions = None
+            if any("discussion" in i for i in spec["issues"]):
+                questions = sum(waiting_questions(i) for i in spec["issues"])
             batches = report_mod.load(db, project=spec["project"], days=AGE_WINDOW)
             ages = report_mod.age_days(report_mod.column_ages(batches), now)
             verify = [d for col, d in ages.values() if "Verify" in col.split("+")]
@@ -1544,6 +1605,7 @@ def status(
                     pulled,
                     staged,
                     notes,
+                    questions,
                     verify,
                     overdue,
                     last,
@@ -1554,15 +1616,20 @@ def status(
         table = Table(box=None)
         table.add_column("board", style="bold")
         table.add_column("pulled", style="muted")
-        for name in ("staged", "notes", "verify", "overdue"):
+        for name in ("staged", "notes", "questions", "verify", "overdue"):
             table.add_column(name, justify="right")
         table.add_column("snapshot", style="muted")
-        for name, pulled, staged, notes, verify, overdue, last in rows:
+        for name, pulled, staged, notes, questions, verify, overdue, last in rows:
             table.add_row(
                 name,
                 _ago(pulled, now) if pulled else "never",
                 "-" if staged is None else f"[changed]{staged}[/]" if staged else "0",
                 f"[added]{notes}[/]" if notes else "0",
+                "-"
+                if questions is None
+                else f"[bold red]{questions}[/]"
+                if questions
+                else "0",
                 f"[bold red]{max(verify)}d[/]" if verify else "-",
                 f"[bold red]{overdue}[/]" if overdue else "0",
                 _ago(last, now) if last else "never",

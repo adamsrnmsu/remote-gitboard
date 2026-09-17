@@ -53,6 +53,23 @@ def test_match_author_by_name_or_email_local_part():
 from datetime import UTC, datetime  # noqa: E402
 
 
+def test_verifier_counts_windows_verdicts_by_author():
+    history = [
+        {
+            "verdicts": [
+                ["2026-09-12T00:00:00Z", "bob", "failed"],
+                ["2026-09-13T00:00:00Z", "bob", "verified"],
+                ["2026-09-01T00:00:00Z", "carol", "verified"],  # before start
+            ]
+        },
+        {"verdicts": [["2026-09-14T00:00:00+00:00", "carol", "verified"]]},
+    ]
+    start = datetime(2026, 9, 7, tzinfo=UTC)
+    end = datetime(2026, 9, 14, tzinfo=UTC)  # inclusive
+    assert report.verifier_counts(history, start, end) == {"bob": 2, "carol": 1}
+    assert report.verifier_counts([], start, end) == {}
+
+
 def batch(ts, *recs):
     return {r["iid"]: {**r, "ts": ts} for r in recs}
 

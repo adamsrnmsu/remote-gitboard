@@ -65,6 +65,21 @@ def by_assignee(changes):
     return dict(tally)
 
 
+def verifier_counts(history, start, end):
+    """{username: verdicts} from a stats --dump's history, inside [start, end].
+
+    A verdict is `[ts, author, kind]`; the author is who checked the work,
+    which the snapshot log cannot see — it only knows the assignee.
+    """
+    tally = Counter()
+    for issue in history:
+        for ts, author, _ in issue["verdicts"]:
+            at = datetime.fromisoformat(ts)
+            if start <= at <= end:
+                tally[author] += 1
+    return tally
+
+
 def commit_counts(repo, days):
     """Commits per (author, email) over the same window, via `git log`."""
     done = subprocess.run(

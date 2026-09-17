@@ -126,3 +126,19 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Beads across machines and the no-network container
+
+- **Between machines**: `bd dolt push` after a session, `bd dolt pull` on the
+  other clone. The history rides on the git remote as `refs/dolt/data`
+  (pushed once on 2026-09-17); `git push` alone does not carry it.
+- **Into the container** (no GitLab, may have no `bd`): copy `.beads/` in
+  after `bd dolt push` (single writer: do not edit beads on the host while
+  the container works), or `bd export --all -o issues.jsonl` and copy the
+  file. If the container has `bd` it needs no git to read or update beads
+  (`bd init` is the only command that does).
+- **Back out**: `bd export --all -o issues.jsonl` inside, `bd import
+  issues.jsonl` on the host. Import is additive: deletions do not propagate,
+  so close beads instead of deleting them. Then `bd dolt push`.
+- Never run `bd sync` or `bd doctor` inside the container; both try the
+  network.

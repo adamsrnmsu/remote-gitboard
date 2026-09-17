@@ -12,12 +12,14 @@ import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import cli, client, config
 from gitboard.cli import SIGN, STYLE, _changes_table, app
+from gitboard.log import THEME
 
 runner = CliRunner()
 
@@ -58,6 +60,8 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("GITLAB_READ_TOKEN", "read-tok")
     monkeypatch.setenv("GITLAB_WRITE_TOKEN", "write-tok")
     monkeypatch.chdir(tmp_path)
+    # the cached stdout console is 80 wide off a tty; status needs more
+    monkeypatch.setattr(cli, "out", lambda: Console(theme=THEME, width=120))
     config.reset()
     yield
     config.reset()
@@ -254,6 +258,7 @@ def test_status_renders_offline(gl, tmp_path, monkeypatch):
         "0m ago",
         "1",
         "1",
+        "-",
         "3d",
         "1",
         "3d ago",
@@ -270,9 +275,33 @@ def test_status_without_a_base_shows_dashes(gl, tmp_path):
         "-",
         "0",
         "-",
+        "-",
         "1",
         "never",
     ]
+
+
+def talk(by, body, at="2026-09-10"):
+    return {"by": by, "at": at, "body": body}
+
+
+def test_status_counts_questions_nobody_else_answered(gl, tmp_path):
+    spec = json.loads(json.dumps(SPEC))
+    # answered by someone else: not waiting
+    spec["issues"][0]["discussion"] = [talk("bob", "Q: which env?"), talk("me", "prod")]
+    # asked, then only the asker again: still waiting
+    spec["issues"][1]["discussion"] = [talk("bob", "Q: ok to close?"), talk("bob", "?")]
+    write_spec(tmp_path, spec=spec, base=False)
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0, r.output
+    assert cells(r.stdout)[4] == "1"
+    # a staged reply answers it; a staged question (marker or not) waits
+    spec["issues"][1]["notes"] = ["yes, close it"]
+    spec["issues"][0]["notes"] = [f"{apply_mod.MARKER}\n\nQ: and staging?"]
+    write_spec(tmp_path, spec=spec, base=False)
+    assert cells(runner.invoke(app, ["status"]).stdout)[4] == "1"
+    assert cli.waiting_questions(spec["issues"][1]) == 0
+    assert cli.waiting_questions(spec["issues"][0]) == 1
 
 
 # --- land ------------------------------------------------------------------
@@ -400,6 +429,45 @@ def test_report_all_reads_only_the_log(gl, tmp_path, monkeypatch):
     r = runner.invoke(app, ["report", "--all"])
     assert r.exit_code == 0, r.output
     assert "no snapshot of grp/proj" in r.output
+
+
+def test_report_history_credits_verifiers(gl, tmp_path, monkeypatch):
+    """--history adds a verified column from the dump's verdicts; a verifier
+    who is not an assignee is listed like an unmatched git author."""
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path, data = history_file(tmp_path)
+    data["history"][0]["verdicts"].append(["2026-09-13T00:00:00Z", "carol", "verified"])
+    (tmp_path / "h.json").write_text(json.dumps(data))
+    now = datetime.now(UTC)
+    rec = {"project": "grp/proj", "board": "Dev Board", "iid": 1, "title": "one"}
+    lines = [
+        {
+            **rec,
+            "ts": (now - timedelta(days=1)).isoformat(),
+            "columns": ["Doing"],
+            "assignee": "alice",
+        },
+        {**rec, "ts": now.isoformat(), "columns": ["Verify"], "assignee": "alice"},
+        {
+            **rec,
+            "iid": 2,
+            "title": "two",
+            "ts": now.isoformat(),
+            "columns": ["Doing"],
+            "assignee": "bob",
+        },
+    ]
+    (tmp_path / "snapshots.jsonl").write_text(
+        "".join(json.dumps(ln) + "\n" for ln in lines)
+    )
+    plain = runner.invoke(app, ["report", "grp/proj"])
+    assert plain.exit_code == 0, plain.output
+    assert "verified" not in plain.stdout
+    r = runner.invoke(app, ["report", "grp/proj", "--history", path])
+    assert r.exit_code == 0, r.output
+    assert "verified" in r.stdout
+    assert re.search(r"bob\s+1\s+1\s*\n", r.stdout), r.stdout
+    assert "1 verdict(s) by carol matched no assignee" in r.stdout
 
 
 # --- stats / digest --------------------------------------------------------

@@ -19,7 +19,7 @@ gitboard pull group/project --notes         # also pull each issue's discussion 
 gitboard pull group/project --force --discard-edits   # overwrite even with unapplied edits
 gitboard pull --all                         # every board that has a boards/*.yaml
 gitboard snapshot group/project             # append board state to snapshots.jsonl (--all: every board)
-gitboard status                             # per board: pulled ago, staged, notes, oldest in Verify, overdue, snapshot ago
+gitboard status                             # per board: pulled ago, staged, notes, Q: waiting, oldest in Verify, overdue, snapshot ago
 gitboard tui group/project                  # interactive loop, see below
 gitboard config                             # what URL/tokens resolved, and from where
 
@@ -47,6 +47,7 @@ gitboard migrate boards/x.migration.yaml    # reformat: rename/merge/drop labels
 gitboard stats --from h.json                # see above
 gitboard report group/project --repo .      # what moved, from snapshots.jsonl
 gitboard report group/project --since boards/x.yaml   # since that file was pulled; --all: every board
+gitboard report group/project --history h.json   # + a verified column: verdicts per verifier from a stats --dump
 gitboard ingest TASKS.md --into boards/x.yaml   # tasks.md -> board issues, see tasks-flow
 gitboard tui --from boards/x.yaml           # offline TUI
 ```

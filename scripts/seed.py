@@ -7,6 +7,10 @@
 Only for the throwaway instance in docker-compose.yml. It shells into the
 container as root; never point it at anything you care about.
 
+Re-seeding resets boards/demo.yaml only. Labels, boards and projects that
+smoke tests leave behind (scoped labels, a second board, a second project)
+stay until `make reset` wipes the volumes.
+
 The board contents live in boards/demo.yaml and go through the CLI, so this
 file owns nothing but the token — the one thing the REST API cannot bootstrap
 for itself.
