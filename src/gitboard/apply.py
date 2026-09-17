@@ -101,6 +101,19 @@ def load(path):
     for col in spec["columns"]:
         if "color" in col:
             col["color"] = norm_color(col["color"])
+    column_names = {c["name"] for c in spec["columns"]}
+    for label in spec.get("labels") or []:  # optional: absent stays absent
+        name = str(label.get("name") or "").strip() if isinstance(label, dict) else ""
+        if not name:
+            raise SpecError(f"{path}: every entry under labels: needs a name")
+        label["name"] = name
+        if name in column_names:
+            raise SpecError(
+                f"{path}: {name!r} is a column — set its colour under columns:, "
+                "not labels:"
+            )
+        if "color" in label:
+            label["color"] = norm_color(label["color"])
     seen = set()
     for issue in spec["issues"]:
         title = str(issue.get("title") or "").strip() if isinstance(issue, dict) else ""
@@ -179,21 +192,31 @@ def spec_from_board(project, board, columns, notes=False):
             entry["discussion"] = talk
         spec_issues.append(entry)
 
-    return {
+    spec = {
         "project": project.path_with_namespace,
         "board": board.name,
         "columns": [
-            {
-                "name": name,
-                "color": COLOR_NAMES.get(
-                    labels[name].color.lower(), labels[name].color
-                ),
-            }
+            {"name": name, "color": _friendly(labels[name].color)}
             for name, _ in columns
             if name != "Backlog" and name in labels
         ],
         "issues": spec_issues,
     }
+    # every non-column label a card carries, with its colour and description,
+    # so scoped labels keep their look when the YAML is applied elsewhere
+    column_names = {name for name, _ in columns}
+    extra = {n for i in seen.values() for n in i.labels} - column_names
+    for name in sorted(extra & labels.keys()):
+        entry = {"name": name, "color": _friendly(labels[name].color)}
+        if desc := norm_text(getattr(labels[name], "description", None)):
+            entry["description"] = desc
+        spec.setdefault("labels", []).append(entry)
+    return spec
+
+
+def _friendly(color):
+    """A label colour as pull writes it: the friendly name when there is one."""
+    return COLOR_NAMES.get(color.lower(), color)
 
 
 def dump(spec):
@@ -272,17 +295,34 @@ def ensure_project(gl, path, create):
         return gl.projects.create(payload)
 
 
-def ensure_labels(project, columns, record):
+DEFAULT_COLOR = "#428bca"
+
+
+def ensure_labels(project, columns, record, extra=()):
+    """Create every column label and `labels:` entry that is missing; fix a
+    colour that differs and a description when the spec gives one."""
     have = {x.name: x for x in project.labels.list(all=True)}
-    for col in columns:
-        name, color = col["name"], col.get("color", "#428bca")
+    for want in [*columns, *extra]:
+        name, color = want["name"], want.get("color", DEFAULT_COLOR)
+        desc = want.get("description")
         if name not in have:
-            have[name] = project.labels.create({"name": name, "color": color})
+            payload = {"name": name, "color": color}
+            if desc:
+                payload["description"] = desc
+            have[name] = project.labels.create(payload)
             record("added", "label", f"{name} ({color})")
-        elif have[name].color.lower() != color.lower():
-            have[name].color = color
-            have[name].save()
+            continue
+        label, dirty = have[name], False
+        if label.color.lower() != color.lower():
+            label.color, dirty = color, True
             record("changed", "label", f"{name} colour -> {color}")
+        if desc is not None and norm_text(getattr(label, "description", None)) != (
+            norm_text(desc)
+        ):
+            label.description, dirty = desc, True
+            record("changed", "label", f"{name} description")
+        if dirty:
+            label.save()
     return have
 
 
@@ -510,7 +550,7 @@ def apply(gl, spec, base=None, force=False, on_change=None):
 
     users = resolve_users(gl, spec)
     project = ensure_project(gl, spec["project"], spec.get("create_project", False))
-    labels = ensure_labels(project, spec["columns"], record)
+    labels = ensure_labels(project, spec["columns"], record, spec.get("labels", []))
     ensure_board(project, spec["board"], spec["columns"], labels, record)
     live = ensure_issues(project, spec, record, users, base, force)
     ensure_notes(project, spec["issues"], record, live)
@@ -525,8 +565,16 @@ def plan(gl, spec, base=None):
     except client.GitlabProblem:
         return diff(spec, None, base)
     opened, iids, closed = index_issues(project.issues.list(state="all", all=True))
+    labels = project.labels.list(all=True)
     have = {
-        "labels": {x.name for x in project.labels.list(all=True)},
+        "labels": {x.name for x in labels},
+        "label_meta": {
+            x.name: (
+                (getattr(x, "color", None) or "").lower(),
+                norm_text(getattr(x, "description", None)),
+            )
+            for x in labels
+        },
         "boards": {b.name for b in project.boards.list(all=True)},
         "issues": {title: current_issue(i) for title, i in opened.items()},
         "iids": iids,
@@ -550,8 +598,16 @@ def have_from_spec(base):
     order agree by construction.
     """
     issues = [(i["title"].strip(), i) for i in base["issues"]]
+    labels = [*base["columns"], *base.get("labels", [])]
     return {
-        "labels": {c["name"] for c in base["columns"]},
+        "labels": {x["name"] for x in labels},
+        "label_meta": {
+            x["name"]: (
+                norm_color(x["color"]) if x.get("color") else "",
+                norm_text(x.get("description")),
+            )
+            for x in labels
+        },
         "boards": {base["board"]},
         "issues": {title: wanted_issue(i) for title, i in issues},
         "iids": {i["iid"]: title for title, i in issues if i.get("iid") is not None},
@@ -566,15 +622,37 @@ def have_from_spec(base):
     }
 
 
+def label_changes(labels, have):
+    """What ensure_labels would do for the spec's `labels:` entries: create
+    the missing, recolour, re-describe. Colour and description are compared
+    only when the spec states them and `have` knows them."""
+    pending = []
+    for want in labels:
+        name = want["name"]
+        if name not in have["labels"]:
+            pending.append(("added", "label", name))
+            continue
+        color, desc = have.get("label_meta", {}).get(name, ("", ""))
+        if want.get("color") and color and norm_color(want["color"]) != color:
+            pending.append(("changed", "label", f"{name} colour -> {want['color']}"))
+        if want.get("description") is not None and norm_text(want["description"]) != (
+            desc
+        ):
+            pending.append(("changed", "label", f"{name} description"))
+    return pending
+
+
 def diff(spec, have, base=None, force=False):
     """Pure: the (kind, what, detail) list apply would write. `have` is
-    {"labels": set, "boards": set, "issues": {title: current_issue-shaped},
-    "iids": {iid: title}, "closed": {titles}, "notes": {title: {bodies
-    already posted}}}, or None for a project that does not exist yet.
-    `base` is the spec as pulled; see apply()."""
+    {"labels": set, "label_meta": {name: (hex colour, description)},
+    "boards": set, "issues": {title: current_issue-shaped}, "iids": {iid:
+    title}, "closed": {titles}, "notes": {title: {bodies already posted}}},
+    or None for a project that does not exist yet. `base` is the spec as
+    pulled; see apply()."""
     if have is None:
         pending = [("added", "project", spec["project"])]
         pending += [("added", "label", c["name"]) for c in spec["columns"]]
+        pending += [("added", "label", x["name"]) for x in spec.get("labels", [])]
         pending += [("added", "board", spec["board"])]
         pending += [("added", "issue", i["title"]) for i in spec["issues"]]
         pending += [
@@ -591,6 +669,7 @@ def diff(spec, have, base=None, force=False):
         for c in spec["columns"]
         if c["name"] not in have["labels"]
     ]
+    pending += label_changes(spec.get("labels", []), have)
     if spec["board"] not in have["boards"]:
         pending.append(("added", "board", spec["board"]))
     for spec_i in spec["issues"]:

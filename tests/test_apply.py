@@ -251,13 +251,43 @@ def board_fixture():
     return project, board, columns
 
 
+def scoped_label(project, name="type::bug", color="#DC143C", description="a defect"):
+    """Give the project a non-column label and put it on its first issue."""
+    label = types.SimpleNamespace(
+        name=name, color=color, description=description, id=9, save=lambda: None
+    )
+    project.labels.list().append(label)
+    project.issues.list()[0].labels.append(name)
+    return label
+
+
 def test_pulled_spec_plans_clean_against_its_own_board(monkeypatch):
     """pull then plan must be a no-op, or pull is lying about the board."""
     project, board, columns = board_fixture()
+    scoped_label(project)
     spec = apply.spec_from_board(project, board, columns)
     spec.setdefault("issues", [])
     use_project(monkeypatch, project)
     assert apply.plan(None, spec) == []
+
+
+def test_pull_carries_non_column_labels_with_colour_and_description():
+    project, board, columns = board_fixture()
+    scoped_label(project)
+    scoped_label(project, "stale", "#808080", description=None)
+    spec = apply.spec_from_board(project, board, columns)
+    assert spec["labels"] == [
+        {"name": "stale", "color": "gray"},
+        {"name": "type::bug", "color": "crimson", "description": "a defect"},
+    ]
+    assert "labels" not in apply.spec_from_board(*board_fixture())
+
+
+def test_pull_then_load_then_plan_is_still_clean(monkeypatch, tmp_path):
+    project, board, columns = board_fixture()
+    scoped_label(project)
+    spec = reload(apply.spec_from_board(project, board, columns), tmp_path, "b.yaml")
+    assert apply.plan(use_project(monkeypatch, project), spec) == []
 
 
 def test_pulled_spec_drops_empty_fields():
@@ -396,6 +426,84 @@ def test_hex_passes_through_lowercased():
 def test_unknown_color_is_a_spec_error():
     with pytest.raises(apply.SpecError, match="unknown color"):
         apply.norm_color("blurple")
+
+
+def test_load_rejects_a_label_that_is_also_a_column(tmp_path):
+    f = tmp_path / "b.yaml"
+    f.write_text(
+        "project: g/p\nboard: B\ncolumns:\n  - name: Doing\n"
+        "labels:\n  - name: Doing\n    color: red\n"
+    )
+    with pytest.raises(apply.SpecError, match="'Doing' is a column"):
+        apply.load(str(f))
+    f.write_text("project: g/p\nboard: B\nlabels:\n  - color: red\n")
+    with pytest.raises(apply.SpecError, match="needs a name"):
+        apply.load(str(f))
+
+
+def test_load_normalises_label_colors(tmp_path):
+    f = tmp_path / "b.yaml"
+    f.write_text(
+        "project: g/p\nboard: B\nlabels:\n  - name: type::bug\n    color: crimson\n"
+    )
+    assert apply.load(str(f))["labels"] == [{"name": "type::bug", "color": "#dc143c"}]
+
+
+def test_ensure_labels_creates_and_fixes_extra_labels():
+    created = []
+    project = writable_project(FakeIssue("one"))
+    project.labels.create = lambda p: created.append(p) or types.SimpleNamespace(**p)
+    stale = scoped_label(project, "stale", "#808080", description="old")
+    changes = []
+    extra = [
+        {"name": "type::bug", "color": "#dc143c", "description": "a defect"},
+        {"name": "stale", "color": "#808080", "description": "sat too long"},
+        {"name": "Doing"},  # a column: already right, nothing written
+    ]
+    apply.ensure_labels(project, SPEC["columns"], lambda *c: changes.append(c), extra)
+    assert created == [
+        {"name": "type::bug", "color": "#dc143c", "description": "a defect"}
+    ]
+    assert stale.description == "sat too long"
+    assert changes == [
+        ("added", "label", "type::bug (#dc143c)"),
+        ("changed", "label", "stale description"),
+    ]
+
+
+def test_plan_reports_a_missing_label_and_a_colour_change(monkeypatch):
+    project = writable_project(FakeIssue("one", labels=["Doing"]))
+    scoped_label(project, "stale", "#808080", description="old")
+    spec = {
+        **SPEC,
+        "labels": [
+            {"name": "type::bug", "color": "#dc143c"},
+            {"name": "stale", "color": "red", "description": "old"},
+        ],
+    }
+    gl = use_project(monkeypatch, project)
+    assert apply.plan(gl, spec) == [
+        ("added", "label", "type::bug"),
+        ("changed", "label", "stale colour -> red"),
+    ]
+    assert apply.plan(gl, {**spec, "labels": [{"name": "stale"}]}) == []
+
+
+def test_offline_diff_sees_a_base_label():
+    base = {**SPEC, "labels": [{"name": "stale", "color": "#808080"}]}
+    edited = {
+        **SPEC,
+        "labels": [
+            {"name": "stale", "color": "gray", "description": "sat too long"},
+            {"name": "type::bug"},
+        ],
+    }
+    assert apply.diff(edited, apply.have_from_spec(base)) == [
+        ("changed", "label", "stale description"),
+        ("added", "label", "type::bug"),
+    ]
+    assert apply.diff(base, apply.have_from_spec(base)) == []
+    assert ("added", "label", "stale") in apply.diff(base, None)
 
 
 def test_load_normalises_column_colors(tmp_path):

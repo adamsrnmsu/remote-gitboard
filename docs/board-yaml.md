@@ -22,6 +22,13 @@ columns:                       # board lists, in order. Each is a label.
   - name: Review
     color: "#5cb85c"
 
+labels:                        # non-column labels: colour + description, so
+  - name: type::bug            # scoped labels stop getting random colours
+    color: crimson
+    description: A defect in shipped behaviour
+  - name: stale
+    color: gray
+
 issues:
   - title: Set up the board from YAML     # identity when there is no iid
     iid: 12                    # from pull; the match key, so a new title here is a rename
@@ -69,6 +76,14 @@ Scoped labels
 
 `columns[].name`, `columns[].color`
 : A list is a label. Colour by name (below) or hex.
+
+`labels[].name`, `labels[].color`, `labels[].description`
+: Labels that are not columns (`type::bug`, `epic::Billing`, `stale`).
+  `apply` creates a missing one (default colour gitlab blue) and fixes a
+  colour or description that differs; `plan` shows both as `label` rows.
+  `pull` writes every non-column label a card on the board carries, so the
+  look survives a move to another project. A name that is also a column is
+  an error: its colour lives under `columns:`.
 
 `issues[].title`
 : The identity when the entry has no `iid`: renaming such an entry creates
