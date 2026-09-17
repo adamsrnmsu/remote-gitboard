@@ -17,6 +17,15 @@ def series():
     return stats.daily_series(history(), COLUMNS, START, END)
 
 
+WEEK = {
+    "period_end": "2026-09-07T12:00:00+00:00",
+    "done": 9,
+    "open": 41,
+    "verify_queue": 3,
+    "verify_median": 1.4,
+}
+
+
 # --- primitives ---------------------------------------------------------------
 
 
@@ -40,6 +49,22 @@ def test_column_chart_scales_to_the_peak():
     s = [{"date": "2026-09-14", "open": 2}, {"date": "2026-09-15", "open": 4}]
     html = mail.column_chart(s, "open", "#3987e5", height=80)
     assert 'height="40"' in html and 'height="80"' in html
+
+
+def test_sparkline_row_pads_left_without_labels():
+    html = mail.sparkline_row("x", [("09-01", 3), ("09-08", 5), ("09-15", 4)], "#fff")
+    assert html.count('valign="bottom"') == 8
+    tops = html.split("<tr>")[2]  # the value-label row of the chart
+    first = tops.split("</td>")[0]
+    assert ">3<" not in first and "&nbsp;" in first  # padded column: blank
+    assert ">4</span></td></tr>" in html  # last value in the right cell
+    assert "–" in mail.sparkline_row("x", [], "#fff")
+
+
+def test_trend8_needs_two_rows():
+    assert "first week logged" in mail._trend8([WEEK])
+    html = mail._trend8([WEEK, {**WEEK, "period_end": "2026-09-14T12:00:00+00:00"}])
+    assert "09-07" in html and "09-14" in html and "done / week" in html
 
 
 def test_moves_block_empty_text():
@@ -87,6 +112,33 @@ def test_person_page_leads_with_moves_and_links_cards():
     html = mail.render_person_html(person, s, "alice", series())
     assert html.index("Your 3 moves") < html.index("Team burndown")
     assert 'href="http://x/4"' in html
+
+
+def test_zones_you_before_team_and_team_only_on_team_page():
+    s = summary()
+    person = stats.for_person(s, history(), "alice", NOW)
+    html = mail.render_person_html(person, s, "alice", series())
+    assert html.index(">YOU<") < html.index(">TEAM<")
+    team = mail.render_team_html(s, series())
+    assert ">YOU<" not in team and ">TEAM<" in team
+    assert 'href="team.html"' in html
+
+
+def test_rule_count_grows_with_the_trend():
+    s = summary()
+    person = stats.for_person(s, history(), "alice", NOW)
+    without = mail.render_person_html(person, s, "alice", series())
+    with_ = mail.render_person_html(person, s, "alice", series(), weekly=[WEEK, WEEK])
+    assert without.count(mail.rule()) == 4
+    assert with_.count(mail.rule()) == 5
+
+
+def test_glance_chips_and_person_shorter_than_team():
+    s = summary()
+    person = stats.for_person(s, history(), "alice", NOW)
+    html = mail.render_person_html(person, s, "alice", series(), weekly=[WEEK])
+    assert "moves</span>" in html and "open, team</span>" in html
+    assert len(html) < len(mail.render_team_html(s, series(), weekly=[WEEK]))
 
 
 def test_index_lists_every_file():

@@ -21,6 +21,7 @@ THEME = {
     "warn": "#c98500",
     "danger": "#e66767",
     "good": "#199e70",
+    "rule": "#2a313a",
 }
 COLUMN_COLORS = {
     "Doing": "#3987e5",
@@ -137,19 +138,23 @@ def _weekday(label):
         return str(label)
 
 
-def column_chart(series, key, color, height=80, label_key="date"):
-    """One nested 1-col table per day: spacer td over a filled td."""
+def column_chart(series, key, color, height=80, label_key="date", width=600):
+    """One nested 1-col table per point: spacer td over a filled td.
+
+    Points without a value (padding) draw nothing and get no value label.
+    """
     if not series:
         return table(_none("no data"))
     vals = [int(p.get(key) or 0) for p in series]
     mx = max(vals)
     peak = vals.index(mx)
     show = {0, len(vals) - 1, peak}
-    w = max(8, 600 // len(vals))
+    w = max(8, width // len(vals))
     tops, cols, days = [], [], []
     for k, (p, v) in enumerate(zip(series, vals, strict=True)):
         h = 0 if v == 0 else max(2, round(v / max(1, mx) * height))
-        label = span(v, THEME["muted"], MONO, 10) if k in show else "&nbsp;"
+        labelled = k in show and p.get(key) is not None
+        label = span(v, THEME["muted"], MONO, 10) if labelled else "&nbsp;"
         tops.append(td(label, width=w, align="center", style="padding:0 0 4px"))
         inner = td("&nbsp;", style=PX, height=height - h)
         if h:
@@ -167,6 +172,29 @@ def column_chart(series, key, color, height=80, label_key="date"):
         )
     rows = "".join(f"<tr>{''.join(r)}</tr>" for r in (tops, cols, days))
     return table(rows)
+
+
+def sparkline_row(label, values, color, n=8):
+    """label · 24px column chart over the last `n` weeks · last value.
+
+    values = [(week_label, v)] oldest first; left-padded to `n` so every
+    sparkline shares the same x axis.
+    """
+    values = list(values)[-n:]
+    points = [{} for _ in range(n - len(values))]
+    points += [{"w": w, "v": v} for w, v in values]
+    chart = column_chart(points, "v", color, height=24, label_key="w", width=380)
+    last = values[-1][1] if values else None
+    cells = [
+        td(
+            span(label, THEME["muted"], size=12),
+            width=140,
+            style="padding:3px 8px 3px 0",
+        ),
+        td(chart, width=380),
+        td(span("–" if last is None else last, font=MONO, size=12), align="right"),
+    ]
+    return "<tr>" + "".join(cells) + "</tr>"
 
 
 def stat_tile(label, value, delta=None, good=None):
@@ -241,6 +269,46 @@ def sub(title):
     return (
         f"<div style='padding:8px 0 2px'>{span(title, THEME['muted'], size=12)}</div>"
     )
+
+
+def rule():
+    """A 1px separator row between blocks inside a zone."""
+    return f"<tr>{td('&nbsp;', THEME['rule'], style=PX, height=1)}</tr>"
+
+
+def zone_banner(title, subtitle, color):
+    """4px accent stripe · title (pass it upper-cased; Word ignores
+    text-transform) over a muted subtitle. Word ignores border-left too, so
+    the stripe is its own td."""
+    head = span(title, color, size=12, style="letter-spacing:2px;font-weight:bold")
+    body = f"<div>{head}</div><div>{span(subtitle, THEME['muted'], size=12)}</div>"
+    inner = table(
+        "<tr>"
+        + td("&nbsp;", color, style=PX, width=4)
+        + td(body, THEME["panel"], style="padding:10px 12px")
+        + "</tr>"
+    )
+    return f"<tr>{td(inner, style='padding:28px 0 4px')}</tr>"
+
+
+def zone(title, subtitle, color, blocks):
+    """Banner + blocks separated by rules."""
+    return zone_banner(title, subtitle, color) + rule().join(blocks)
+
+
+def glance(chips):
+    """One row of mono panel chips, `[(n, label)]`, so a reader can stop here."""
+    gap = td("&nbsp;", width=8, style=PX)
+    cells = [
+        td(
+            span(f"{n} {label}", font=MONO, size=12),
+            THEME["panel"],
+            style="padding:6px 10px",
+        )
+        for n, label in chips
+    ]
+    row = table("<tr>" + gap.join(cells) + "</tr>")
+    return f"<tr>{td(row, style='padding:8px 0')}</tr>"
 
 
 def page(title, blocks, headers=None):
@@ -392,6 +460,77 @@ def _stuck(summary, person=None):
     return section("Stuck / questions", inner)
 
 
+def _yours(person):
+    """What is on this person: verify queue, overdue, questions."""
+    inner = sub("Verify queue") + _rows(person.get("verify_queue", []), "verify", _days)
+    inner += sub("Overdue") + _rows(
+        person.get("overdue", []), "due", lambda i: str(i.get("due", ""))
+    )
+    inner += sub("Questions waiting on you") + _rows(
+        person.get("questions", []),
+        "ask",
+        lambda i: f"{i.get('author', '')} · {_days(i)}",
+    )
+    return section("On you", inner)
+
+
+def _fmt(v):
+    return "–" if v is None else v
+
+
+def _verification_brief(summary):
+    """One mono line of the verification numbers."""
+    v = summary.get("verify", {})
+    qprev, qnow = summary.get("trend", {}).get(
+        "verify_queue", (None, len(v.get("queue", [])))
+    )
+    cov = v.get("coverage")
+    cov = "–" if cov is None else f"{cov:.0%}"
+    text = (
+        f"in Verify {_fmt(qnow)} (was {_fmt(qprev)}) · verified {v.get('verified', 0)}"
+        f" · failed {v.get('failed', 0)} · coverage {cov}"
+        f" · oldest {_fmt(v.get('oldest_days'))} d"
+    )
+    return section("Verification", span(text, font=MONO, size=12))
+
+
+def _stuck_brief(summary, team_url="team.html"):
+    """Top-3 stuck cards and the link to the full team page.
+
+    The link is relative: it resolves only in the browser preview, next to
+    team.html in the same report directory."""
+    stuck = [
+        {"iid": iid, "title": f"in {col}", "days": days}
+        for iid, col, days in summary.get("flow", {}).get("stuck", [])[:3]
+    ]
+    href = escape(team_url, quote=True)
+    more = (
+        f'<div style=\'padding-top:8px\'><a href="{href}" style="font-family:{SANS};'
+        f'font-size:12px;color:{THEME["accent"]};text-decoration:none">'
+        "Full team report → team.html</a></div>"
+    )
+    return section("Stuck", _rows(stuck, "stuck", _days) + more)
+
+
+def _trend8(rows):
+    """Four sparklines over the weekly stats log, oldest first."""
+    if len(rows) < 2:
+        return section(
+            "8-week trend", _none("first week logged; the trend starts next run")
+        )
+
+    def vals(key):
+        return [(r.get("period_end", "")[5:10], r.get(key)) for r in rows]
+
+    lines = (
+        sparkline_row("done / week", vals("done"), THEME["good"]),
+        sparkline_row("verify queue", vals("verify_queue"), THEME["warn"]),
+        sparkline_row("verify median d", vals("verify_median"), THEME["accent"]),
+        sparkline_row("open", vals("open"), THEME["accent"]),
+    )
+    return section("8-week trend", table("".join(lines)))
+
+
 def _footer(summary):
     p = summary.get("period", {})
     text = (
@@ -404,35 +543,75 @@ def _footer(summary):
     )
 
 
-def render_person_html(person, summary, username, series, svg=False, headers=None):
-    """Moves and impact first, then the team picture."""
+def render_person_html(
+    person,
+    summary,
+    username,
+    series,
+    svg=False,
+    headers=None,
+    weekly=None,
+    team_url="team.html",
+):
+    """Glance, then the YOU zone, then a brief TEAM zone."""
+    moves = stats.three_moves(person)
+    mine = sum(person.get("open_by_column", {}).values())
+    team = [
+        _burndown(series, svg),
+        _verification_brief(summary),
+    ]
+    if weekly is not None:
+        team.append(_trend8(weekly))
+    team.append(_stuck_brief(summary, team_url))
     blocks = [
         _masthead(username, summary),
-        section("Your 3 moves", moves_block(stats.three_moves(person))),
-        section(
-            "Your impact",
-            tiles(
-                stat_tile("done", len(person.get("done", []))),
-                stat_tile("verified", person.get("verified", 0)),
-                stat_tile("failed", person.get("failed", 0)),
-            ),
+        glance(
+            [
+                (len(moves), "moves"),
+                (mine, "open, yours"),
+                (summary.get("open", {}).get("total", 0), "open, team"),
+            ]
         ),
-        _burndown(series, svg),
-        _verification(summary, series),
-        _work(summary),
-        _stuck(summary, person),
+        zone(
+            "YOU",
+            "What is on you this week.",
+            THEME["accent"],
+            [
+                section("Your 3 moves", moves_block(moves)),
+                section(
+                    "Your impact",
+                    tiles(
+                        stat_tile("done", len(person.get("done", []))),
+                        stat_tile("verified", person.get("verified", 0)),
+                        stat_tile("failed", person.get("failed", 0)),
+                    ),
+                ),
+                _yours(person),
+            ],
+        ),
+        zone(
+            "TEAM",
+            f"The board, briefly. Full report: {team_url}",
+            THEME["muted"],
+            team,
+        ),
         _footer(summary),
     ]
     return page(username, blocks, headers)
 
 
-def render_team_html(summary, series, svg=False, headers=None):
-    blocks = [
-        _masthead("Team", summary),
+def render_team_html(summary, series, svg=False, headers=None, weekly=None):
+    team = [
         _burndown(series, svg),
         _verification(summary, series),
         _work(summary),
         _stuck(summary),
+    ]
+    if weekly is not None:
+        team.append(_trend8(weekly))
+    blocks = [
+        _masthead("Team", summary),
+        zone("TEAM", "The whole board, this week.", THEME["muted"], team),
         _footer(summary),
     ]
     return page("Team", blocks, headers)
