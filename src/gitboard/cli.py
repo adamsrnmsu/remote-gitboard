@@ -29,6 +29,7 @@ from gitboard import board as board_mod
 from gitboard import client
 from gitboard import ingest as ingest_mod
 from gitboard import mail as mail_mod
+from gitboard import migrate as migrate_mod
 from gitboard import report as report_mod
 from gitboard import stats as stats_mod
 from gitboard.config import (
@@ -48,12 +49,13 @@ app = typer.Typer(
 )
 log = get_logger()
 
-SIGN = {"added": "+", "changed": "~", "skipped": "-", "drift": "!"}
+SIGN = {"added": "+", "changed": "~", "skipped": "-", "drift": "!", "oneway": "!"}
 STYLE = {
     "added": "added",
     "changed": "changed",
     "skipped": "muted",
     "drift": "bold red",
+    "oneway": "bold red",  # same glyph as drift, same meaning: look first
 }
 SNAPSHOTS = "snapshots.jsonl"
 STATS_LOG = "reports/stats.jsonl"  # one summary row per board per stats/digest run
@@ -425,6 +427,46 @@ def land(
             err().print(
                 f"[muted]next: bd import {Path(spec_path).parent / 'issues.jsonl'}[/]"
             )
+
+    _run(go)
+
+
+@app.command()
+def migrate(
+    file: str = typer.Argument(..., help="A boards/<name>.migration.yaml."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+):
+    """Reformat a board: rename/merge/drop labels, reorder or drop columns,
+    move cards, split boards. One-way ops are marked !. The /migrate-board
+    agent drafts the file; a person runs this."""
+
+    def go():
+        mig = migrate_mod.load(file)
+        gl = client.gitlab(write=True)
+        with err().status(f"reading {mig['project']}…"):
+            pending = migrate_mod.plan(gl, mig)
+        ops = [c for c in pending if c[0] != "skipped"]
+        if not ops:
+            err().print("[muted]nothing to migrate — every op is already applied[/]")
+            return
+        err().print(_changes_table(pending, f"migration {file} — ! rows are one-way"))
+        touched = migrate_mod.touched(pending)
+        if not yes and not typer.confirm(
+            f"run {len(ops)} op(s), {touched} card(s) touched by one-way ops?"
+        ):
+            raise typer.Abort()
+
+        def record(kind, what, detail):
+            err().print(_changes_table([(kind, what, detail)], None))
+
+        with client.write_errors():
+            changes = migrate_mod.apply(gl, mig, record)
+        proj, board = board_mod.fetch(mig["project"], mig["board"])
+        n = _write_snapshot(proj, board)
+        err().print(
+            f"[added]{len(changes)} op(s) run[/] — gitboard show {mig['project']}; "
+            f"[muted]{n} issue(s) appended to {SNAPSHOTS}[/]"
+        )
 
     _run(go)
 

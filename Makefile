@@ -14,9 +14,10 @@ VENV       = .venv
 PY         = $(VENV)/bin/python
 PROJECT    ?=
 SPEC       ?=
+FILE       ?=
 GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land test fmt lint docs clean stats digest
+.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land migrate test fmt lint docs clean stats digest
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -108,6 +109,9 @@ apply: install  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
 
 land: install  ## apply, snapshot, refresh SPEC.base: make land SPEC=boards/test.yaml
 	@$(GITBOARD) land $(SPEC)
+
+migrate: install  ## run a board migration file: make migrate FILE=boards/x.migration.yaml
+	@$(GITBOARD) migrate $(FILE)
 
 test: install  ## run the test suite
 	PYTHONPATH=src $(VENV)/bin/pytest -q

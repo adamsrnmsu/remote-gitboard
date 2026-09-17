@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
-from gitboard import client, config
+from gitboard import cli, client, config
 from gitboard.cli import SIGN, STYLE, _changes_table, app
 
 runner = CliRunner()
@@ -124,7 +124,8 @@ def cells(stdout):
 
 
 def test_sign_and_style_cover_every_kind():
-    assert set(SIGN) == set(STYLE) == {"added", "changed", "skipped", "drift"}
+    assert set(SIGN) == set(STYLE) == {"added", "changed", "skipped", "drift", "oneway"}
+    assert SIGN["oneway"] == SIGN["drift"] == "!"  # both mean: look before you leap
 
 
 def test_unknown_kind_does_not_crash_the_table():
@@ -298,6 +299,78 @@ def test_land_refuses_drift_and_keeps_the_base(gl, tmp_path):
     r = runner.invoke(app, ["land", path, "--yes"])
     assert r.exit_code == 1
     assert not (tmp_path / "boards/x.yaml.base.old").exists()
+
+
+# --- migrate: the one-way ops a person runs --------------------------------
+
+
+MIG = {"project": "grp/proj", "board": "Dev Board", "ops": [{"rename_label": {}}]}
+
+
+@pytest.fixture
+def migrate(gl, monkeypatch):
+    """A fake gitboard.migrate bound into cli, so these tests cover the
+    command, not the ops. `calls["apply"]` is what ran."""
+    calls = {"apply": [], "plan": []}
+    pending = {"plan": []}
+
+    def plan(_gl, mig):
+        calls["plan"].append(mig)
+        return pending["plan"]
+
+    def apply(_gl, mig, record):
+        ran = [c for c in pending["plan"] if c[0] != "skipped"]
+        for c in ran:
+            record(*c)
+        calls["apply"].append(mig)
+        return ran
+
+    fake = types.SimpleNamespace(
+        load=lambda path: {**MIG, "file": path},
+        plan=plan,
+        apply=apply,
+        touched=lambda pending: sum(1 for c in pending if c[0] == "oneway"),
+    )
+    monkeypatch.setattr(cli, "migrate_mod", fake)
+    calls["pending"] = pending
+    return calls
+
+
+ONEWAY = [
+    ("changed", "rename", "bug -> type::bug"),
+    ("oneway", "merge", "p1, urgent -> priority::high (3 cards)"),
+    ("skipped", "order", "columns already in order"),
+]
+
+
+def test_migrate_prints_the_plan_and_refuses_without_yes(migrate, tmp_path):
+    migrate["pending"]["plan"] = ONEWAY
+    r = runner.invoke(app, ["migrate", "boards/x.migration.yaml"], input="n\n")
+    assert r.exit_code != 0
+    assert "migration boards/x.migration.yaml" in r.output
+    assert "priority::high (3 cards)" in r.output
+    assert "run 2 op(s), 1 card(s) touched by one-way ops?" in r.output
+    assert migrate["apply"] == []
+    assert not (tmp_path / "snapshots.jsonl").exists()
+
+
+def test_migrate_yes_applies_and_snapshots(migrate, gl, tmp_path):
+    migrate["pending"]["plan"] = ONEWAY
+    r = runner.invoke(app, ["migrate", "boards/x.migration.yaml", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert migrate["apply"] == [{**MIG, "file": "boards/x.migration.yaml"}]
+    assert "2 op(s) run" in r.output
+    assert gl["fetch"] == ["grp/proj"]
+    assert snapshot_lines(tmp_path / "snapshots.jsonl")
+
+
+def test_migrate_with_nothing_pending_says_so(migrate, tmp_path):
+    migrate["pending"]["plan"] = [("skipped", "rename", "already applied")]
+    r = runner.invoke(app, ["migrate", "boards/x.migration.yaml", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert "nothing to migrate" in r.output
+    assert migrate["apply"] == []
+    assert not (tmp_path / "snapshots.jsonl").exists()
 
 
 # --- --all -----------------------------------------------------------------
