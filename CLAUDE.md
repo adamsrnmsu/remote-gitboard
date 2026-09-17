@@ -41,7 +41,11 @@ the board, the agent edits it, the host runs `plan` then `apply`;
 `ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only);
 `status` (every local board: pulled ago, staged, notes, oldest in Verify,
 overdue); `land SPEC` (plan, y/n, apply, snapshot, rotate `.base`);
-`--all` on `pull`/`snapshot`/`report`; `report --since SPEC`.
+`--all` on `pull`/`snapshot`/`report`; `report --since SPEC`; `stats`
+(team markdown: open by column/epic/story, done, cycle time, verify
+queue/times/coverage, stuck, questions; `--dump`/`--from` for offline) and
+`digest` (writes `reports/<date>/<board>/{team,<user>}.md` + `.eml` for
+users named under `emails:`; `--all`; Monday 07:00 in `make cron`).
 Docs: `make docs` (Sphinx, `docs/`). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI
@@ -98,6 +102,13 @@ PYTHONPATH away.**
 - **`report.py`** — reads `snapshots.jsonl`, no network: batches -> first/last
   diff -> per-assignee tally; `commit_counts` shells to `git log` and
   `match_author` joins heuristically (name or email local part).
+- **`stats.py`** — pure, stdlib: `summarise(history, ...)` over the dicts
+  `board.fetch_history` returns (issues incl. recently closed, label
+  transitions from `resource_label_events`, verdict and question notes);
+  `for_person`, markdown renderers, `eml`. "Done" is the Done column or a
+  close (`done_at`). Scoped labels `epic::`/`story::`/`type::` are the
+  grouping vocabulary; they stay plain labels in the YAML. `emails:` in the
+  spec maps username to address for `digest`.
 - **`ingest.py`** — pure: `parse` a tasks.md (`docs/tasks-md-contract.md`:
   header `commit:`/`mr:`, `## Person`, `- [ ] title · id: T-slug`, verify
   lines, optional `**Feedback**`) and `merge` it into a spec. New tasks

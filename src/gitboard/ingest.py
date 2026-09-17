@@ -248,7 +248,9 @@ def merge(spec, tasks, source, date, column="Verify", done="Done", failed="Faile
                 matched.add(id(best))
                 continue
             _ensure_column(spec, column, "carrot orange")
-            entry = {"title": t["title"], "labels": [column]}
+            # type::verify is the scoped-label vocabulary (epic::/story::/type::)
+            # the stats read; ingest is the one place new cards are born
+            entry = {"title": t["title"], "labels": [column, "type::verify"]}
             if who and who in people:
                 entry["assignee"] = people[who]
             entry["description"] = description(

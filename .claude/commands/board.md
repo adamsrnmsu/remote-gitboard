@@ -1,7 +1,7 @@
 ---
 description: Read a GitLab board, stage the moves it needs, and — after a go-ahead — apply them.
 argument-hint: <group/project> [board name]  |  boards/<file>.yaml (offline)
-allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli ingest:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli status:*), Edit(boards/*.yaml)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli ingest:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli status:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli stats:*), Edit(boards/*.yaml)
 ---
 
 `gitboard` below is `PYTHONPATH=src .venv/bin/python -m gitboard.cli`
@@ -11,6 +11,10 @@ allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bas
 `snapshots.jsonl` exists, `gitboard report $ARGUMENTS` adds what moved and
 its **stuck** section; `show` lines then carry an `age:Nd` suffix (days in
 the current column). `gitboard status` gives the per-board summary line.
+`gitboard stats $ARGUMENTS` (or `stats --from history.json` offline) is the
+team's numbers: open by column/epic/story, done this week, cycle time,
+verify queue and times, coverage, stuck, questions waiting. Quote them;
+do not recompute counts by hand.
 
 **Offline.** If `$ARGUMENTS` ends in `.yaml` there is no GitLab here: the
 file is the board. Use `show --from $ARGUMENTS --markdown` and
@@ -44,6 +48,11 @@ Rules for the YAML:
 - Labels you add are additive; labels the team added in the UI survive.
   `stale` (no movement past the threshold) and `re-verify` (changed after
   verification) are the follow-up labels: add them, do not invent others.
+- Scoped labels are the vocabulary `stats` reads: `epic::<name>`,
+  `story::<name>`, `type::<bug|task|chore|verify>`. Keep them on cards you
+  touch; for an unlabelled card, propose one in Staged (reuse names that
+  already exist on the board; never coin a near-duplicate). One `epic::`
+  and one `story::` per card — `stats` flags doubles as `multi_scope`.
 - Every `drift` or `skipped` row in the plan table gets a one-line reason in
   Staged. Never drop a row.
 - Supersession (a retitled twin, split work): suggest the copyable

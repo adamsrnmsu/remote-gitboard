@@ -13,7 +13,7 @@ before writing.
 
 | Needs GitLab | Works from files only |
 |---|---|
-| `show`, `plan`, `apply`, `land`, `pull`, `snapshot`, `status`, `tui`, `migrate-comments` | `show --from`, `plan --against`, `tui --from`, `report`, `ingest`, `bd` |
+| `show`, `plan`, `apply`, `land`, `pull`, `snapshot`, `status`, `tui`, `migrate-comments`, `stats`, `digest` | `show --from`, `plan --against`, `tui --from`, `report`, `ingest`, `stats --from`, `digest --from`, `bd` |
 
 Nothing in the right-hand column opens a connection or looks for a token.
 

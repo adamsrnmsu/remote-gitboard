@@ -122,7 +122,9 @@ def test_merge_adds_every_task_to_verify_as_a_task_list_with_footer():
     assert out["unmapped"] == ["Bob Lee"] and out["changed"]
     assert [c["name"] for c in spec["columns"]] == ["Doing", "Verify"]
     login, migration, docs = spec["issues"]
-    assert login["labels"] == ["Verify"] and login["assignee"] == "alice"
+    assert (
+        login["labels"] == ["Verify", "type::verify"] and login["assignee"] == "alice"
+    )
     assert login["description"] == (
         "- [ ] Open /login, sign in as a viewer, expect the dashboard.\n"
         "- [ ] Then sign out.\n\n"
@@ -143,7 +145,7 @@ def test_checked_without_a_verdict_stays_put_and_is_reported():
     spec = fresh()
     out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, DAY)
     assert out["unverified"] == ["Confirm the migration ran"]
-    assert spec["issues"][1]["labels"] == ["Verify"]
+    assert spec["issues"][1]["labels"] == ["Verify", "type::verify"]
 
 
 def test_verdict_moves_regardless_of_the_checkbox():
@@ -154,7 +156,10 @@ def test_verdict_moves_regardless_of_the_checkbox():
     say(migration, "FAILED\n\nsecond run still warns")  # file says [x]
     out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-16")
     assert out["moved"] == 2 and out["unverified"] == []
-    assert login["labels"] == ["Done"] and migration["labels"] == ["Failed"]
+    assert login["labels"] == ["type::verify", "Done"] and migration["labels"] == [
+        "type::verify",
+        "Failed",
+    ]
     assert {c["name"]: c.get("color") for c in spec["columns"]} == {
         "Doing": None,
         "Verify": "carrot orange",
@@ -163,7 +168,7 @@ def test_verdict_moves_regardless_of_the_checkbox():
     }
     say(migration, "verified, after !42", at="2026-09-17")
     ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-17")
-    assert migration["labels"] == ["Done"]
+    assert migration["labels"] == ["type::verify", "Done"]
 
 
 def test_reingest_is_a_no_op():
@@ -219,11 +224,11 @@ def test_task_gone_from_the_file_is_stale_until_it_returns():
     without = SAMPLE.replace("- [ ] Review the API docs (id: T-docs)\n", "")
     out = ingest.merge(spec, ingest.parse(without), SRC, "2026-09-16")
     assert out["stale"] == 1 and len(spec["issues"]) == 4
-    assert spec["issues"][2]["labels"] == ["Verify", "stale"]
+    assert spec["issues"][2]["labels"] == ["Verify", "type::verify", "stale"]
     assert spec["issues"][3] == {"title": "Hand-made", "labels": ["Doing"]}  # not ours
     assert ingest.merge(spec, ingest.parse(without), SRC, "2026-09-17")["stale"] == 0
     ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-18")
-    assert spec["issues"][2]["labels"] == ["Verify"]
+    assert spec["issues"][2]["labels"] == ["Verify", "type::verify"]
 
 
 def test_commit_change_flags_reverify_until_a_newer_verdict():
@@ -231,12 +236,12 @@ def test_commit_change_flags_reverify_until_a_newer_verdict():
     login = spec["issues"][0]
     say(login, "verified", at="2026-09-15")
     ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-15")
-    assert login["labels"] == ["Done"]
+    assert login["labels"] == ["type::verify", "Done"]
 
     bumped = SAMPLE.replace("commit: abc123", "commit: def456")
     out = ingest.merge(spec, ingest.parse(bumped), SRC, "2026-09-17")
     assert out["reverify"] == 3  # the header commit covers every task
-    assert login["labels"] == ["Done", "re-verify"]
+    assert login["labels"] == ["type::verify", "Done", "re-verify"]
     footer = ingest.parse_footer(login["description"])
     assert footer["commit"] == "def456" and footer["date"] == "2026-09-17"
     assert login["description"].startswith("- [ ] Open /login")  # body untouched
@@ -245,7 +250,7 @@ def test_commit_change_flags_reverify_until_a_newer_verdict():
     assert "re-verify" in login["labels"]  # old verdict does not clear it
     say(login, "verified again", at="2026-09-18")
     ingest.merge(spec, ingest.parse(bumped), SRC, "2026-09-18")
-    assert login["labels"] == ["Done"]
+    assert login["labels"] == ["type::verify", "Done"]
 
 
 # --- merge: feedback ---------------------------------------------------------

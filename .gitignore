@@ -41,3 +41,6 @@ uv.lock
 
 # untouched copies from `pull --base`, only for offline `plan --against`
 boards/*.yaml.base
+
+# weekly digests (data, like snapshots.jsonl)
+reports/

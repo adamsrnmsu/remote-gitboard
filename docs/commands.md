@@ -30,10 +30,18 @@ gitboard plan boards/x.yaml --against boards/x.yaml.base   # diff YAML against a
 gitboard apply boards/x.yaml                # write it (--yes skips the prompt)
 gitboard apply boards/x.yaml --ignore-drift # write even where the team moved things since the pull
 gitboard land boards/x.yaml                 # plan, y/n, apply, snapshot, rotate the base (--yes, --ignore-drift)
+
+# numbers and digests (read_api token; --from FILE works with no network)
+gitboard stats group/project                # team markdown: open by column/epic/story, done, cycle, verify, stuck
+gitboard stats group/project --dump h.json  # ...and keep the fetched history for offline reruns
+gitboard stats --from h.json [--json]       # same, from the dump; --json prints the summary dict
+gitboard digest group/project               # reports/<date>/<board>/{team.md, <user>.md, <user>.eml}
+gitboard digest --all                       # every local board (what `make cron` runs Monday 07:00)
 gitboard migrate-comments 12 34 35          # copy #12's comments onto #34 and #35
 gitboard migrate-comments 12 other/proj#7 --close-source   # cross-project, then close #12
 
 # local only (no GitLab)
+gitboard stats --from h.json                # see above
 gitboard report group/project --repo .      # what moved, from snapshots.jsonl
 gitboard report group/project --since boards/x.yaml   # since that file was pulled; --all: every board
 gitboard ingest TASKS.md --into boards/x.yaml   # tasks.md -> board issues, see tasks-flow

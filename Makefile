@@ -16,7 +16,7 @@ PROJECT    ?=
 SPEC       ?=
 GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land test fmt lint docs clean
+.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land test fmt lint docs clean stats digest
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -87,8 +87,15 @@ report: install  ## what moved, from the snapshot log: make report PROJECT=group
 status: install  ## every local board YAML at a glance, no network
 	@$(GITBOARD) status
 
-cron:  ## print a crontab line that snapshots every local board every 30 minutes
+cron:  ## print crontab lines: snapshots every 30 minutes, digests Monday 07:00
 	@echo '*/30 * * * * cd $(CURDIR) && $(GITBOARD) snapshot --all >/dev/null 2>&1'
+	@echo '0 7 * * 1 cd $(CURDIR) && $(GITBOARD) digest --all >/dev/null 2>&1'
+
+stats: install  ## team numbers for one board, as markdown: make stats PROJECT=group/project
+	@$(GITBOARD) stats $(PROJECT)
+
+digest: install  ## write reports/<date>/<board>/{team,<user>}.md + .eml: make digest PROJECT=group/project
+	@$(GITBOARD) digest $(PROJECT)
 
 pull: install  ## save the board as YAML: make pull PROJECT=group/project
 	@$(GITBOARD) pull $(PROJECT)

@@ -56,6 +56,17 @@ issues:
 : Map of display name to GitLab username. `ingest` uses it to turn
   "Alice Ng" in a tasks file into `assignee: alice`. Not sent to GitLab.
 
+`emails`
+: Map of GitLab username to email address. `digest` writes a `.eml` for
+  every assignee listed here (everyone still gets a `.md`). Not sent to
+  GitLab. Example: `emails: {alice: alice@example.com}`.
+
+Scoped labels
+: `epic::<name>`, `story::<name>`, `type::<bug|task|chore|verify>` are
+  plain labels (CE has no epics object) and stay in `labels:`. `stats`
+  groups by them; `ingest` tags new cards `type::verify`; the `/board`
+  agent proposes them for unlabelled cards. One of each per card.
+
 `columns[].name`, `columns[].color`
 : A list is a label. Colour by name (below) or hex.
 
