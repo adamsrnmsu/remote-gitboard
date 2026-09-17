@@ -30,3 +30,7 @@ issues:
 
   - title: Rotate the PAT before it expires
     # no labels -> lands in Backlog
+
+# digest writes a .eml for each username listed here (everyone gets a .md)
+emails:
+  root: ryan@example.com

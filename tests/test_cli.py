@@ -418,7 +418,9 @@ def test_digest_writes_md_for_everyone_and_eml_where_there_is_an_address(
     monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
     write_spec(tmp_path, spec={**SPEC, "emails": {"alice": "a@x"}}, base=False)
     path, _ = history_file(tmp_path)
-    r = runner.invoke(app, ["digest", "--from", path, "--sender", "lead@x"])
+    r = runner.invoke(
+        app, ["digest", "--from", path, "--sender", "lead@x", "--md-only"]
+    )
     assert r.exit_code == 0, r.output
     folder = tmp_path / "reports/2026-09-14/grp-proj"
     assert sorted(p.name for p in folder.iterdir()) == [
@@ -432,6 +434,44 @@ def test_digest_writes_md_for_everyone_and_eml_where_there_is_an_address(
     assert "To: a@x" in eml and "From: lead@x" in eml
     assert "Subject: [grp/proj] week of 2026-09-07 =?utf-8?b?4oCU?= alice" in eml
     assert "reports/2026-09-14/grp-proj/team.md" in r.output
+
+
+def test_digest_writes_html_previews_and_a_multipart_eml(tmp_path, monkeypatch):
+    import email
+    import email.policy
+
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    write_spec(tmp_path, spec={**SPEC, "emails": {"alice": "a@x"}}, base=False)
+    path, _ = history_file(tmp_path)
+    r = runner.invoke(app, ["digest", "--from", path])
+    assert r.exit_code == 0, r.output
+    folder = tmp_path / "reports/2026-09-14/grp-proj"
+    names = sorted(p.name for p in folder.iterdir())
+    assert names == [
+        "alice.eml",
+        "alice.html",
+        "alice.md",
+        "bob.html",
+        "bob.md",
+        "index.html",
+        "team.html",
+        "team.md",
+    ]
+    msg = email.message_from_string(
+        (folder / "alice.eml").read_text(), policy=email.policy.default
+    )
+    assert msg.is_multipart()
+    assert [p.get_content_type() for p in msg.iter_parts()] == [
+        "text/plain",
+        "text/html",
+    ]
+    html = msg.get_body(("html",)).get_content()
+    assert "<svg" not in html and "Your 3 moves" in html
+    preview = (folder / "alice.html").read_text()
+    assert "<svg" in preview and "a@x" in preview  # browser copy: chart + headers
+    index = (folder / "index.html").read_text()
+    assert 'href="alice.eml"' in index and 'href="bob.html"' in index
+    assert "index.html" in r.output
 
 
 # --- config ----------------------------------------------------------------

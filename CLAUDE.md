@@ -109,6 +109,16 @@ PYTHONPATH away.**
   close (`done_at`). Scoped labels `epic::`/`story::`/`type::` are the
   grouping vocabulary; they stay plain labels in the YAML. `emails:` in the
   spec maps username to address for `digest`.
+- **`mail.py`** — the HTML digest, stdlib only. Outlook on Windows renders
+  with Word, so: 600px tables, inline styles, px widths, no images, no SVG,
+  every `td` with `bgcolor` and every text run with a `color` (that is what
+  survives Outlook's dark-mode invert; a test enforces it). Charts are table
+  cells (`column_chart` burndown, `bar_row`); the browser copy adds one
+  inline SVG line. Palette validated with the dataviz skill's script against
+  `#14171c`; column colours are fixed in `COLUMN_COLORS`. Each mail opens
+  with "Your 3 moves" (`stats.three_moves`) and impact tiles. `.eml` is
+  multipart/alternative (markdown text + HTML); `digest` also writes
+  `index.html` for browser previews.
 - **`ingest.py`** — pure: `parse` a tasks.md (`docs/tasks-md-contract.md`:
   header `commit:`/`mr:`, `## Person`, `- [ ] title · id: T-slug`, verify
   lines, optional `**Feedback**`) and `merge` it into a spec. New tasks

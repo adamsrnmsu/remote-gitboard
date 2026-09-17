@@ -28,6 +28,7 @@ from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import client
 from gitboard import ingest as ingest_mod
+from gitboard import mail as mail_mod
 from gitboard import report as report_mod
 from gitboard import stats as stats_mod
 from gitboard.config import (
@@ -919,9 +920,13 @@ def digest(
     from_file: str | None = typer.Option(
         None, "--from", help="Read a `stats --dump` file instead of GitLab."
     ),
+    md_only: bool = typer.Option(
+        False, "--md-only", help="Markdown and plain-text .eml only; no HTML."
+    ),
 ):
-    """Write the weekly digest: team.md, one .md per person, .eml where
-    the board YAML's `emails:` names an address. Paths on stderr."""
+    """Write the weekly digest: team.md/.html, one .md/.html per person, a
+    multipart .eml where the board YAML's `emails:` names an address, and an
+    index.html to preview every mail in a browser. Paths on stderr."""
 
     def one(path, name):
         history, columns, meta = _history(path, name, days, from_file)
@@ -937,19 +942,49 @@ def digest(
             | set(summary["throughput"]["done_by"]["assignee"])
             | set(summary["verify"]["verifiers"])
         ) - {None, "unassigned"}
-        written = [folder / "team.md"]
-        written[0].write_text(stats_mod.render_team_md(summary))
-        for who in sorted(people):
-            body = stats_mod.render_person_md(
-                stats_mod.for_person(summary, history, who, now), summary, who
+        start = stats_mod.parse_ts(summary["period"]["start"])
+        series = (
+            None if md_only else stats_mod.daily_series(history, columns, start, now)
+        )
+        week = summary["period"]["start"][:10]
+
+        def write(name, text):
+            (folder / name).write_text(text)
+            written.append(folder / name)
+
+        written, entries = [], []
+        write("team.md", stats_mod.render_team_md(summary))
+        if series is not None:
+            write("team.html", mail_mod.render_team_html(summary, series, svg=True))
+            entries.append(
+                {"name": "team", "files": {"md": "team.md", "html": "team.html"}}
             )
-            written.append(folder / f"{who}.md")
-            written[-1].write_text(body)
-            if to := emails.get(who):
-                week = summary["period"]["start"][:10]
-                subject = f"[{meta['project']}] week of {week} — {who}"
-                written.append(folder / f"{who}.eml")
-                written[-1].write_text(stats_mod.eml(to, subject, body, sender, now))
+        for who in sorted(people):
+            person = stats_mod.for_person(summary, history, who, now)
+            body = stats_mod.render_person_md(person, summary, who)
+            write(f"{who}.md", body)
+            to = emails.get(who)
+            subject = f"[{meta['project']}] week of {week} — {who}"
+            files = {"md": f"{who}.md"}
+            html = None
+            if series is not None:
+                heads = {"To": to or "(no email in emails:)", "Subject": subject}
+                write(
+                    f"{who}.html",
+                    mail_mod.render_person_html(
+                        person, summary, who, series, svg=True, headers=heads
+                    ),
+                )
+                html = mail_mod.render_person_html(person, summary, who, series)
+                files["html"] = f"{who}.html"
+            if to:
+                write(f"{who}.eml", stats_mod.eml(to, subject, body, sender, now, html))
+                files["eml"] = f"{who}.eml"
+            entries.append(
+                {"name": who, "to": to or "", "subject": subject, "files": files}
+            )
+        if series is not None:
+            write("index.html", mail_mod.render_index_html(entries))
         for w in written:
             err().print(f"[muted]wrote {_shortest(w)}[/]")
 
