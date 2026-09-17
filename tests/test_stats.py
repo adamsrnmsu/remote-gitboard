@@ -314,3 +314,159 @@ def test_days_never_negative():
 
     now = datetime(2026, 9, 17, tzinfo=UTC)
     assert stats._days(now + timedelta(seconds=30), now) == 0.0
+
+
+# --- daily_series -------------------------------------------------------------
+
+
+def series_by_date(h):
+    return {r["date"]: r for r in stats.daily_series(h, COLUMNS, START, END)}
+
+
+def test_daily_series_one_row_per_day_inclusive():
+    dates = [r["date"] for r in stats.daily_series([], COLUMNS, START, END)]
+    assert dates[0] == "2026-09-09" and dates[-1] == "2026-09-16"
+    assert len(dates) == 8
+
+
+def test_daily_series_open_from_created_day_until_done_day():
+    i = issue(1, created=12, closed=14)
+    i["closed_at"] = ts(14, 6)  # mid-day, as real timestamps are
+    rows = stats.daily_series([i], COLUMNS, START, END)
+    assert [r["open"] for r in rows] == [0, 0, 1, 1, 1, 0, 0, 0]
+    assert [r["done_cum"] for r in rows] == [0, 0, 0, 0, 0, 1, 1, 1]
+
+
+def test_daily_series_missing_created_is_open_from_start():
+    i = issue(1)
+    i["created_at"] = None
+    assert series_by_date([i])["2026-09-09"]["open"] == 1
+
+
+def test_daily_series_verify_from_interval_start():
+    s = series_by_date(history())
+    # issue 4 enters Verify Sep 13 12:00 and is still there; 6 was in 12..14
+    assert s["2026-09-12"]["verify"] == 1
+    assert s["2026-09-13"]["verify"] == 1
+    assert s["2026-09-14"]["verify"] == 1
+    assert s["2026-09-10"]["verify"] == 0
+
+
+def test_daily_series_done_cum_monotonic_and_matches_summary():
+    rows = stats.daily_series(history(), COLUMNS, START, END)
+    cum = [r["done_cum"] for r in rows]
+    assert cum == sorted(cum)
+    done = stats.summarise(history(), COLUMNS, START, END, NOW)["throughput"]["done"]
+    assert cum[-1] == done == 2
+
+
+# --- momentum -----------------------------------------------------------------
+
+
+def m(done, queue=None):
+    tr = {"done": done}
+    if queue:
+        tr["verify_queue"] = queue
+    return stats.momentum({"trend": tr})
+
+
+def test_momentum_done_sentence():
+    assert m((6, 9)) == "Done 9, up from 6."
+    assert m((9, 6)) == "Done 6, down from 9."
+    assert m((6, 6)) == "Done 6, flat."
+    assert m((None, 3)) == "Done 3."
+
+
+def test_momentum_queue_and_single_exclamation():
+    assert m((6, 9), (5, 3)) == "Done 9, up from 6. Verify queue 3 (was 5) — shrinking!"
+    assert m((6, 9), (3, 5)) == "Done 9, up from 6. Verify queue 5 (was 3) — growing."
+    assert (
+        m((9, 6), (5, 3)) == "Done 6, down from 9. Verify queue 3 (was 5) — shrinking."
+    )
+    assert m((6, 6), (3, 3)).endswith("Verify queue 3 (was 3) — flat.")
+    assert m((None, 3), (5, 3)).count("!") == 0
+
+
+def test_summarise_trend_has_verify_queue():
+    tr = stats.summarise(history(), COLUMNS, START, END, NOW)["trend"]
+    assert tr["verify_queue"] == (1, 1), "issue 1 was in Verify at start; 4 is now"
+
+
+# --- three_moves --------------------------------------------------------------
+
+
+def test_three_moves_order_and_shape():
+    h = history()
+    s = stats.summarise(h, COLUMNS, START, END, NOW)
+    moves = stats.three_moves(stats.for_person(s, h, "alice", NOW))
+    # #4 is in Verify, overdue and carries a question: one move, not three
+    assert [(x["verb"], x["iid"], x["age"]) for x in moves] == [
+        ("Verify", 4, "3.0 d in Verify"),
+    ]
+    assert all(x["url"] == "http://x/4" and x["title"] == "issue 4" for x in moves)
+
+
+def test_three_moves_dedupes_by_card_and_keeps_the_first_verb():
+    person = {
+        "verify_queue": [{"iid": 1, "title": "a", "days": 2.0, "url": "u1"}],
+        "overdue": [
+            {"iid": 1, "title": "a", "due": "2026-09-01", "url": "u1"},
+            {"iid": 2, "title": "b", "due": "2026-09-02", "url": "u2"},
+        ],
+        "questions": [
+            {"iid": 3, "title": "c", "days": 1.0, "author": "root", "url": "u3"}
+        ],
+    }
+    assert [(m["verb"], m["iid"]) for m in stats.three_moves(person)] == [
+        ("Verify", 1),
+        ("Finish", 2),
+        ("Answer", 3),
+    ]
+
+
+def test_three_moves_caps_and_fills_from_queue():
+    q = [
+        {"iid": n, "title": f"t{n}", "days": float(9 - n), "url": f"u{n}"}
+        for n in range(1, 6)
+    ]
+    moves = stats.three_moves({"verify_queue": q, "overdue": [], "questions": []})
+    assert [(x["verb"], x["iid"]) for x in moves] == [
+        ("Verify", 1),
+        ("Verify", 2),
+        ("Verify", 3),
+    ]
+    assert stats.three_moves({"verify_queue": [], "overdue": [], "questions": []}) == []
+
+
+# --- url on items -------------------------------------------------------------
+
+
+def test_items_carry_url():
+    h = history()
+    s = stats.summarise(h, COLUMNS, START, END, NOW)
+    assert s["verify"]["queue"][0]["url"] == "http://x/4"
+    assert s["flow"]["overdue"] == 1
+    assert [(o["iid"], o["due"], o["url"]) for o in s["flow"]["overdue_items"]] == [
+        (4, "2026-09-15", "http://x/4")
+    ]
+    assert s["flow"]["questions"][0]["url"] == "http://x/4"
+    p = stats.for_person(s, h, "alice", NOW)
+    for key in ("verify_queue", "overdue", "done", "questions"):
+        assert all(x["url"].startswith("http://x/") for x in p[key]), key
+
+
+# --- eml html -----------------------------------------------------------------
+
+
+def test_eml_html_is_multipart_alternative():
+    raw = stats.eml("a@x.dev", "s", "plain\n", now=NOW, html="<p>hi</p>")
+    msg = message_from_string(raw, policy=policy.default)
+    assert msg.get_content_type() == "multipart/alternative"
+    assert [p.get_content_type() for p in msg.iter_parts()] == [
+        "text/plain",
+        "text/html",
+    ]
+    assert msg.get_body(("plain",)).get_content() == "plain\n"
+    assert "<p>hi</p>" in msg.get_body(("html",)).get_content()
+    plain = message_from_string(stats.eml("a@x.dev", "s", "b"), policy=policy.default)
+    assert not plain.is_multipart()

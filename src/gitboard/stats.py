@@ -6,7 +6,7 @@ timestamps, label `transitions` (column labels only), `verdicts` and
 """
 
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from email.message import EmailMessage
 from email.utils import format_datetime
 from statistics import mean, median
@@ -154,6 +154,97 @@ def _entered(issue, columns):
     return min(starts) if starts else parse_ts(issue["created_at"])
 
 
+def _in_verify(issue, t):
+    """True if some Verify stay covers instant `t`."""
+    return any(a <= t and (b is None or b > t) for a, b in dwell(issue, VERIFY))
+
+
+def daily_series(history, columns, start, end):
+    """[{date, open, verify, done_cum}] per calendar day, counted at end of day.
+
+    `open`: created by then and not yet done; `verify`: some Verify stay covers
+    the day end; `done_cum`: finished since `start`. Same `done_at`/`dwell` as
+    `summarise`, so the chart and the numbers agree.
+    """
+    rows = [(parse_ts(i["created_at"]), done_at(i), i) for i in history]
+    d = datetime.combine(start.date(), time(), tzinfo=UTC)
+    last = datetime.combine(end.date(), time(), tzinfo=UTC)
+    out = []
+    while d <= last:
+        d1 = d + DAY
+        out.append(
+            {
+                "date": d.date().isoformat(),
+                "open": sum(
+                    1
+                    for c, dn, _ in rows
+                    if (c is None or c <= d1) and (dn is None or dn > d1)
+                ),
+                "verify": sum(1 for _, _, i in rows if _in_verify(i, d1)),
+                "done_cum": sum(1 for _, dn, _ in rows if _in(dn, start, d1)),
+            }
+        )
+        d = d1
+    return out
+
+
+def momentum(summary):
+    """One sentence on done and the verify queue against the previous window."""
+    prev, now = summary["trend"]["done"]
+    if prev is None:
+        text = f"Done {now}."
+    elif now > prev:
+        text = f"Done {now}, up from {prev}."
+    elif now < prev:
+        text = f"Done {now}, down from {prev}."
+    else:
+        text = f"Done {now}, flat."
+    qprev, qnow = summary["trend"].get("verify_queue", (None, None))
+    if qprev is None:
+        return text
+    word = "shrinking" if qnow < qprev else "growing" if qnow > qprev else "flat"
+    bang = "!" if prev is not None and now > prev and qnow < qprev else "."
+    return f"{text} Verify queue {qnow} (was {qprev}) — {word}{bang}"
+
+
+def three_moves(person):
+    """Oldest verify, first overdue, first question, then more verify; at most 3."""
+
+    def move(verb, item, age):
+        return {
+            "verb": verb,
+            "iid": item["iid"],
+            "title": item["title"],
+            "age": age,
+            "url": item["url"],
+        }
+
+    queue = [
+        move("Verify", q, f"{q['days']} d in Verify") for q in person["verify_queue"]
+    ]
+    overdue = [move("Finish", o, f"due {o['due']}") for o in person["overdue"]]
+    questions = [
+        move("Answer", q, f"asked {q['days']} d ago by {q['author']}")
+        for q in person["questions"]
+    ]
+    # one row per card: a card that is overdue *and* in Verify is one move, so
+    # each bucket contributes its first card not already picked
+    picked, seen = [], set()
+    for bucket in (queue[:1], overdue, questions, queue[1:]):
+        for m in bucket:
+            if m["iid"] not in seen:
+                seen.add(m["iid"])
+                picked.append(m)
+                break
+    for m in queue:
+        if len(picked) >= 3:
+            break
+        if m["iid"] not in seen:
+            seen.add(m["iid"])
+            picked.append(m)
+    return picked[:3]
+
+
 def summarise(history, columns, start, end, now):
     """Team numbers for [start, end); `trend` compares against the window before."""
     opened = [i for i in history if i["state"] == "opened"]
@@ -174,12 +265,25 @@ def summarise(history, columns, start, end, now):
                 "title": i["title"],
                 "assignee": i["assignee"],
                 "days": _days(_entered(i, [VERIFY]), now),
+                "url": i["web_url"],
             }
             for i in opened
             if VERIFY in i["labels"]
         ),
         key=lambda q: (-q["days"], q["iid"]),
     )
+    in_verify_at_start = sum(1 for i in history if _in_verify(i, start))
+    overdue = [
+        {
+            "iid": i["iid"],
+            "title": i["title"],
+            "assignee": i["assignee"],
+            "due": i["due_date"],
+            "url": i["web_url"],
+        }
+        for i in opened
+        if i.get("due_date") and i["due_date"] < today and col(i) != DONE
+    ]
     verdicts = [
         v for i in history for v in i["verdicts"] if _in(parse_ts(v[0]), start, end)
     ]
@@ -199,6 +303,7 @@ def summarise(history, columns, start, end, now):
             "assignee": i["assignee"],
             **q,
             "days": _days(parse_ts(q["ts"]), now),
+            "url": i["web_url"],
         }
         for i in opened
         for q in _questions(i)
@@ -251,11 +356,8 @@ def summarise(history, columns, start, end, now):
             else None,
         },
         "flow": {
-            "overdue": sum(
-                1
-                for i in opened
-                if i.get("due_date") and i["due_date"] < today and col(i) != DONE
-            ),
+            "overdue": len(overdue),
+            "overdue_items": overdue,
             "stuck": report.stuck(ages, report.STUCK, now),
             "stale": sum(1 for i in opened if ingest.STALE in i["labels"]),
             "reverify": sum(1 for i in opened if ingest.REVERIFY in i["labels"]),
@@ -267,7 +369,10 @@ def summarise(history, columns, start, end, now):
                 if any(len(scopes(i["labels"], s)) > 1 for s in ("epic", "story"))
             ),
         },
-        "trend": {k: (prev[k], cur[k]) for k in cur},
+        "trend": {
+            **{k: (prev[k], cur[k]) for k in cur},
+            "verify_queue": (in_verify_at_start, len(queue)),
+        },
     }
 
 
@@ -291,7 +396,12 @@ def for_person(summary, history, username, now):
             q for q in summary["verify"]["queue"] if q["assignee"] == username
         ],
         "overdue": [
-            {"iid": i["iid"], "title": i["title"], "due": i["due_date"]}
+            {
+                "iid": i["iid"],
+                "title": i["title"],
+                "due": i["due_date"],
+                "url": i["web_url"],
+            }
             for i in opened
             if i.get("due_date") and i["due_date"] < today and DONE not in i["labels"]
         ],
@@ -299,7 +409,7 @@ def for_person(summary, history, username, now):
             Counter(column_of(i, summary["columns"]) for i in opened)
         ),
         "done": [
-            {"iid": i["iid"], "title": i["title"]}
+            {"iid": i["iid"], "title": i["title"], "url": i["web_url"]}
             for i, _ in _done_in(mine, start, end)
         ],
         "verified": sum(1 for v in verdicts if v[2] == "verified"),
@@ -489,8 +599,11 @@ def render_person_md(person, summary, username):
     return "\n".join(parts)
 
 
-def eml(to, subject, body, sender=None, now=None):
-    """An RFC 5322 message the lead can drop into a mail client."""
+def eml(to, subject, body, sender=None, now=None, html=None):
+    """An RFC 5322 message the lead can drop into a mail client.
+
+    With `html`, multipart/alternative: the text part stays the primary body.
+    """
     msg = EmailMessage()
     msg["To"] = to
     msg["Subject"] = subject
@@ -498,6 +611,8 @@ def eml(to, subject, body, sender=None, now=None):
     if sender:
         msg["From"] = sender
     msg.set_content(body, charset="utf-8")
+    if html is not None:
+        msg.add_alternative(html, subtype="html", charset="utf-8")
     return msg.as_string()
 
 
