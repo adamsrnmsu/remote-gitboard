@@ -1,0 +1,506 @@
+"""Board statistics over an issue history. Pure: no network, stdlib only.
+
+Input is what `board.fetch_history` returns — plain dicts with ISO
+timestamps, label `transitions` (column labels only), `verdicts` and
+`notes` — so everything here runs offline from a dumped JSON file.
+"""
+
+from collections import Counter
+from datetime import UTC, datetime, timedelta
+from email.message import EmailMessage
+from email.utils import format_datetime
+from statistics import mean, median
+
+from gitboard import ingest, report
+
+VERIFY, REVIEW, DONE, FAILED = "Verify", "Review", "Done", "Failed"
+BACKLOG = "Backlog"
+NOT_WIP = {BACKLOG, DONE, FAILED}
+QUESTION = "Q:"
+DAY = timedelta(days=1)
+
+
+def parse_ts(s):
+    """ISO-8601 string (Z or offset) -> aware UTC datetime; None passes through."""
+    if s is None:
+        return None
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def scopes(labels, scope):
+    """Values of every `scope::x` label, sorted."""
+    pre = f"{scope}::"
+    return sorted(x[len(pre) :] for x in labels if x.startswith(pre))
+
+
+def scoped(labels, scope):
+    """The first `scope::x` value, or None."""
+    return (scopes(labels, scope) or [None])[0]
+
+
+def dwell(issue, label):
+    """[(entered, left|None)] — every stay in `label`, from the transitions.
+
+    A `remove` with no preceding `add` (or the label present with no events
+    at all, as on instances older than 11.4) starts at `created_at`. An
+    unmatched `add` ends at `closed_at` when the issue is closed, else it is
+    still in progress (`None`).
+    """
+    created, closed = parse_ts(issue["created_at"]), parse_ts(issue.get("closed_at"))
+    events = [
+        (parse_ts(ts), act) for ts, act, lab in issue["transitions"] if lab == label
+    ]
+    out, start = [], None
+    for ts, act in events:
+        if act == "add" and start is None:
+            start = ts
+        elif act == "remove":
+            out.append((start or created, ts))
+            start = None
+    if start is not None:
+        out.append((start, closed))
+    elif not events and label in issue["labels"]:
+        out.append((created, closed))
+    return out
+
+
+def done_at(issue):
+    """When the work finished: `closed_at`, else the last move into Done."""
+    if issue.get("closed_at"):
+        return parse_ts(issue["closed_at"])
+    adds = [ts for ts, act, lab in issue["transitions"] if lab == DONE and act == "add"]
+    return parse_ts(adds[-1]) if adds else None
+
+
+def column_of(issue, columns):
+    """Column label(s) the issue carries, joined by "+", else Backlog."""
+    return "+".join(c for c in columns if c in issue["labels"]) or BACKLOG
+
+
+def _days(a, b):
+    # clock skew between the API and fetched_at can make this -0.0; a note
+    # posted "just now" is 0.0 days old, not negative
+    return max(0.0, round((b - a) / DAY, 1))
+
+
+def _stat(values):
+    """{median, mean, n}; an empty sample is None, not a fake zero."""
+    if not values:
+        return {"median": None, "mean": None, "n": 0}
+    return {
+        "median": round(median(values), 1),
+        "mean": round(mean(values), 1),
+        "n": len(values),
+    }
+
+
+def _in(ts, start, end):
+    return ts is not None and start <= ts < end
+
+
+def _done_in(history, start, end):
+    """[(issue, done_ts)] finished inside the window."""
+    pairs = ((i, done_at(i)) for i in history)
+    return [(i, d) for i, d in pairs if _in(d, start, end)]
+
+
+def _ended_in(history, label, start, end):
+    """Durations (days) of every stay in `label` that ended in the window."""
+    return [
+        _days(a, b)
+        for i in history
+        for a, b in dwell(i, label)
+        if b is not None and _in(b, start, end)
+    ]
+
+
+def _period(history, start, end):
+    """The three trend figures for one window."""
+    done = _done_in(history, start, end)
+    return {
+        "done": len(done),
+        "cycle_median": _stat([_days(parse_ts(i["created_at"]), d) for i, d in done])[
+            "median"
+        ],
+        "verify_median": _stat(_ended_in(history, VERIFY, start, end))["median"],
+    }
+
+
+def _questions(issue):
+    """Waiting questions: a `Q:` note nobody else has answered since."""
+    notes = sorted(issue["notes"])
+    out = []
+    for k, (ts, author, text) in enumerate(notes):
+        if not text.lstrip().startswith(QUESTION):
+            continue
+        if any(a != author for _, a, _ in notes[k + 1 :]):
+            continue
+        out.append({"ts": ts, "author": author, "text": text.strip()})
+    return out
+
+
+def _entered(issue, columns):
+    """Earliest open-interval start among the issue's current columns."""
+    starts = [
+        a
+        for c in columns
+        if c in issue["labels"]
+        for a, b in dwell(issue, c)
+        if b is None
+    ]
+    return min(starts) if starts else parse_ts(issue["created_at"])
+
+
+def summarise(history, columns, start, end, now):
+    """Team numbers for [start, end); `trend` compares against the window before."""
+    opened = [i for i in history if i["state"] == "opened"]
+    today = now.date().isoformat()
+
+    def tally(issues, key):
+        return dict(Counter(k for i in issues if (k := key(i)) is not None))
+
+    def col(i):
+        return column_of(i, columns)
+
+    done = _done_in(history, start, end)
+    done_issues = [i for i, _ in done]
+    queue = sorted(
+        (
+            {
+                "iid": i["iid"],
+                "title": i["title"],
+                "assignee": i["assignee"],
+                "days": _days(_entered(i, [VERIFY]), now),
+            }
+            for i in opened
+            if VERIFY in i["labels"]
+        ),
+        key=lambda q: (-q["days"], q["iid"]),
+    )
+    verdicts = [
+        v for i in history for v in i["verdicts"] if _in(parse_ts(v[0]), start, end)
+    ]
+    ages = {
+        i["iid"]: (col(i), _entered(i, columns).isoformat())
+        for i in opened
+        if col(i) != BACKLOG
+    }
+    wip = tally(
+        [i for i in opened if col(i) not in NOT_WIP and i["assignee"]],
+        lambda i: i["assignee"],
+    )
+    questions = [
+        {
+            "iid": i["iid"],
+            "title": i["title"],
+            "assignee": i["assignee"],
+            **q,
+            "days": _days(parse_ts(q["ts"]), now),
+        }
+        for i in opened
+        for q in _questions(i)
+    ]
+    prev = _period(history, start - (end - start), start)
+    cur = _period(history, start, end)
+    return {
+        "period": {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "days": (end - start).days,
+        },
+        "columns": list(columns),
+        "open": {
+            "total": len(opened),
+            "by_column": tally(opened, col),
+            "by_epic": tally(opened, lambda i: scoped(i["labels"], "epic")),
+            "by_story": tally(opened, lambda i: scoped(i["labels"], "story")),
+            "by_type": tally(opened, lambda i: scoped(i["labels"], "type")),
+            "by_assignee": tally(opened, lambda i: i["assignee"]),
+            "unassigned": sum(1 for i in opened if not i["assignee"]),
+        },
+        "throughput": {
+            "opened": sum(
+                1 for i in history if _in(parse_ts(i["created_at"]), start, end)
+            ),
+            "done": len(done),
+            "closed": sum(
+                1 for i in history if _in(parse_ts(i.get("closed_at")), start, end)
+            ),
+            "done_by": {
+                "assignee": tally(done_issues, lambda i: i["assignee"] or "unassigned"),
+                "epic": tally(done_issues, lambda i: scoped(i["labels"], "epic")),
+                "story": tally(done_issues, lambda i: scoped(i["labels"], "story")),
+            },
+            "cycle_days": _stat([_days(parse_ts(i["created_at"]), d) for i, d in done]),
+        },
+        "verify": {
+            "queue": queue,
+            "oldest_days": queue[0]["days"] if queue else None,
+            "verified": sum(1 for v in verdicts if v[2] == "verified"),
+            "failed": sum(1 for v in verdicts if v[2] == "failed"),
+            "verifiers": dict(Counter(v[1] for v in verdicts)),
+            "verify_days": _stat(_ended_in(history, VERIFY, start, end)),
+            "review_days": _stat(_ended_in(history, REVIEW, start, end)),
+            "coverage": round(
+                sum(1 for i in done_issues if dwell(i, VERIFY)) / len(done), 2
+            )
+            if done
+            else None,
+        },
+        "flow": {
+            "overdue": sum(
+                1
+                for i in opened
+                if i.get("due_date") and i["due_date"] < today and col(i) != DONE
+            ),
+            "stuck": report.stuck(ages, report.STUCK, now),
+            "stale": sum(1 for i in opened if ingest.STALE in i["labels"]),
+            "reverify": sum(1 for i in opened if ingest.REVERIFY in i["labels"]),
+            "wip": wip,
+            "questions": questions,
+            "multi_scope": sorted(
+                i["iid"]
+                for i in opened
+                if any(len(scopes(i["labels"], s)) > 1 for s in ("epic", "story"))
+            ),
+        },
+        "trend": {k: (prev[k], cur[k]) for k in cur},
+    }
+
+
+def for_person(summary, history, username, now):
+    """One assignee's slice: their queue, overdue, WIP, done, verdicts, questions."""
+    start, end = (
+        parse_ts(summary["period"]["start"]),
+        parse_ts(summary["period"]["end"]),
+    )
+    mine = [i for i in history if i["assignee"] == username]
+    opened = [i for i in mine if i["state"] == "opened"]
+    today = now.date().isoformat()
+    verdicts = [
+        v
+        for i in history
+        for v in i["verdicts"]
+        if v[1] == username and _in(parse_ts(v[0]), start, end)
+    ]
+    return {
+        "verify_queue": [
+            q for q in summary["verify"]["queue"] if q["assignee"] == username
+        ],
+        "overdue": [
+            {"iid": i["iid"], "title": i["title"], "due": i["due_date"]}
+            for i in opened
+            if i.get("due_date") and i["due_date"] < today and DONE not in i["labels"]
+        ],
+        "open_by_column": dict(
+            Counter(column_of(i, summary["columns"]) for i in opened)
+        ),
+        "done": [
+            {"iid": i["iid"], "title": i["title"]}
+            for i, _ in _done_in(mine, start, end)
+        ],
+        "verified": sum(1 for v in verdicts if v[2] == "verified"),
+        "failed": sum(1 for v in verdicts if v[2] == "failed"),
+        "questions": [
+            q
+            for q in summary["flow"]["questions"]
+            if q["assignee"] == username and q["author"] != username
+        ],
+    }
+
+
+# --- rendering ---------------------------------------------------------------
+
+
+def _n(v):
+    return "–" if v is None else v
+
+
+def _trend(pair):
+    prev, now = pair
+    arrow = (
+        ""
+        if prev is None or now is None or prev == now
+        else (" ▲" if now > prev else " ▼")
+    )
+    return f"{_n(now)}{arrow} (prev {_n(prev)})"
+
+
+def _table(rows, *head):
+    if not rows:
+        return "_none_"
+    body = ["| " + " | ".join(str(_n(c)) for c in r) + " |" for r in rows]
+    return "\n".join(["| " + " | ".join(head) + " |", "|" + "---|" * len(head), *body])
+
+
+def _counts(d):
+    return _table(sorted(d.items(), key=lambda kv: (-kv[1], str(kv[0]))), "name", "n")
+
+
+def _stat_row(label, s):
+    return (label, s["median"], s["mean"], s["n"])
+
+
+def render_team_md(summary):
+    p, o, t, v, f, tr = (
+        summary[k] for k in ("period", "open", "throughput", "verify", "flow", "trend")
+    )
+    cov = "–" if v["coverage"] is None else f"{v['coverage']:.0%}"
+    parts = [
+        f"# Team — {p['days']} days to {p['end'][:10]}",
+        "",
+        f"**Open {o['total']}** ({o['unassigned']} unassigned) · "
+        f"opened {t['opened']} · done {_trend(tr['done'])} · closed {t['closed']}",
+        "",
+        "## Open",
+        "",
+        "### By column",
+        _counts(o["by_column"]),
+        "",
+        "### By epic",
+        _counts(o["by_epic"]),
+        "",
+        "### By story",
+        _counts(o["by_story"]),
+        "",
+        "### By type",
+        _counts(o["by_type"]),
+        "",
+        "### By assignee",
+        _counts(o["by_assignee"]),
+        "",
+        "## Done this period",
+        "",
+        "### By assignee",
+        _counts(t["done_by"]["assignee"]),
+        "",
+        "### By epic",
+        _counts(t["done_by"]["epic"]),
+        "",
+        "### By story",
+        _counts(t["done_by"]["story"]),
+        "",
+        "## Time",
+        _table(
+            [
+                _stat_row("cycle (created → done)", t["cycle_days"]),
+                _stat_row("in Verify", v["verify_days"]),
+                _stat_row("in Review", v["review_days"]),
+            ],
+            "days",
+            "median",
+            "mean",
+            "n",
+        ),
+        "",
+        f"Trend: cycle median {_trend(tr['cycle_median'])}, "
+        f"verify median {_trend(tr['verify_median'])}",
+        "",
+        "## Verification",
+        "",
+        f"Verified {v['verified']}, failed {v['failed']}, coverage {cov} · "
+        f"queue {len(v['queue'])}, oldest {_n(v['oldest_days'])} days",
+        "",
+        "### Verifiers",
+        _counts(v["verifiers"]),
+        "",
+        "### Queue",
+        _table(
+            [(q["iid"], q["title"], q["assignee"], q["days"]) for q in v["queue"]],
+            "iid",
+            "title",
+            "assignee",
+            "days",
+        ),
+        "",
+        "## Flow",
+        "",
+        f"Overdue {f['overdue']} · stale {f['stale']} · re-verify {f['reverify']} · "
+        f"multi-scope {', '.join(f'#{i}' for i in f['multi_scope']) or '–'}",
+        "",
+        "### Stuck",
+        _table(f["stuck"], "iid", "column", "days"),
+        "",
+        "### WIP",
+        _counts(f["wip"]),
+        "",
+        "### Questions waiting",
+        _table(
+            [(q["iid"], q["author"], q["text"], q["days"]) for q in f["questions"]],
+            "iid",
+            "asked by",
+            "question",
+            "days",
+        ),
+        "",
+    ]
+    return "\n".join(parts)
+
+
+def render_person_md(person, summary, username):
+    """The person's section, a rule, then the team summary."""
+    parts = [
+        f"# {username}",
+        "",
+        f"Done {len(person['done'])} · verified {person['verified']} · "
+        f"failed {person['failed']}",
+        "",
+        "## Your verify queue",
+        _table(
+            [(q["iid"], q["title"], q["days"]) for q in person["verify_queue"]],
+            "iid",
+            "title",
+            "days",
+        ),
+        "",
+        "## Overdue",
+        _table(
+            [(o["iid"], o["title"], o["due"]) for o in person["overdue"]],
+            "iid",
+            "title",
+            "due",
+        ),
+        "",
+        "## Open by column",
+        _counts(person["open_by_column"]),
+        "",
+        "## Done this period",
+        _table([(d["iid"], d["title"]) for d in person["done"]], "iid", "title"),
+        "",
+        "## Questions waiting on you",
+        _table(
+            [
+                (q["iid"], q["author"], q["text"], q["days"])
+                for q in person["questions"]
+            ],
+            "iid",
+            "asked by",
+            "question",
+            "days",
+        ),
+        "",
+        "---",
+        "",
+        render_team_md(summary),
+    ]
+    return "\n".join(parts)
+
+
+def eml(to, subject, body, sender=None, now=None):
+    """An RFC 5322 message the lead can drop into a mail client."""
+    msg = EmailMessage()
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg["Date"] = format_datetime(now or datetime.now(UTC))
+    if sender:
+        msg["From"] = sender
+    msg.set_content(body, charset="utf-8")
+    return msg.as_string()
+
+
+def slug(project):
+    """`grp/proj` -> `grp-proj`, safe as a directory name."""
+    return project.replace("/", "-")
