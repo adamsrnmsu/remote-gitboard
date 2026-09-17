@@ -14,6 +14,8 @@ from rich.text import Text
 from rich.tree import Tree
 
 from gitboard import client
+from gitboard.apply import MARKER
+from gitboard.ingest import VERDICT
 from gitboard.log import out
 
 
@@ -110,6 +112,78 @@ def fetch(path, board_name=None):
             have = [b.name for b in project.boards.list(all=True)]
             raise client.GitlabProblem(f"no board named {board_name!r}; have: {have}")
     return project, project.boards.get(boards[0].id)
+
+
+def _note_line(note):
+    """First non-empty line of a note body after the `staged via` marker."""
+    body = (getattr(note, "body", None) or "").strip()
+    if body.startswith(MARKER):
+        body = body[len(MARKER) :].strip()
+    return body.split("\n", 1)[0].strip()
+
+
+def _ts(row):
+    return row[0]
+
+
+def fetch_history(project, board, since):
+    """(history, columns): every open issue plus those closed since `since`
+    (aware datetime), with label events and notes flattened for stats.py.
+
+    Two list calls plus two requests per issue (label events, notes). Each
+    issue is a JSON-able dict; timestamps stay the API's ISO strings. Label
+    events are kept only for this board's columns, so `transitions` is the
+    card's path across the board and nothing else. Every attribute read is
+    defensive — CE payloads vary by version.
+    """
+    lists = sorted(board.lists.list(all=True), key=lambda x: x.position)
+    columns = [x.label["name"] for x in lists if getattr(x, "label", None)]
+    seen = {}
+    for issue in project.issues.list(state="opened", all=True):
+        seen[issue.iid] = issue
+    closed = project.issues.list(
+        state="closed", updated_after=since.isoformat(), all=True
+    )
+    for issue in closed:
+        seen.setdefault(issue.iid, issue)
+
+    history = []
+    for issue in seen.values():
+        transitions = []
+        for ev in issue.resourcelabelevents.list(all=True):
+            label = getattr(ev, "label", None)
+            if label and label.get("name") in columns:
+                transitions.append([ev.created_at, ev.action, label["name"]])
+        verdicts, notes = [], []
+        for note in issue.notes.list(all=True):
+            if getattr(note, "system", False):
+                continue
+            who = (getattr(note, "author", None) or {}).get("username")
+            first = _note_line(note)
+            notes.append([note.created_at, who, first])
+            if m := VERDICT.match(first):
+                verdicts.append([note.created_at, who, m.group(1).lower()])
+        assignee = getattr(issue, "assignee", None)
+        milestone = getattr(issue, "milestone", None)
+        history.append(
+            {
+                "iid": issue.iid,
+                "title": issue.title,
+                "state": getattr(issue, "state", None),
+                "created_at": getattr(issue, "created_at", None),
+                "closed_at": getattr(issue, "closed_at", None),
+                "updated_at": getattr(issue, "updated_at", None),
+                "assignee": assignee["username"] if assignee else None,
+                "labels": list(getattr(issue, "labels", None) or []),
+                "milestone": milestone["title"] if milestone else None,
+                "due_date": getattr(issue, "due_date", None),
+                "web_url": getattr(issue, "web_url", None),
+                "transitions": sorted(transitions, key=_ts),
+                "verdicts": sorted(verdicts, key=_ts),
+                "notes": sorted(notes, key=_ts),
+            }
+        )
+    return history, columns
 
 
 def as_markdown(project, board, columns=None, ages=None):

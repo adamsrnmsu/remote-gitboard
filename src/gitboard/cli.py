@@ -17,7 +17,7 @@ The CLI. Everything else in the package is a module it calls:
 import json
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
@@ -29,6 +29,7 @@ from gitboard import board as board_mod
 from gitboard import client
 from gitboard import ingest as ingest_mod
 from gitboard import report as report_mod
+from gitboard import stats as stats_mod
 from gitboard.config import (
     FILENAME,
     ConfigError,
@@ -835,6 +836,131 @@ def _movement(console, batches, days, repo):
         console.print(
             f"[muted]{count} commit(s) by {a_name} <{email}> matched no assignee[/]"
         )
+
+
+def _history(project, board_name, days, from_file=None, dump=None):
+    """(history, columns, meta): the issue history behind stats and digest.
+
+    `--from` reads a dump and never opens a connection; otherwise fetch back
+    twice `days` so the trend has its previous period. `dump` writes the
+    same JSON `--from` reads. `meta["fetched_at"]` is the clock every
+    number is measured against, so a dump replays identically.
+    """
+    if from_file:
+        meta = json.loads(Path(from_file).read_text())
+        return meta["history"], meta["columns"], meta
+    now = datetime.now(UTC)
+    proj, board = board_mod.fetch(project, board_name)
+    history, columns = board_mod.fetch_history(
+        proj, board, since=now - timedelta(days=2 * days)
+    )
+    meta = {
+        "project": proj.path_with_namespace,
+        "board": board.name,
+        "columns": columns,
+        "fetched_at": now.isoformat(timespec="seconds"),
+        "history": history,
+    }
+    if dump:
+        Path(dump).write_text(json.dumps(meta, indent=2))
+        err().print(f"[muted]wrote {dump}[/]")
+    return history, columns, meta
+
+
+def _summary(history, columns, meta, days):
+    """(summary, now) for the `days` ending at the fetch."""
+    now = stats_mod.parse_ts(meta["fetched_at"])
+    return stats_mod.summarise(
+        history, columns, now - timedelta(days=days), now, now
+    ), now
+
+
+@app.command()
+def stats(
+    project: str | None = typer.Argument(None, help="group/project"),
+    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
+    from_file: str | None = typer.Option(
+        None, "--from", help="Read a --dump file instead of GitLab. No network."
+    ),
+    dump: str | None = typer.Option(
+        None, "--dump", help="Save the fetched history as JSON for --from."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="The summary dict as JSON."),
+):
+    """Team numbers: open, done, cycle and verify times, flow. Markdown to stdout."""
+
+    def go():
+        path = None if from_file else _need(project, "project", "project")
+        history, columns, meta = _history(
+            path, board_name or get_config().board, days, from_file, dump
+        )
+        summary, _ = _summary(history, columns, meta, days)
+        if as_json:
+            print(json.dumps(summary, default=str, indent=2))
+        else:
+            print(stats_mod.render_team_md(summary))
+
+    _run(go)
+
+
+@app.command()
+def digest(
+    project: str | None = typer.Argument(None, help="group/project"),
+    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
+    out_dir: str = typer.Option("reports", "--out", help="Directory to write under."),
+    all_boards: bool = typer.Option(
+        False, "--all", help="Every project a local boards/*.yaml defines."
+    ),
+    sender: str | None = typer.Option(
+        None, "--sender", help="From: for the .eml files."
+    ),
+    from_file: str | None = typer.Option(
+        None, "--from", help="Read a `stats --dump` file instead of GitLab."
+    ),
+):
+    """Write the weekly digest: team.md, one .md per person, .eml where
+    the board YAML's `emails:` names an address. Paths on stderr."""
+
+    def one(path, name):
+        history, columns, meta = _history(path, name, days, from_file)
+        summary, now = _summary(history, columns, meta, days)
+        folder = (
+            Path(out_dir) / now.date().isoformat() / stats_mod.slug(meta["project"])
+        )
+        folder.mkdir(parents=True, exist_ok=True)
+        spec_path = find_spec(meta["project"])
+        emails = (apply_mod.load(spec_path).get("emails") or {}) if spec_path else {}
+        people = (
+            set(summary["open"]["by_assignee"])
+            | set(summary["throughput"]["done_by"]["assignee"])
+            | set(summary["verify"]["verifiers"])
+        ) - {None, "unassigned"}
+        written = [folder / "team.md"]
+        written[0].write_text(stats_mod.render_team_md(summary))
+        for who in sorted(people):
+            body = stats_mod.render_person_md(
+                stats_mod.for_person(summary, history, who, now), summary, who
+            )
+            written.append(folder / f"{who}.md")
+            written[-1].write_text(body)
+            if to := emails.get(who):
+                week = summary["period"]["start"][:10]
+                subject = f"[{meta['project']}] week of {week} — {who}"
+                written.append(folder / f"{who}.eml")
+                written[-1].write_text(stats_mod.eml(to, subject, body, sender, now))
+        for w in written:
+            err().print(f"[muted]wrote {_shortest(w)}[/]")
+
+    def go():
+        if all_boards:
+            _for_each(lambda ps: one(ps[1]["project"], ps[1]["board"]), local_specs())
+            return
+        path = None if from_file else _need(project, "project", "project")
+        one(path, board_name or get_config().board)
+
+    _run(go)
 
 
 def _key():

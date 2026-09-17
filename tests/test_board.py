@@ -4,7 +4,11 @@ board.py is a library module: no auth, no CLI. Auth lives in config.py and
 error mapping in client.py, each with their own tests.
 """
 
+import types
+from datetime import UTC, datetime
+
 from gitboard import board
+from gitboard.apply import MARKER
 
 
 class FakeList:
@@ -21,6 +25,35 @@ class FakeIssue:
         self.iid, self.labels, self.title = iid, labels, title
         self.assignee, self.due_date = assignee, due_date
         self.web_url = f"http://gl/-/issues/{iid}"
+
+
+class Mgr:
+    def __init__(self, items):
+        self.items = items
+
+    def list(self, **_):
+        return self.items
+
+
+class FakeEvent:
+    def __init__(self, ts, action, name):
+        self.created_at, self.action = ts, action
+        self.label = {"name": name} if name else None
+
+
+class FakeNote:
+    def __init__(self, ts, body, who="ana", system=False):
+        self.created_at, self.body, self.system = ts, body, system
+        self.author = {"username": who}
+
+
+class HistIssue(FakeIssue):
+    def __init__(self, iid, labels, state="opened", events=(), notes=(), **kw):
+        super().__init__(iid, labels, **kw)
+        self.state = state
+        self.created_at = "2026-09-01T00:00:00Z"
+        self.resourcelabelevents = Mgr(list(events))
+        self.notes = Mgr(list(notes))
 
 
 class FakeBoard:
@@ -278,3 +311,86 @@ def test_issue_line_and_board_view_show_age():
     console = Console(width=120, file=StringIO(), theme=THEME)
     console.print(view)
     assert "Verify 3d" in console.file.getvalue()
+
+
+# --- fetch_history ---------------------------------------------------------
+
+
+class StateProject(FakeProject):
+    """issues.list honours state=, like the API; records the kwargs."""
+
+    def __init__(self, opened, closed):
+        super().__init__(opened)
+        self.calls = []
+        by = {"opened": opened, "closed": closed}
+        self.issues = types.SimpleNamespace(
+            list=lambda **kw: (self.calls.append(kw), by[kw["state"]])[1]
+        )
+
+
+SINCE = datetime(2026, 9, 1, tzinfo=UTC)
+
+
+def test_history_includes_closed_only_via_the_closed_list():
+    opened = [HistIssue(1, ["Doing"])]
+    closed = [HistIssue(2, [], state="closed"), HistIssue(1, ["Doing"])]
+    proj = StateProject(opened, closed)
+    history, columns = board.fetch_history(
+        proj, FakeBoard([FakeList("Doing", 1)]), SINCE
+    )
+    assert columns == ["Doing"]
+    assert [h["iid"] for h in history] == [1, 2]
+    assert proj.calls[1]["updated_after"] == SINCE.isoformat()
+    assert history[1]["state"] == "closed"
+    assert history[1]["closed_at"] is None  # attribute missing: defensive read
+
+
+def test_history_keeps_only_column_label_events_and_skips_null_labels():
+    events = [
+        FakeEvent("2026-09-03T00:00:00Z", "add", "Doing"),
+        FakeEvent("2026-09-02T00:00:00Z", "add", "bug"),
+        FakeEvent("2026-09-04T00:00:00Z", "remove", None),
+        FakeEvent("2026-09-01T00:00:00Z", "add", "Review"),
+    ]
+    proj = StateProject([HistIssue(1, ["Doing"], events=events)], [])
+    lists = [FakeList("Doing", 1), FakeList("Review", 2)]
+    history, _ = board.fetch_history(proj, FakeBoard(lists), SINCE)
+    assert history[0]["transitions"] == [
+        ["2026-09-01T00:00:00Z", "add", "Review"],
+        ["2026-09-03T00:00:00Z", "add", "Doing"],
+    ]
+
+
+def test_history_parses_verdicts_after_the_marker_and_skips_system_notes():
+    notes = [
+        FakeNote("2026-09-05T00:00:00Z", f"{MARKER}\n\nVerified: works\nmore", "bob"),
+        FakeNote("2026-09-04T00:00:00Z", "failed, see log", "cat"),
+        FakeNote("2026-09-03T00:00:00Z", "Q: which branch?", "ana"),
+        FakeNote("2026-09-02T00:00:00Z", "changed label", system=True),
+    ]
+    proj = StateProject([HistIssue(1, [], notes=notes)], [])
+    history, _ = board.fetch_history(proj, FakeBoard([]), SINCE)
+    assert history[0]["verdicts"] == [
+        ["2026-09-04T00:00:00Z", "cat", "failed"],
+        ["2026-09-05T00:00:00Z", "bob", "verified"],
+    ]
+    assert history[0]["notes"] == [
+        ["2026-09-03T00:00:00Z", "ana", "Q: which branch?"],
+        ["2026-09-04T00:00:00Z", "cat", "failed, see log"],
+        ["2026-09-05T00:00:00Z", "bob", "Verified: works"],
+    ]
+
+
+def test_history_flattens_assignee_and_milestone():
+    a = HistIssue(1, [], assignee={"username": "ana"})
+    a.milestone = {"title": "M1"}
+    b = HistIssue(2, [])
+    b.milestone = None
+    history, _ = board.fetch_history(StateProject([a, b], []), FakeBoard([]), SINCE)
+    assert (history[0]["assignee"], history[0]["milestone"]) == ("ana", "M1")
+    assert (history[1]["assignee"], history[1]["milestone"]) == (None, None)
+    assert set(history[0]) == {
+        "iid", "title", "state", "created_at", "closed_at", "updated_at",
+        "assignee", "labels", "milestone", "due_date", "web_url",
+        "transitions", "verdicts", "notes",
+    }  # fmt: skip

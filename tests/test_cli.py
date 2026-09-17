@@ -329,6 +329,111 @@ def test_report_all_reads_only_the_log(gl, tmp_path, monkeypatch):
     assert "no snapshot of grp/proj" in r.output
 
 
+# --- stats / digest --------------------------------------------------------
+
+
+def history_file(tmp_path):
+    """A tiny --dump: alice owns an open Verify card, bob closed one and
+    verified alice's; fetched_at is fixed so the numbers are stable."""
+    now = "2026-09-14T07:00:00+00:00"
+    data = {
+        "project": "grp/proj",
+        "board": "Dev Board",
+        "columns": ["Doing", "Verify", "Done"],
+        "fetched_at": now,
+        "history": [
+            {
+                "iid": 1,
+                "title": "one",
+                "state": "opened",
+                "created_at": "2026-09-08T00:00:00Z",
+                "closed_at": None,
+                "updated_at": now,
+                "assignee": "alice",
+                "labels": ["Verify", "epic::auth"],
+                "milestone": None,
+                "due_date": None,
+                "web_url": "http://gl/1",
+                "transitions": [["2026-09-10T00:00:00Z", "add", "Verify"]],
+                "verdicts": [["2026-09-12T00:00:00Z", "bob", "failed"]],
+                "notes": [["2026-09-12T00:00:00Z", "bob", "failed: nope"]],
+            },
+            {
+                "iid": 2,
+                "title": "two",
+                "state": "closed",
+                "created_at": "2026-09-01T00:00:00Z",
+                "closed_at": "2026-09-11T00:00:00Z",
+                "updated_at": now,
+                "assignee": "bob",
+                "labels": ["Done"],
+                "milestone": "M1",
+                "due_date": None,
+                "web_url": "http://gl/2",
+                "transitions": [],
+                "verdicts": [],
+                "notes": [],
+            },
+        ],
+    }
+    path = tmp_path / "h.json"
+    path.write_text(json.dumps(data))
+    return str(path), data
+
+
+def test_stats_from_renders_offline(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        board_mod, "fetch_history", lambda *a, **k: pytest.fail("network")
+    )
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path, _ = history_file(tmp_path)
+    r = runner.invoke(app, ["stats", "--from", path])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.startswith("# Team — 7 days to 2026-09-14")
+    assert "| alice | 1 |" in r.stdout
+    j = runner.invoke(app, ["stats", "--from", path, "--json"])
+    assert json.loads(j.stdout)["throughput"]["done"] == 1
+
+
+def test_stats_dump_round_trips_through_from(gl, tmp_path, monkeypatch):
+    _, data = history_file(tmp_path)
+    monkeypatch.setattr(
+        board_mod,
+        "fetch_history",
+        lambda p, b, since: (data["history"], data["columns"]),
+    )
+    r = runner.invoke(app, ["stats", "grp/proj", "--dump", "h2.json"])
+    assert r.exit_code == 0, r.output
+    dumped = json.loads((tmp_path / "h2.json").read_text())
+    assert set(dumped) == {"project", "board", "columns", "fetched_at", "history"}
+    assert dumped["history"] == data["history"]
+    again = runner.invoke(app, ["stats", "--from", "h2.json"])
+    assert again.exit_code == 0, again.output
+    assert again.stdout == r.stdout
+
+
+def test_digest_writes_md_for_everyone_and_eml_where_there_is_an_address(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    write_spec(tmp_path, spec={**SPEC, "emails": {"alice": "a@x"}}, base=False)
+    path, _ = history_file(tmp_path)
+    r = runner.invoke(app, ["digest", "--from", path, "--sender", "lead@x"])
+    assert r.exit_code == 0, r.output
+    folder = tmp_path / "reports/2026-09-14/grp-proj"
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "alice.eml",
+        "alice.md",
+        "bob.md",
+        "team.md",
+    ]
+    assert (folder / "alice.md").read_text().startswith("# alice")
+    eml = (folder / "alice.eml").read_text()
+    assert "To: a@x" in eml and "From: lead@x" in eml
+    assert "Subject: [grp/proj] week of 2026-09-07 =?utf-8?b?4oCU?= alice" in eml
+    assert "reports/2026-09-14/grp-proj/team.md" in r.output
+
+
 # --- config ----------------------------------------------------------------
 
 
