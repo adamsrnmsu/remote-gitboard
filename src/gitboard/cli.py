@@ -636,7 +636,8 @@ def ingest(
         None, "--source", help="Lineage label in the Source footer. Default: the file."
     ),
     column: str = typer.Option("Verify", "--column", help="Column for open tasks."),
-    done: str = typer.Option("Done", "--done", help="Column for checked tasks."),
+    done: str = typer.Option("Done", "--done", help="Column for `verified` tasks."),
+    failed: str = typer.Option("Failed", "--failed", help="Column for `failed` tasks."),
 ):
     """Fold a tasks.md into a board YAML. Local files only, never GitLab."""
 
@@ -652,21 +653,51 @@ def ingest(
             raise ConfigError(f"{tasks}: no `- [ ]` tasks found")
         today = datetime.now(UTC).date().isoformat()
         out = ingest_mod.merge(
-            spec, parsed, source or _shortest(tasks), today, column=column, done=done
+            spec,
+            parsed,
+            source or _shortest(tasks),
+            today,
+            column=column,
+            done=done,
+            failed=failed,
         )
-        # ponytail: safe_dump drops YAML comments; pulled specs have none,
-        # hand-written ones lose theirs — fine until someone minds
-        Path(spec_path).write_text(apply_mod.dump(spec))
+        short = _shortest(spec_path)
+        if out["changed"]:
+            # ponytail: safe_dump drops YAML comments; pulled specs have none,
+            # hand-written ones lose theirs — fine until someone minds
+            Path(spec_path).write_text(apply_mod.dump(spec))
         err().print(
-            f"[added]{out['added']} issue(s) added[/], {out['moved']} moved to {done}, "
-            f"{out['notes']} note(s) staged -> {_shortest(spec_path)}"
+            f"[added]{out['added']} issue(s) added[/], {out['moved']} moved by "
+            f"verdict, {out['notes']} note(s) staged, {out['reverify']} to "
+            f"re-verify, {out['stale']} stale -> "
+            f"{short if out['changed'] else 'nothing changed, file untouched'}"
         )
+        if out["unverified"]:
+            err().print(
+                "[muted]\\[x] without a `verified` comment, not moved: "
+                f"{'; '.join(out['unverified'])}[/]"
+            )
+        for new, old, ratio in out["similar"]:
+            err().print(
+                f"[muted]not added: '{new}' looks like '{old}' ({ratio:.0%}) — "
+                "give it an `id:` or a distinct title[/]"
+            )
+        for old, new in out["retitled"]:
+            err().print(
+                f"[muted]same id, title differs; kept '{old}' (file: '{new}')[/]"
+            )
+        if out["reverify"]:
+            err().print(
+                "[muted]commit changed: labelled `re-verify` until the next verdict[/]"
+            )
+        if out["stale"]:
+            err().print("[muted]no longer in the file: labelled `stale`, not moved[/]")
         if out["unmapped"]:
             err().print(
                 f"[muted]no username for {', '.join(out['unmapped'])} — add them "
-                f"under `people:` in {_shortest(spec_path)} to assign[/]"
+                f"under `people:` in {short} to assign[/]"
             )
-        err().print(f"[muted]next: gitboard plan {_shortest(spec_path)}[/]")
+        err().print(f"[muted]next: gitboard plan {short}[/]")
 
     _run(go)
 

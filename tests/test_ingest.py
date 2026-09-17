@@ -1,21 +1,38 @@
-"""ingest.py — tasks.md in, board issues out. Pure, no files."""
+"""ingest.py — tasks.md in, board issues out. Pure, no files.
+
+The rule under test: a person's `verified` / `failed` comment moves a task;
+a `[x]` in the file never does.
+"""
+
+from copy import deepcopy
 
 from gitboard import ingest
 
 SAMPLE = """\
+commit: abc123
+mr: 41
+session: run-7
+
 # Verification round 3
 
+Some prose the agent wrapped around it.
+
 ## Alice
-- [ ] Check the login flow
+- [ ] Check the login flow · id: T-login
   Open /login, sign in as a viewer, expect the dashboard.
-  Then sign out.
+  - Then sign out.
+  evidence: screenshots/login.png
 - [x] Confirm the migration ran
   `make migrate` prints nothing.
   **Feedback**
   Ran twice, second run printed a warning about a stale lock.
 
+```
+- [ ] Not a task, this is a code sample
+```
+
 ## Bob Lee
-- [ ] Review the API docs
+- [ ] Review the API docs (id: T-docs)
 Feedback:
 Looks fine, one typo on page 2.
 """
@@ -27,9 +44,27 @@ SPEC = {
     "people": {"Alice": "alice"},
     "issues": [],
 }
+SRC, DAY = "proj-x/tasks.md", "2026-09-15"
 
 
-def test_parse_groups_by_person_and_splits_verify_from_feedback():
+def fresh():
+    return deepcopy(SPEC)
+
+
+def seeded():
+    spec = fresh()
+    ingest.merge(spec, ingest.parse(SAMPLE), SRC, DAY)
+    return spec
+
+
+def say(entry, body, at="2026-09-16"):
+    entry.setdefault("discussion", []).append({"by": "alice", "at": at, "body": body})
+
+
+# --- parse -----------------------------------------------------------------
+
+
+def test_parse_header_meta_people_ids_evidence_and_fences():
     tasks = ingest.parse(SAMPLE)
     assert [t["title"] for t in tasks] == [
         "Check the login flow",
@@ -37,58 +72,206 @@ def test_parse_groups_by_person_and_splits_verify_from_feedback():
         "Review the API docs",
     ]
     login, migration, docs = tasks
-    assert login["person"] == "Alice" and not login["done"]
+    assert login["meta"] == {"commit": "abc123", "mr": "41", "session": "run-7"}
+    assert login["person"] == "Alice" and login["id"] == "T-login"
+    assert not login["done"] and migration["done"]
     assert login["verify"] == (
-        "Open /login, sign in as a viewer, expect the dashboard.\nThen sign out."
+        "Open /login, sign in as a viewer, expect the dashboard.\n- Then sign out."
     )
-    assert login["feedback"] == ""
-    assert migration["done"]
-    assert migration["verify"] == "`make migrate` prints nothing."
-    assert migration["feedback"].startswith("Ran twice")
-    assert (
-        docs["person"] == "Bob Lee"
-        and docs["feedback"] == "Looks fine, one typo on page 2."
+    assert login["evidence"] == "screenshots/login.png" and login["feedback"] == ""
+    assert migration["id"] is None and migration["feedback"].startswith("Ran twice")
+    assert docs["person"] == "Bob Lee" and docs["id"] == "T-docs"
+    assert docs["feedback"] == "Looks fine, one typo on page 2."
+
+
+def test_level_one_heading_is_the_document_not_a_person():
+    tasks = ingest.parse("# Round 1\n- [ ] Orphan task\n## Cy\n- [ ] Owned [T-1]\n")
+    assert [(t["person"], t["id"]) for t in tasks] == [(None, None), ("Cy", "T-1")]
+
+
+# --- footer -----------------------------------------------------------------
+
+
+def test_footer_round_trips():
+    meta = {"commit": "abc123", "mr": "41", "session": "run-7", "branch": "x"}
+    line = ingest.footer_line(SRC, "Alice", DAY, "T-login", meta)
+    assert line == (
+        "Source: proj-x/tasks.md · Alice · 2026-09-15 · id: T-login · "
+        "commit: abc123 · mr: !41 · session: run-7"
     )
+    assert ingest.parse_footer(f"steps\n\n{line}") == {
+        "source": SRC,
+        "person": "Alice",
+        "date": DAY,
+        "id": "T-login",
+        "commit": "abc123",
+        "mr": "!41",
+        "session": "run-7",
+    }
+    assert ingest.parse_footer("no footer here") == {}
+    assert ingest.footer_line(SRC, None, DAY) == f"Source: {SRC} · unattributed · {DAY}"
 
 
-def fresh():
-    return {**SPEC, "columns": [dict(c) for c in SPEC["columns"]], "issues": []}
+# --- merge: adding ----------------------------------------------------------
 
 
-def test_merge_adds_issues_in_verify_or_done_with_a_source_footer():
+def test_merge_adds_every_task_to_verify_as_a_task_list_with_footer():
     spec = fresh()
-    out = ingest.merge(spec, ingest.parse(SAMPLE), "proj-x/tasks.md", "2026-09-15")
-    assert out["added"] == 3 and out["notes"] == 2 and out["unmapped"] == ["Bob Lee"]
-    assert [c["name"] for c in spec["columns"]] == ["Doing", "Verify", "Done"]
+    out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, DAY)
+    assert out["added"] == 3 and out["moved"] == 0 and out["notes"] == 2
+    assert out["unmapped"] == ["Bob Lee"] and out["changed"]
+    assert [c["name"] for c in spec["columns"]] == ["Doing", "Verify"]
     login, migration, docs = spec["issues"]
     assert login["labels"] == ["Verify"] and login["assignee"] == "alice"
-    assert login["description"].endswith("Source: proj-x/tasks.md · Alice · 2026-09-15")
-    assert migration["labels"] == ["Done"]
-    assert migration["notes"][0].startswith(
-        "*feedback from Alice via proj-x/tasks.md:*"
+    assert login["description"] == (
+        "- [ ] Open /login, sign in as a viewer, expect the dashboard.\n"
+        "- [ ] Then sign out.\n\n"
+        "Evidence: screenshots/login.png\n\n"
+        "Source: proj-x/tasks.md · Alice · 2026-09-15 · id: T-login · "
+        "commit: abc123 · mr: !41 · session: run-7"
     )
     assert "assignee" not in docs
-
-
-def test_merge_is_idempotent_and_moves_a_checked_task_to_done():
-    spec = fresh()
-    tasks = ingest.parse(SAMPLE)
-    ingest.merge(spec, tasks, "src", "2026-09-15")
-    again = ingest.merge(spec, tasks, "src", "2026-09-16")
-    assert again == {"added": 0, "moved": 0, "notes": 0, "unmapped": ["Bob Lee"]}
-    assert len(spec["issues"]) == 3
-
-    checked = ingest.parse(
-        SAMPLE.replace("- [ ] Check the login flow", "- [x] Check the login flow")
+    assert docs["notes"] == [
+        "*feedback from Bob Lee via proj-x/tasks.md:*\n\nLooks fine, one typo on page 2."
+    ]
+    assert migration["notes"][0].startswith(
+        "*feedback from @alice via proj-x/tasks.md:*"
     )
-    out = ingest.merge(spec, checked, "src", "2026-09-17")
-    assert out["moved"] == 1 and spec["issues"][0]["labels"] == ["Done"]
+
+
+def test_checked_without_a_verdict_stays_put_and_is_reported():
+    spec = fresh()
+    out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, DAY)
+    assert out["unverified"] == ["Confirm the migration ran"]
+    assert spec["issues"][1]["labels"] == ["Verify"]
+
+
+def test_verdict_moves_regardless_of_the_checkbox():
+    spec = seeded()
+    login, migration, _ = spec["issues"]
+    say(login, "Verified: works on staging too")  # file says [ ]
+    say(migration, "looks good")  # not a verdict
+    say(migration, "FAILED\n\nsecond run still warns")  # file says [x]
+    out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-16")
+    assert out["moved"] == 2 and out["unverified"] == []
+    assert login["labels"] == ["Done"] and migration["labels"] == ["Failed"]
+    assert {c["name"]: c.get("color") for c in spec["columns"]} == {
+        "Doing": None,
+        "Verify": "carrot orange",
+        "Done": "medium sea green",
+        "Failed": "crimson",
+    }
+    say(migration, "verified, after !42", at="2026-09-17")
+    ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-17")
+    assert migration["labels"] == ["Done"]
+
+
+def test_reingest_is_a_no_op():
+    spec = seeded()
+    before = deepcopy(spec)
+    out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-16")
+    assert spec == before and not out["changed"]
+    assert out["added"] == out["moved"] == out["notes"] == out["stale"] == 0
+
+
+# --- merge: identity ---------------------------------------------------------
+
+
+def test_id_match_keeps_the_board_title_and_reports_the_rename():
+    spec = seeded()
+    renamed = SAMPLE.replace(
+        "Check the login flow · id: T-login", "Login works · id: T-login"
+    )
+    out = ingest.merge(spec, ingest.parse(renamed), SRC, "2026-09-16")
+    assert out["added"] == 0 and out["retitled"] == [
+        ("Check the login flow", "Login works")
+    ]
+    assert spec["issues"][0]["title"] == "Check the login flow"
+    assert "stale" not in spec["issues"][0]["labels"]
+
+
+def test_near_duplicate_title_is_reported_not_added():
+    spec = seeded()
+    near = SAMPLE.replace(
+        "- [x] Confirm the migration ran", "- [ ] Confirm the migration runs"
+    )
+    out = ingest.merge(spec, ingest.parse(near), SRC, "2026-09-16")
+    assert out["added"] == 0 and len(spec["issues"]) == 3
+    new, old, ratio = out["similar"][0]
+    assert (new, old) == ("Confirm the migration runs", "Confirm the migration ran")
+    assert ratio >= 0.85
+    assert "stale" not in spec["issues"][1].get("labels", [])
+
+
+def test_exact_title_match_ignores_case_and_whitespace():
+    spec = seeded()
+    shouty = SAMPLE.replace("Review the API docs (id: T-docs)", "REVIEW  the api docs")
+    out = ingest.merge(spec, ingest.parse(shouty), SRC, "2026-09-16")
+    assert out["added"] == 0 and out["similar"] == [] and len(spec["issues"]) == 3
+
+
+# --- merge: lineage ----------------------------------------------------------
+
+
+def test_task_gone_from_the_file_is_stale_until_it_returns():
+    spec = seeded()
+    spec["issues"].append({"title": "Hand-made", "labels": ["Doing"]})
+    without = SAMPLE.replace("- [ ] Review the API docs (id: T-docs)\n", "")
+    out = ingest.merge(spec, ingest.parse(without), SRC, "2026-09-16")
+    assert out["stale"] == 1 and len(spec["issues"]) == 4
+    assert spec["issues"][2]["labels"] == ["Verify", "stale"]
+    assert spec["issues"][3] == {"title": "Hand-made", "labels": ["Doing"]}  # not ours
+    assert ingest.merge(spec, ingest.parse(without), SRC, "2026-09-17")["stale"] == 0
+    ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-18")
+    assert spec["issues"][2]["labels"] == ["Verify"]
+
+
+def test_commit_change_flags_reverify_until_a_newer_verdict():
+    spec = seeded()
+    login = spec["issues"][0]
+    say(login, "verified", at="2026-09-15")
+    ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-15")
+    assert login["labels"] == ["Done"]
+
+    bumped = SAMPLE.replace("commit: abc123", "commit: def456")
+    out = ingest.merge(spec, ingest.parse(bumped), SRC, "2026-09-17")
+    assert out["reverify"] == 3  # the header commit covers every task
+    assert login["labels"] == ["Done", "re-verify"]
+    footer = ingest.parse_footer(login["description"])
+    assert footer["commit"] == "def456" and footer["date"] == "2026-09-17"
+    assert login["description"].startswith("- [ ] Open /login")  # body untouched
+
+    ingest.merge(spec, ingest.parse(bumped), SRC, "2026-09-18")
+    assert "re-verify" in login["labels"]  # old verdict does not clear it
+    say(login, "verified again", at="2026-09-18")
+    ingest.merge(spec, ingest.parse(bumped), SRC, "2026-09-18")
+    assert login["labels"] == ["Done"]
+
+
+# --- merge: feedback ---------------------------------------------------------
 
 
 def test_feedback_already_in_the_pulled_discussion_is_not_staged_again():
-    spec = fresh()
-    ingest.merge(spec, ingest.parse(SAMPLE), "src", "2026-09-15")
+    spec = seeded()
     body = spec["issues"][1].pop("notes")[0]
-    spec["issues"][1]["discussion"] = [{"by": "me", "at": "2026-09-15", "body": body}]
-    out = ingest.merge(spec, ingest.parse(SAMPLE), "src", "2026-09-16")
+    say(spec["issues"][1], body)
+    out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, "2026-09-16")
     assert out["notes"] == 0 and "notes" not in spec["issues"][1]
+
+
+def test_a_verdict_moves_the_card_out_of_every_column():
+    spec = {
+        **SPEC,
+        "columns": [{"name": "Doing"}, {"name": "Review"}],
+        "issues": [
+            {
+                "title": "Check the login flow",
+                "labels": ["Review", "priority::high"],
+                "discussion": [
+                    {"by": "alice", "at": "2026-09-16", "body": "verified: ok"}
+                ],
+            }
+        ],
+    }
+    ingest.merge(spec, ingest.parse(SAMPLE), "src", "2026-09-16")
+    assert spec["issues"][0]["labels"] == ["priority::high", "Done"]
