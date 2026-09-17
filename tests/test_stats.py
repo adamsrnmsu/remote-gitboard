@@ -470,3 +470,97 @@ def test_eml_html_is_multipart_alternative():
     assert "<p>hi</p>" in msg.get_body(("html",)).get_content()
     plain = message_from_string(stats.eml("a@x.dev", "s", "b"), policy=policy.default)
     assert not plain.is_multipart()
+
+
+# --- over time ----------------------------------------------------------------
+
+ROW_KEYS = {
+    "ts",
+    "project",
+    "board",
+    "period_start",
+    "period_end",
+    "days",
+    "open",
+    "done",
+    "closed",
+    "verify_queue",
+    "verify_median",
+    "review_median",
+    "cycle_median",
+    "coverage",
+    "overdue",
+    "stuck",
+    "by_epic",
+    "by_assignee",
+}
+
+
+def row(project="g/p", board="dev", end="2026-09-16T12:00:00+00:00", **kw):
+    return {"project": project, "board": board, "period_end": end, **kw}
+
+
+def test_stat_row_keys_and_values():
+    s = stats.summarise(history(), COLUMNS, START, END, NOW)
+    r = stats.stat_row(s, "g/p", "dev", "2026-09-16T12:00:00+00:00")
+    assert set(r) == ROW_KEYS
+    assert r["period_end"] == END.isoformat() and r["days"] == 7
+    assert (r["open"], r["done"], r["closed"]) == (5, 2, 1)
+    assert (r["verify_queue"], r["overdue"], r["stuck"]) == (1, 1, 2)
+    assert (r["verify_median"], r["review_median"], r["cycle_median"]) == (
+        2.0,
+        None,
+        8.0,
+    )
+    assert r["coverage"] == 0.5
+    assert r["by_epic"] == {"Payments": 1, "Auth": 1, "A": 1}
+    assert r["by_assignee"] == {"alice": 2, "bob": 2}
+    empty = stats.stat_row({}, "g/p", None, "t")
+    assert set(empty) == ROW_KEYS and empty["open"] == 0 and empty["coverage"] is None
+
+
+def test_load_rows_missing_file_is_empty(tmp_path):
+    assert stats.load_rows(tmp_path / "nope.jsonl") == []
+
+
+def test_append_row_dedupes_per_week_and_later_wins(tmp_path):
+    path = tmp_path / "reports" / "stats.jsonl"
+    stats.append_row(path, row(done=1))
+    stats.append_row(path, row(end="2026-09-16T18:00:00+00:00", done=2))
+    stats.append_row(path, row(board="ops", done=3))
+    stats.append_row(path, row(end="2026-09-09T12:00:00+00:00", done=4))
+    rows = stats.load_rows(path)
+    assert [r["done"] for r in rows] == [2, 3, 4]
+    assert path.read_text().count("\n") == 3
+
+
+def test_weekly_sorts_caps_and_filters():
+    rows = [
+        row(end=f"2026-09-{d:02d}T00:00:00+00:00", done=d) for d in (16, 2, 9, 23)
+    ] + [row(project="other", end="2026-09-30", done=99), row(board="ops", done=98)]
+    assert [r["done"] for r in stats.weekly(rows, "g/p")] == [2, 9, 16, 98, 23]
+    assert [r["done"] for r in stats.weekly(rows, "g/p", weeks=2)] == [98, 23]
+    assert [r["done"] for r in stats.weekly(rows, "g/p", board="ops")] == [98]
+    assert stats.weekly(rows, "nobody") == []
+
+
+def test_render_weekly_md_dashes_and_percent():
+    assert stats.render_weekly_md([]) == "_none_"
+    md = stats.render_weekly_md(
+        [row(done=2, open=5, verify_queue=1, coverage=0.5, overdue=1, stuck=2)]
+    )
+    assert md.startswith(
+        "| week | done | open | verify q | verify d | review d | cycle d "
+        "| coverage | overdue | stuck |\n"
+    )
+    assert "| 2026-09-16 | 2 | 5 | 1 | – | – | – | 50% | 1 | 2 |" in md
+
+
+def test_render_team_md_weekly_is_opt_in():
+    s = stats.summarise(history(), COLUMNS, START, END, NOW)
+    plain = stats.render_team_md(s)
+    assert plain == stats.render_team_md(s, weekly=None)
+    assert "8-week trend" not in plain
+    md = stats.render_team_md(s, weekly=[row(done=2, coverage=0.5)])
+    assert md.startswith(plain)
+    assert "\n## 8-week trend\n| week |" in md and "| 50% |" in md

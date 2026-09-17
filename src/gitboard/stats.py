@@ -5,10 +5,12 @@ timestamps, label `transitions` (column labels only), `verdicts` and
 `notes` — so everything here runs offline from a dumped JSON file.
 """
 
+import json
 from collections import Counter
 from datetime import UTC, datetime, time, timedelta
 from email.message import EmailMessage
 from email.utils import format_datetime
+from pathlib import Path
 from statistics import mean, median
 
 from gitboard import ingest, report
@@ -422,6 +424,69 @@ def for_person(summary, history, username, now):
     }
 
 
+# --- over time ---------------------------------------------------------------
+
+
+def stat_row(summary, project, board, ts):
+    """One JSONL line: the week's headline numbers, flat, for the trend log."""
+    g = summary.get
+    p, o, t, v, f = (
+        g(k) or {} for k in ("period", "open", "throughput", "verify", "flow")
+    )
+    med = lambda d: (d or {}).get("median")  # noqa: E731
+    return {
+        "ts": ts,
+        "project": project,
+        "board": board,
+        "period_start": p.get("start"),
+        "period_end": p.get("end"),
+        "days": p.get("days"),
+        "open": o.get("total", 0),
+        "done": t.get("done", 0),
+        "closed": t.get("closed", 0),
+        "verify_queue": len(v.get("queue") or []),
+        "verify_median": med(v.get("verify_days")),
+        "review_median": med(v.get("review_days")),
+        "cycle_median": med(t.get("cycle_days")),
+        "coverage": v.get("coverage"),
+        "overdue": f.get("overdue", 0),
+        "stuck": len(f.get("stuck") or []),
+        "by_epic": o.get("by_epic") or {},
+        "by_assignee": o.get("by_assignee") or {},
+    }
+
+
+def load_rows(path):
+    """Rows of a JSONL file; a missing file is no rows."""
+    try:
+        lines = Path(path).read_text().splitlines()
+    except FileNotFoundError:
+        return []
+    return [json.loads(x) for x in lines if x.strip()]
+
+
+def _week_key(row):
+    return (row.get("project"), row.get("board"), (row.get("period_end") or "")[:10])
+
+
+def append_row(path, row):
+    """Add `row`, replacing any earlier run for the same project/board/week."""
+    # ponytail: rewrite-on-append; append-only + dedupe-on-read past ~10k lines
+    rows = [r for r in load_rows(path) if _week_key(r) != _week_key(row)] + [row]
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def weekly(rows, project, weeks=8, board=None):
+    """The last `weeks` rows for a project (and board), oldest first."""
+    mine = [
+        r
+        for r in rows
+        if r.get("project") == project and (board is None or r.get("board") == board)
+    ]
+    return sorted(mine, key=lambda r: r.get("period_end") or "")[-weeks:]
+
+
 # --- rendering ---------------------------------------------------------------
 
 
@@ -454,7 +519,37 @@ def _stat_row(label, s):
     return (label, s["median"], s["mean"], s["n"])
 
 
-def render_team_md(summary):
+def render_weekly_md(rows):
+    return _table(
+        [
+            (
+                (r.get("period_end") or "")[:10],
+                r.get("done"),
+                r.get("open"),
+                r.get("verify_queue"),
+                r.get("verify_median"),
+                r.get("review_median"),
+                r.get("cycle_median"),
+                None if r.get("coverage") is None else f"{r['coverage']:.0%}",
+                r.get("overdue"),
+                r.get("stuck"),
+            )
+            for r in rows
+        ],
+        "week",
+        "done",
+        "open",
+        "verify q",
+        "verify d",
+        "review d",
+        "cycle d",
+        "coverage",
+        "overdue",
+        "stuck",
+    )
+
+
+def render_team_md(summary, weekly=None):
     p, o, t, v, f, tr = (
         summary[k] for k in ("period", "open", "throughput", "verify", "flow", "trend")
     )
@@ -547,7 +642,10 @@ def render_team_md(summary):
         ),
         "",
     ]
-    return "\n".join(parts)
+    md = "\n".join(parts)
+    if weekly is not None:
+        md += "\n## 8-week trend\n" + render_weekly_md(weekly)
+    return md
 
 
 def render_person_md(person, summary, username):
