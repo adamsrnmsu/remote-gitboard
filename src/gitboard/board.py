@@ -112,9 +112,14 @@ def fetch(path, board_name=None):
     return project, project.boards.get(boards[0].id)
 
 
-def as_markdown(project, board, columns=None):
-    """The stable, parseable rendering. The /board prompt reads this."""
+def as_markdown(project, board, columns=None, ages=None):
+    """The stable, parseable rendering. The /board prompt reads this.
+
+    `ages` is `report.age_days(...)`: {iid: (column, days)}. It only ever
+    appends ` age:3d` to a line, so older parsers keep working.
+    """
     columns = board_columns(project, board) if columns is None else columns
+    ages = ages or {}
     lines = [f"# {project.path_with_namespace} — {board.name}\n"]
     for name, issues in columns:
         lines.append(f"## {name} ({len(issues)})\n")
@@ -123,16 +128,18 @@ def as_markdown(project, board, columns=None):
             extra = [x for x in i.labels if x != name]
             tags = f" `{'` `'.join(extra)}`" if extra else ""
             due = f" due:{i.due_date}" if i.due_date else ""
-            lines.append(f"- {ref(i)} {i.title} — @{who}{due}{tags}")
+            age = f" age:{ages[i.iid][1]}d" if i.iid in ages else ""
+            lines.append(f"- {ref(i)} {i.title} — @{who}{due}{tags}{age}")
             if i.web_url:
                 lines.append(f"  {i.web_url}")
         lines.append("")
     return "\n".join(lines)
 
 
-def issue_line(issue, column):
+def issue_line(issue, column, ages=None):
     """One issue as a styled line. Extra labels are the ones from *other*
-    columns — the column's own label is redundant inside it."""
+    columns — the column's own label is redundant inside it. `ages`
+    ({iid: (column, days)}, from report.age_days) adds ` · Verify 3d`."""
     line = Text.assemble(
         (f"{ref(issue)} ", "muted"),
         issue.title,
@@ -150,6 +157,9 @@ def issue_line(issue, column):
         )
     if extra := [x for x in issue.labels if x != column]:
         line.append(f"  {' '.join(extra)}", "magenta")
+    if ages and issue.iid in ages:
+        col, days = ages[issue.iid]
+        line.append(f" · {col} {days}d", "muted")
     return line
 
 
@@ -197,14 +207,14 @@ def snapshot_records(project, board, ts):
     return list(records.values())
 
 
-def board_view(project, board, limit=5, columns=None):
+def board_view(project, board, limit=5, columns=None, ages=None):
     """Tree + totals as one renderable, plus the hidden count.
 
     `show` prints it once; `tui` redraws it on every keypress and resize.
     Long columns are truncated: a 200-issue board should still fit on a
     screen, and the point of the overview is shape, not every title.
     `limit=0` renders everything. `columns` skips the refetch when the
-    caller already has them.
+    caller already has them; `ages` (see issue_line) adds time-in-column.
     """
     columns = board_columns(project, board) if columns is None else columns
     tree = Tree(
@@ -223,7 +233,7 @@ def board_view(project, board, limit=5, columns=None):
 
         shown = issues if limit == 0 else issues[:limit]
         for issue in shown:
-            node.add(issue_line(issue, name))
+            node.add(issue_line(issue, name, ages))
         if not issues:
             node.add(Text("empty", "muted"))
         if rest := len(issues) - len(shown):
@@ -239,9 +249,9 @@ def board_view(project, board, limit=5, columns=None):
     return Group(tree, line), hidden
 
 
-def print_rich(project, board, spec_path=None, limit=5, columns=None):
+def print_rich(project, board, spec_path=None, limit=5, columns=None, ages=None):
     """The human rendering: the view, then the where-to-edit footer."""
-    view, hidden = board_view(project, board, limit, columns=columns)
+    view, hidden = board_view(project, board, limit, columns=columns, ages=ages)
     console = out()
     console.print()
     console.print(view)

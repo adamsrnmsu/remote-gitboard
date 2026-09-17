@@ -90,3 +90,52 @@ def match_author(assignee, authors):
         if low in (name.lower(), email.split("@")[0].lower()):
             return (name, email)
     return None
+
+
+def since(batches, ts):
+    """Batches taken at or after `ts` (an ISO string; snapshots compare as text)."""
+    return [b for b in batches if b and next(iter(b.values()))["ts"] >= ts]
+
+
+def column_ages(batches):
+    """{iid: (column, ts)} — where each open issue is now, and since when.
+
+    A streak is consecutive batches with the same columns list; the ts is the
+    first batch of the current streak. Only issues in the latest batch are
+    kept. Two-column issues report `Doing+Blocked`, as `report` prints them.
+    """
+    ages = {}
+    for batch in batches:
+        nxt = {}
+        for iid, rec in batch.items():
+            col = "+".join(rec["columns"])
+            prev = ages.get(iid)
+            nxt[iid] = prev if prev and prev[0] == col else (col, rec["ts"])
+        ages = nxt
+    return ages
+
+
+def age_days(ages, now=None):
+    """{iid: (column, days)} — column_ages, with the ts turned into whole days."""
+    now = now or datetime.now(UTC)
+    return {
+        iid: (col, (now - datetime.fromisoformat(ts)).days)
+        for iid, (col, ts) in ages.items()
+    }
+
+
+STUCK = {"Verify": 1, "Doing": 3}
+
+
+def stuck(ages, thresholds=None, now=None):
+    """[(iid, column, days)] for issues past their column's threshold, oldest first.
+
+    A two-column issue is stuck if any of its columns is over threshold.
+    """
+    thresholds = STUCK if thresholds is None else thresholds
+    hits = [
+        (iid, col, days)
+        for iid, (col, days) in age_days(ages, now).items()
+        if any(days >= thresholds[c] for c in col.split("+") if c in thresholds)
+    ]
+    return sorted(hits, key=lambda h: (-h[2], h[0]))

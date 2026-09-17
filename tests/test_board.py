@@ -243,3 +243,38 @@ def test_markdown_from_spec_handles_new_issues():
     assert "(new) a" in text and "(new) b" in text
     assert "None" not in text
     assert board.summarise(cols)["issues"] == 2
+
+
+# --- age in column ---------------------------------------------------------
+
+
+def test_markdown_appends_age_only_for_known_iids():
+    """Append-only: the line up to the age is byte-identical to before."""
+    issues = [FakeIssue(1, ["Doing"], due_date="2026-01-01"), FakeIssue(2, ["Doing"])]
+    proj, brd = FakeProject(issues), FakeBoard([FakeList("Doing", 1)])
+    plain = board.as_markdown(proj, brd)
+    aged = board.as_markdown(proj, brd, ages={1: ("Doing", 3)})
+    line = next(x for x in aged.splitlines() if x.startswith("- #1"))
+    assert line.endswith(" age:3d")
+    assert line[: -len(" age:3d")] in plain
+    assert "age:" not in next(x for x in aged.splitlines() if x.startswith("- #2"))
+
+
+def test_issue_line_and_board_view_show_age():
+    line = board.issue_line(FakeIssue(1, ["Verify"]), "Verify", {1: ("Verify", 3)})
+    assert line.plain.endswith("· Verify 3d")
+    assert "·" not in board.issue_line(FakeIssue(1, ["Verify"]), "Verify").plain
+    view, _ = board.board_view(
+        FakeProject([FakeIssue(1, ["Verify"])]),
+        FakeBoard([FakeList("Verify", 1)]),
+        ages={1: ("Verify", 3)},
+    )
+    from io import StringIO
+
+    from rich.console import Console
+
+    from gitboard.log import THEME
+
+    console = Console(width=120, file=StringIO(), theme=THEME)
+    console.print(view)
+    assert "Verify 3d" in console.file.getvalue()
