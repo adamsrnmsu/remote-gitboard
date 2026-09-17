@@ -5,7 +5,10 @@ here, which is the intended split.
 
 Idempotent: edit the YAML, re-run, and only the drift is written. Additive
 only — nothing is deleted or closed, so removing an issue from the YAML
-leaves it on the board. Issues are matched by title.
+leaves it on the board. Issues are matched by iid when the entry carries
+one, else by title; a title that is closed on GitLab is skipped, never
+recreated. With the pulled `.base` alongside, the write is a three-way
+merge: what the YAML left alone is never written over a GitLab-side change.
 """
 
 import re
@@ -98,6 +101,15 @@ def load(path):
     for col in spec["columns"]:
         if "color" in col:
             col["color"] = norm_color(col["color"])
+    seen = set()
+    for issue in spec["issues"]:
+        title = str(issue.get("title") or "").strip() if isinstance(issue, dict) else ""
+        if not title:
+            raise SpecError(f"{path}: every issue needs a title")
+        issue["title"] = title
+        if title.casefold() in seen:
+            raise SpecError(f"{path}: duplicate issue title {title!r}")
+        seen.add(title.casefold())
     return spec
 
 
@@ -152,9 +164,9 @@ def spec_from_board(project, board, columns, notes=False):
 
     spec_issues = []
     for issue in sorted(seen.values(), key=lambda i: i.iid):
-        # iid is informational: it lets an offline `show --from` name issues,
-        # and plan/apply never read it (identity stays the title).
-        entry = {"title": issue.title, "iid": issue.iid}
+        # iid lets an offline `show --from` name issues and lets plan/apply
+        # treat a retitled entry as a rename rather than a new issue.
+        entry = {"title": issue.title.strip(), "iid": issue.iid}
         if issue.labels:
             entry["labels"] = sorted(issue.labels)
         if body := norm_text(issue.description):
@@ -290,29 +302,159 @@ def ensure_board(project, name, columns, labels, record):
             record("added", "column", col["name"])
 
 
-def _payload(want, users):
+def _payload(fields, users):
     """What the API takes: assignee_ids, not a username."""
-    fields = dict(want)
-    who = fields.pop("assignee")
-    fields["assignee_ids"] = [users[who]] if who else []
+    fields = dict(fields)
+    if "assignee" in fields:
+        who = fields.pop("assignee")
+        fields["assignee_ids"] = [users[who]] if who else []
     return fields
 
 
-def ensure_issues(project, issues, record, users):
-    have = {i.title: i for i in project.issues.list(state="opened", all=True)}
-    for spec in issues:
-        title, want = spec["title"], wanted_issue(spec)
-        if title not in have:
-            project.issues.create({"title": title, **_payload(want, users)})
+def managed_labels(spec, base=None):
+    """The labels the YAML speaks for: column names plus every label an
+    issue names. Anything else on a live issue was added in the UI and is
+    neither compared nor removed."""
+    specs = [spec, base] if base else [spec]
+    return {c["name"] for s in specs for c in s["columns"]} | {
+        label for s in specs for i in s["issues"] for label in i.get("labels") or []
+    }
+
+
+def _show(field, value):
+    if field == "labels":
+        return "[" + ", ".join(value) + "]"
+    return "none" if value is None else str(value)
+
+
+def _detail(title, field, old, new):
+    if field == "description":  # never dump bodies
+        return f"{title}: description (edited)"
+    return f"{title}: {field} {_show(field, old)} -> {_show(field, new)}"
+
+
+def issue_changes(title, edited, live, old, managed, force=False):
+    """Pure three-way merge of one issue's managed fields.
+
+    `edited` is the YAML, `live` the board, `old` the YAML as pulled (None
+    when there is no base — then every difference is written). Returns
+    ({field: value to write}, [(kind, what, detail)]). Labels compare on the
+    managed set only, so a UI-added label is invisible here.
+    """
+    writes, records = {}, []
+    for field in ("labels", "description", "due_date", "assignee"):
+        new, now = edited[field], live[field]
+        o = old[field] if old else None
+        if field == "labels":
+            new, now = sorted(set(new) & managed), sorted(set(now) & managed)
+            o = sorted(set(o) & managed) if old else None
+        if old is None:
+            if new != now:
+                writes[field] = edited[field]
+                records.append(("changed", "issue", _detail(title, field, now, new)))
+        elif new == o:  # the agent left it alone
+            if now != o:
+                records.append(
+                    ("skipped", "issue", f"{title}: {field} changed on GitLab, kept")
+                )
+        elif now != new:
+            if now == o or force:
+                writes[field] = edited[field]
+                records.append(("changed", "issue", _detail(title, field, now, new)))
+            else:
+                records.append(("drift", "issue", _detail(title, field, now, new)))
+    return writes, records
+
+
+def index_issues(issues):
+    """Live issues -> (open by stripped title, iid -> title, closed titles).
+
+    Two open issues with one title would make the match a coin toss, so
+    that is an error naming both.
+    """
+    opened, iids, closed = {}, {}, set()
+    for issue in issues:
+        title = issue.title.strip()
+        if issue.state == "closed":
+            closed.add(title)
+            continue
+        if title in opened:
+            raise SpecError(
+                f"two open issues titled {title!r} on GitLab "
+                f"(#{opened[title].iid}, #{issue.iid}) — close or retitle one"
+            )
+        opened[title] = issue
+        iids[issue.iid] = title
+    return opened, iids, closed
+
+
+def _find(spec_i, have):
+    """(live title, closed?) for a spec entry: by iid when both carry one,
+    else by stripped title. An open match beats a closed one."""
+    iid = spec_i.get("iid")
+    if iid is not None and iid in have.get("iids", {}):
+        return have["iids"][iid], False
+    title = spec_i["title"].strip()
+    if title in have["issues"]:
+        return title, False
+    return None, title in have.get("closed", ())
+
+
+def _old(spec_i, base_have):
+    if base_have is None:
+        return None
+    title, _ = _find(spec_i, base_have)
+    return base_have["issues"][title] if title else None
+
+
+def ensure_issues(project, spec, record, users, base=None, force=False):
+    """Create or update each spec issue. Returns {spec title: live issue},
+    freshly created ones included; titles closed on GitLab are absent."""
+    managed = managed_labels(spec, base)
+    base_have = have_from_spec(base) if base else None
+    opened, iids, closed = index_issues(project.issues.list(state="all", all=True))
+    have = {"issues": opened, "iids": iids, "closed": closed}
+    live = {}
+    for spec_i in spec["issues"]:
+        title, want = spec_i["title"], wanted_issue(spec_i)
+        live_title, is_closed = _find(spec_i, have)
+        if is_closed:
+            record("skipped", "issue", f"{title}: closed on GitLab")
+            continue
+        if live_title is None:
+            live[title] = project.issues.create(
+                {"title": title, **_payload(want, users)}
+            )
             record("added", "issue", title)
             continue
-        issue = have[title]
-        now = current_issue(issue)
-        if changed := [k for k, v in want.items() if now[k] != v]:
-            for k, v in _payload(want, users).items():
+        issue = live[title] = opened[live_title]
+        writes = {}
+        if live_title != title:
+            writes["title"] = title
+            record("changed", "issue", f"{live_title}: title -> {title}")
+        fields, records = issue_changes(
+            title, want, current_issue(issue), _old(spec_i, base_have), managed, force
+        )
+        if "labels" in fields:  # keep what the UI added
+            fields["labels"] = sorted(
+                set(fields["labels"]) | (set(issue.labels) - managed)
+            )
+        writes.update(_payload(fields, users))
+        for change in records:
+            record(*change)
+        if writes:
+            for k, v in writes.items():
                 setattr(issue, k, v)
             issue.save()
-            record("changed", "issue", f"{title}: {', '.join(changed)}")
+    return live
+
+
+MARKER = "*staged via gitboard*"
+
+
+def marked(body):
+    """A staged note as posted: the marker says a YAML wrote it, not a person."""
+    return body if body.startswith(MARKER) else f"{MARKER}\n\n{body}"
 
 
 def staged_notes(spec_issue):
@@ -324,36 +466,45 @@ def note_line(title, body):
     return f"{title}: {body.splitlines()[0][:60]}"
 
 
-def ensure_notes(project, issues, record):
+def ensure_notes(project, issues, record, live=None):
     """Post each staged note whose body is not already on the issue.
 
     Same idempotency as migrate_comments: re-running posts nothing. Only
     issues with `notes:` cost a request, so a plain apply stays cheap.
+    `live` is ensure_issues' {title: issue}; without it the board is read.
     """
     wanted = [(i["title"], staged_notes(i)) for i in issues]
     wanted = [(title, bodies) for title, bodies in wanted if bodies]
     if not wanted:
         return
-    have = {i.title: i for i in project.issues.list(state="opened", all=True)}
+    if live is None:
+        live = index_issues(project.issues.list(state="all", all=True))[0]
     for title, bodies in wanted:
-        issue = have[title]  # ensure_issues just created any that were missing
+        issue = live.get(title.strip())
+        if issue is None:  # closed on GitLab; ensure_issues already said so
+            continue
         posted = {norm_text(n.body) for n in issue.notes.list(all=True)}
         for body in bodies:
-            if body in posted:
+            if marked(body) in posted:
                 continue
-            issue.notes.create({"body": body})
+            issue.notes.create({"body": marked(body)})
             record("added", "note", note_line(title, body))
 
 
-def apply(gl, spec, on_change=None):
-    """Write the spec. Returns the list of (kind, what, detail) changes."""
+def apply(gl, spec, base=None, force=False, on_change=None):
+    """Write the spec. Returns the list of (kind, what, detail) changes.
+
+    `base` is the spec as pulled: with it, a field the YAML did not touch is
+    never written over a change made on GitLab, and a field both sides
+    changed is reported as drift and left alone unless `force`.
+    """
     changes = []
 
     def record(kind, what, detail):
         changes.append((kind, what, detail))
         # Debug, not info: the CLI already prints the change table, and
         # logging it again at info level says everything twice.
-        log.debug("%s %s %s", what, "+" if kind == "added" else "~", detail)
+        log.debug("%s %s %s", kind, what, detail)
         if on_change:
             on_change(kind, what, detail)
 
@@ -361,33 +512,35 @@ def apply(gl, spec, on_change=None):
     project = ensure_project(gl, spec["project"], spec.get("create_project", False))
     labels = ensure_labels(project, spec["columns"], record)
     ensure_board(project, spec["board"], spec["columns"], labels, record)
-    ensure_issues(project, spec["issues"], record, users)
-    ensure_notes(project, spec["issues"], record)
+    live = ensure_issues(project, spec, record, users, base, force)
+    ensure_notes(project, spec["issues"], record, live)
     return changes
 
 
-def plan(gl, spec):
+def plan(gl, spec, base=None):
     """Read-only: what apply would do. Never writes."""
     resolve_users(gl, spec)
     try:
         project = client.get_project(gl, spec["project"])
     except client.GitlabProblem:
-        return diff(spec, None)
-    opened = {i.title: i for i in project.issues.list(state="opened", all=True)}
+        return diff(spec, None, base)
+    opened, iids, closed = index_issues(project.issues.list(state="all", all=True))
     have = {
         "labels": {x.name for x in project.labels.list(all=True)},
         "boards": {b.name for b in project.boards.list(all=True)},
         "issues": {title: current_issue(i) for title, i in opened.items()},
-        # only issues with staged notes are worth a request
-        "notes": {
-            i["title"]: {
-                norm_text(n.body) for n in opened[i["title"]].notes.list(all=True)
-            }
-            for i in spec["issues"]
-            if staged_notes(i) and i["title"] in opened
-        },
+        "iids": iids,
+        "closed": closed,
+        "notes": {},
     }
-    return diff(spec, have)
+    for spec_i in spec["issues"]:  # only issues with staged notes cost a request
+        if staged_notes(spec_i):
+            title, _ = _find(spec_i, have)
+            if title:
+                have["notes"][title] = {
+                    norm_text(n.body) for n in opened[title].notes.list(all=True)
+                }
+    return diff(spec, have, base)
 
 
 def have_from_spec(base):
@@ -396,25 +549,29 @@ def have_from_spec(base):
     Both sides go through wanted_issue, so dates, trailing newlines and label
     order agree by construction.
     """
+    issues = [(i["title"].strip(), i) for i in base["issues"]]
     return {
         "labels": {c["name"] for c in base["columns"]},
         "boards": {base["board"]},
-        "issues": {i["title"]: wanted_issue(i) for i in base["issues"]},
+        "issues": {title: wanted_issue(i) for title, i in issues},
+        "iids": {i["iid"]: title for title, i in issues if i.get("iid") is not None},
+        "closed": set(),
         # what the base already carries: pulled discussion plus its own
         # staged notes, so an already-staged reply is not reported twice
         "notes": {
-            i["title"]: {norm_text(d["body"]) for d in i.get("discussion") or []}
-            | set(staged_notes(i))
-            for i in base["issues"]
+            title: {norm_text(d["body"]) for d in i.get("discussion") or []}
+            | {marked(b) for b in staged_notes(i)}
+            for title, i in issues
         },
     }
 
 
-def diff(spec, have):
+def diff(spec, have, base=None, force=False):
     """Pure: the (kind, what, detail) list apply would write. `have` is
     {"labels": set, "boards": set, "issues": {title: current_issue-shaped},
-    "notes": {title: {bodies already posted}}}, or None for a project that
-    does not exist yet."""
+    "iids": {iid: title}, "closed": {titles}, "notes": {title: {bodies
+    already posted}}}, or None for a project that does not exist yet.
+    `base` is the spec as pulled; see apply()."""
     if have is None:
         pending = [("added", "project", spec["project"])]
         pending += [("added", "label", c["name"]) for c in spec["columns"]]
@@ -427,6 +584,8 @@ def diff(spec, have):
         ]
         return pending
 
+    managed = managed_labels(spec, base)
+    base_have = have_from_spec(base) if base else None
     pending = [
         ("added", "label", c["name"])
         for c in spec["columns"]
@@ -436,16 +595,31 @@ def diff(spec, have):
         pending.append(("added", "board", spec["board"]))
     for spec_i in spec["issues"]:
         title = spec_i["title"]
-        if title not in have["issues"]:
+        live_title, is_closed = _find(spec_i, have)
+        if is_closed:
+            pending.append(("skipped", "issue", f"{title}: closed on GitLab"))
+            continue
+        if live_title is None:
             pending.append(("added", "issue", title))
             continue
-        want, now = wanted_issue(spec_i), have["issues"][title]
-        if changed := [k for k, v in want.items() if now[k] != v]:
-            pending.append(("changed", "issue", f"{title}: {', '.join(changed)}"))
+        if live_title != title:
+            pending.append(("changed", "issue", f"{live_title}: title -> {title}"))
+        _, records = issue_changes(
+            title,
+            wanted_issue(spec_i),
+            have["issues"][live_title],
+            _old(spec_i, base_have),
+            managed,
+            force,
+        )
+        pending += records
     posted = have.get("notes", {})
     for spec_i in spec["issues"]:
+        live_title, is_closed = _find(spec_i, have)
+        if is_closed:
+            continue
         for body in staged_notes(spec_i):
-            if body not in posted.get(spec_i["title"], set()):
+            if marked(body) not in posted.get(live_title, set()):
                 pending.append(("added", "note", note_line(spec_i["title"], body)))
     return pending
 

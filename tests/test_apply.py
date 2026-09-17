@@ -15,11 +15,24 @@ from gitboard import apply, client
 
 class FakeIssue:
     def __init__(
-        self, title, labels=(), description="", due_date=None, assignee=None, iid=1
+        self,
+        title,
+        labels=(),
+        description="",
+        due_date=None,
+        assignee=None,
+        iid=1,
+        state="opened",
+        notes=(),
     ):
         self.title, self.labels, self.iid = title, list(labels), iid
         self.description, self.due_date = description, due_date
         self.assignee = {"username": assignee} if assignee else None
+        self.state, self.saved = state, False
+        self.notes = FakeNotes([fake_note(b) for b in notes])
+
+    def save(self):
+        self.saved = True
 
 
 class FakeProject:
@@ -27,6 +40,15 @@ class FakeProject:
         self.labels = _lister([types.SimpleNamespace(name=n) for n in labels])
         self.boards = _lister([types.SimpleNamespace(name=n) for n in boards])
         self.issues = _lister(list(issues))
+        self.issues.create = self._create
+
+    def _create(self, payload):
+        items = self.issues.list()
+        issue = FakeIssue(payload["title"], iid=len(items) + 100)
+        for k, v in payload.items():
+            setattr(issue, k, v)
+        items.append(issue)
+        return issue
 
 
 def _lister(items):
@@ -120,7 +142,7 @@ def test_plan_spots_a_changed_label(monkeypatch):
         issues=[FakeIssue("one", labels=["Blocked"])],
     )
     pending = apply.plan(use_project(monkeypatch, project), SPEC)
-    assert pending == [("changed", "issue", "one: labels")]
+    assert pending == [("changed", "issue", "one: labels [Blocked] -> [Doing]")]
 
 
 def test_plan_never_proposes_deleting_what_the_yaml_omits(monkeypatch):
@@ -271,7 +293,7 @@ def test_offline_plan_spots_a_move_and_a_new_issue():
         "issues": [{"title": "one", "labels": ["Blocked"], "iid": 1}, {"title": "two"}],
     }
     assert apply.diff(edited, apply.have_from_spec(base)) == [
-        ("changed", "issue", "one: labels"),
+        ("changed", "issue", "one: labels [Doing] -> [Blocked]"),
         ("added", "issue", "two"),
     ]
 
@@ -291,7 +313,7 @@ def test_diff_reports_assignee_by_username():
         "issues": [{"title": "one", "labels": ["Doing"], "assignee": "alice"}],
     }
     assert apply.diff(SPEC, apply.have_from_spec(base)) == [
-        ("changed", "issue", "one: assignee")
+        ("changed", "issue", "one: assignee alice -> none")
     ]
     assert apply.diff(SPEC, apply.have_from_spec(SPEC)) == []
 
@@ -325,9 +347,9 @@ def test_plan_explains_a_rejected_token_from_the_user_lookup(monkeypatch):
 def test_ensure_issues_sends_assignee_ids_not_username():
     created = []
     project = FakeProject(issues=[])
-    project.issues.create = created.append
-    issues = [{"title": "one", "assignee": "alice", "iid": 9}]
-    apply.ensure_issues(project, issues, lambda *_: None, {"alice": 42})
+    project.issues.create = lambda payload: created.append(payload) or FakeIssue("one")
+    spec = {**SPEC, "issues": [{"title": "one", "assignee": "alice", "iid": 9}]}
+    live = apply.ensure_issues(project, spec, lambda *_: None, {"alice": 42})
     assert created == [
         {
             "title": "one",
@@ -337,6 +359,7 @@ def test_ensure_issues_sends_assignee_ids_not_username():
             "assignee_ids": [42],
         }
     ]
+    assert live["one"].title == "one"  # created issues come back for ensure_notes
 
 
 def test_plan_rejects_an_unknown_user_before_touching_the_project(monkeypatch):
@@ -529,19 +552,26 @@ def test_staged_note_is_planned_online_and_posted_once(monkeypatch):
     gl = use_project(monkeypatch, writable_project(issue))
     assert apply.plan(gl, spec) == [("added", "note", "one: reply")]
     assert apply.apply(gl, spec) == [("added", "note", "one: reply")]
-    assert [n.body for n in issue.notes.notes] == ["old comment", "reply"]
+    assert [n.body for n in issue.notes.notes] == [
+        "old comment",
+        "*staged via gitboard*\n\nreply",
+    ]
     assert apply.plan(gl, spec) == []
     assert apply.apply(gl, spec) == []
 
 
 def test_staged_note_offline_skips_what_the_base_discussion_already_has():
+    """A pulled discussion body carries the marker a previous apply wrote;
+    a person's own "seen" is not the same note and would be posted."""
     base = {
         **SPEC,
         "issues": [
             {
                 "title": "one",
                 "labels": ["Doing"],
-                "discussion": [{"by": "bob", "at": "2026-08-03", "body": "seen"}],
+                "discussion": [
+                    {"by": "bob", "at": "2026-08-03", "body": apply.marked("seen")}
+                ],
             }
         ],
     }
@@ -561,3 +591,194 @@ def test_notes_on_a_new_issue_are_planned_with_it():
         ("added", "note", "fresh: hello"),
     ]
     assert ("added", "note", "fresh: hello") in apply.diff(spec, None)
+
+
+# --- closed issues, UI labels, matching ------------------------------------
+
+
+def test_a_closed_title_is_skipped_not_recreated(monkeypatch):
+    closed = FakeIssue("one", labels=["Doing"], state="closed", notes=["old"])
+    spec = {**SPEC, "issues": [{"title": "one", "labels": ["Doing"], "notes": ["hi"]}]}
+    project = writable_project(closed)
+    gl = use_project(monkeypatch, project)
+    assert apply.plan(gl, spec) == [("skipped", "issue", "one: closed on GitLab")]
+    assert apply.apply(gl, spec) == [("skipped", "issue", "one: closed on GitLab")]
+    assert len(project.issues.list()) == 1 and len(closed.notes.notes) == 1
+
+
+def test_an_open_match_beats_a_closed_one(monkeypatch):
+    project = writable_project(FakeIssue("one", labels=["Doing"], state="closed"))
+    project.issues.list().append(FakeIssue("one", labels=["Doing"], iid=2))
+    assert apply.plan(use_project(monkeypatch, project), SPEC) == []
+
+
+def test_a_ui_added_label_survives_a_move(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing", "bug"])
+    spec = {**SPEC, "issues": [{"title": "one", "labels": ["Blocked"]}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert apply.plan(gl, spec) == [
+        ("changed", "issue", "one: labels [Doing] -> [Blocked]")
+    ]
+    apply.apply(gl, spec)
+    assert issue.saved and issue.labels == ["Blocked", "bug"]
+    assert apply.plan(gl, spec) == []
+
+
+def test_a_ui_added_label_is_not_a_diff_offline():
+    base = {**SPEC, "issues": [{"title": "one", "labels": ["Doing", "bug"]}]}
+    assert apply.diff(SPEC, apply.have_from_spec(base)) == []
+
+
+def test_two_open_issues_with_one_title_is_an_error(monkeypatch):
+    project = writable_project(FakeIssue("one", iid=1))
+    project.issues.list().append(FakeIssue("one", iid=2))
+    with pytest.raises(apply.SpecError, match="two open issues titled 'one'"):
+        apply.plan(use_project(monkeypatch, project), SPEC)
+
+
+def test_load_rejects_duplicate_titles(tmp_path):
+    f = tmp_path / "b.yaml"
+    f.write_text("project: g/p\nboard: B\nissues:\n  - title: One\n  - title: 'one '\n")
+    with pytest.raises(apply.SpecError, match="duplicate issue title"):
+        apply.load(str(f))
+
+
+def test_load_strips_titles_and_a_trailing_space_still_matches(monkeypatch, tmp_path):
+    f = tmp_path / "b.yaml"
+    f.write_text("project: g/p\nboard: Dev Board\nissues:\n  - title: 'one '\n")
+    spec = apply.load(str(f))
+    assert spec["issues"][0]["title"] == "one"
+    project = writable_project(FakeIssue("one "))
+    assert apply.plan(use_project(monkeypatch, project), spec) == []
+
+
+def test_an_iid_match_makes_a_retitle_a_rename(monkeypatch):
+    issue = FakeIssue("old name", labels=["Doing"], iid=7)
+    spec = {**SPEC, "issues": [{"title": "new name", "labels": ["Doing"], "iid": 7}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert apply.plan(gl, spec) == [("changed", "issue", "old name: title -> new name")]
+    assert apply.apply(gl, spec) == [
+        ("changed", "issue", "old name: title -> new name")
+    ]
+    assert issue.title == "new name" and issue.saved
+
+
+def test_notes_land_on_a_freshly_created_issue(monkeypatch):
+    spec = {**SPEC, "issues": [{"title": "fresh", "notes": ["hello"]}]}
+    project = writable_project(FakeIssue("other"))
+    gl = use_project(monkeypatch, project)
+    assert apply.apply(gl, spec) == [
+        ("added", "issue", "fresh"),
+        ("added", "note", "fresh: hello"),
+    ]
+    fresh = project.issues.list()[-1]
+    assert [n.body for n in fresh.notes.notes] == ["*staged via gitboard*\n\nhello"]
+
+
+def test_marker_is_not_doubled_and_is_idempotent_offline():
+    body = apply.marked("x")
+    assert apply.marked(body) == body
+    base = {**SPEC, "issues": [{"title": "one", "notes": ["x"]}]}
+    edited = {**SPEC, "issues": [{"title": "one", "notes": [body, "y"]}]}
+    assert apply.diff(edited, apply.have_from_spec(base)) == [
+        ("added", "note", "one: y")
+    ]
+
+
+# --- detail strings ----------------------------------------------------------
+
+
+def test_changed_fields_read_old_to_new_one_line_each():
+    base = {
+        **SPEC,
+        "issues": [
+            {
+                "title": "one",
+                "assignee": "alice",
+                "due_date": "2026-09-01",
+                "description": "long body",
+            }
+        ],
+    }
+    edited = {
+        **SPEC,
+        "issues": [
+            {
+                "title": "one",
+                "assignee": "bob",
+                "due_date": datetime.date(2026, 9, 2),
+                "description": "longer body",
+            }
+        ],
+    }
+    assert apply.diff(edited, apply.have_from_spec(base)) == [
+        ("changed", "issue", "one: description (edited)"),
+        ("changed", "issue", "one: due_date 2026-09-01 -> 2026-09-02"),
+        ("changed", "issue", "one: assignee alice -> bob"),
+    ]
+
+
+# --- three-way: the .base from pull --base ---------------------------------
+
+
+def three_way(edited_labels, live_labels, old_labels=("Doing",), force=False):
+    """diff() on one issue whose labels are `old` in the base, `live` on
+    GitLab, and `edited` in the YAML."""
+    columns = [{"name": n} for n in ("Doing", "Blocked", "Done")]
+
+    def mk(labels):
+        return {
+            **SPEC,
+            "columns": columns,
+            "issues": [{"title": "one", "labels": list(labels)}],
+        }
+
+    live = apply.have_from_spec(mk(live_labels))
+    return apply.diff(mk(edited_labels), live, base=mk(old_labels), force=force)
+
+
+def test_untouched_field_changed_on_gitlab_is_kept():
+    assert three_way(edited_labels=["Doing"], live_labels=["Blocked"]) == [
+        ("skipped", "issue", "one: labels changed on GitLab, kept")
+    ]
+
+
+def test_edited_field_unchanged_on_gitlab_is_written():
+    assert three_way(edited_labels=["Blocked"], live_labels=["Doing"]) == [
+        ("changed", "issue", "one: labels [Doing] -> [Blocked]")
+    ]
+
+
+def test_edited_field_already_matching_gitlab_is_quiet():
+    assert three_way(edited_labels=["Blocked"], live_labels=["Blocked"]) == []
+
+
+def test_both_sides_changed_is_drift_unless_forced():
+    assert three_way(edited_labels=["Blocked"], live_labels=["Done"]) == [
+        ("drift", "issue", "one: labels [Done] -> [Blocked]")
+    ]
+    assert three_way(edited_labels=["Blocked"], live_labels=["Done"], force=True) == [
+        ("changed", "issue", "one: labels [Done] -> [Blocked]")
+    ]
+
+
+def test_apply_with_base_writes_only_what_the_yaml_changed(monkeypatch):
+    """Agent moved the card; a person reassigned it meanwhile. Both survive."""
+    issue = FakeIssue("one", labels=["Doing"], assignee="carol", iid=1)
+    base = {**SPEC, "issues": [{"title": "one", "labels": ["Doing"], "iid": 1}]}
+    edited = {**SPEC, "issues": [{"title": "one", "labels": ["Blocked"], "iid": 1}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert apply.apply(gl, edited, base=base) == [
+        ("changed", "issue", "one: labels [Doing] -> [Blocked]"),
+        ("skipped", "issue", "one: assignee changed on GitLab, kept"),
+    ]
+    assert issue.labels == ["Blocked"] and not hasattr(issue, "assignee_ids")
+
+
+def test_an_issue_missing_from_the_base_is_diffed_two_way():
+    base = {**SPEC, "issues": []}
+    edited = {**SPEC, "issues": [{"title": "one", "labels": ["Blocked"]}]}
+    live = apply.have_from_spec({**SPEC, "issues": [{"title": "one"}]})
+    assert apply.diff(edited, live, base=base) == [
+        ("changed", "issue", "one: labels [] -> [Blocked]")
+    ]
