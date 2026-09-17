@@ -23,15 +23,19 @@ columns:                       # board lists, in order. Each is a label.
     color: "#5cb85c"
 
 issues:
-  - title: Set up the board from YAML     # identity. Never retitle.
-    iid: 12                    # from pull; informational, apply ignores it
-    labels: [Doing]
+  - title: Set up the board from YAML     # identity when there is no iid
+    iid: 12                    # from pull; the match key, so a new title here is a rename
+    labels: [Doing, stale]     # column labels place it; others (stale, re-verify) are follow-ups
     assignee: alice
     due_date: "2026-09-01"     # quote it, or YAML makes a date object
     description: |
       Markdown. GitLab strips the trailing newline; norm_text hides that.
+      Verify steps are a task list, so the card shows a progress bar:
+      - [ ] Open /login, sign in as a viewer
+      - [ ] Expect the dashboard
     notes:                     # comments to post on apply; already-posted bodies are skipped
       - "Moved to Doing after the review on Monday."
+      - "Q: is the token rotation still blocking this?"   # a question for the team
     discussion:                # pulled with --notes; read-only, apply ignores it
       - by: bruiz
         at: "2026-08-30"
@@ -56,31 +60,64 @@ issues:
 : A list is a label. Colour by name (below) or hex.
 
 `issues[].title`
-: The identity. Renaming creates a second issue; the old one stays open.
+: The identity when the entry has no `iid`: renaming such an entry creates
+  a second issue and the old one stays open. Stripped of surrounding
+  whitespace on both sides before comparing.
 
 `issues[].iid`
-: Written by `pull`. Informational. Never invent one; leave it off issues
-  you add.
+: Written by `pull`. When present it is the match key, so changing the
+  title of an entry that has one **renames** that issue. Never invent one;
+  leave it off issues you add.
 
 `issues[].labels`, `assignee`, `due_date`, `description`
 : Optional. Labels that are column names place the issue; others are just
-  labels.
+  labels, and `apply` only ever adds: a label the team put on in the web UI
+  survives an apply that does not list it. Two labels have a meaning to the
+  flow: `stale` (sat in a column past the threshold, see `report`) and
+  `re-verify` (changed after someone verified it). A description whose
+  verify steps are a `- [ ]` task list gets GitLab's task progress on the
+  card, and `ingest` writes them that way.
 
 `issues[].notes`
-: List of strings. Each is posted as a comment on `apply`; a body that is
-  already on the issue is skipped, so re-applies do not duplicate. This is
-  how an offline agent replies to team feedback.
+: List of strings. Each is posted as a comment on `apply`, with a
+  `*staged via gitboard*` first line so the team can tell a staged note
+  from a typed one; a body that is already on the issue is skipped, so
+  re-applies do not duplicate. This is how an offline agent replies to team
+  feedback. A note starting `Q:` is a question for the team; the answer
+  comes back as `discussion:` on the next `pull --notes`.
 
 `issues[].discussion`
 : List of `{by, on, body}`, written by `pull --notes`. Read-only context for
   the AI pass. `apply` ignores it.
 
+## Change kinds
+
+`plan` reads three things when `<spec>.base` exists: the YAML (what you
+want), the live board (what is), and the base (what you pulled). Each row
+in its table is one of:
+
+| Kind | Meaning | `apply` |
+|---|---|---|
+| `added` | in the YAML, not on the board (or a note not yet posted) | creates / posts |
+| `changed` | YAML differs from both board and base; shown as `old -> new` | writes the YAML value |
+| `drift` | board differs from base, YAML does not: the team moved it since the pull | keeps the board's value; refuses unless `--ignore-drift` |
+| `skipped` | the issue is closed on GitLab | nothing; never recreated |
+
+Without a base, every difference is `changed` and there is no drift to
+detect: that is the plain two-way plan.
+
 ## Invariants
 
-- **Title is identity.** No rename. Duplicate titles in one file are an error.
+- **Identity is `iid`, else title.** A retitle with an `iid` is a rename; a
+  retitle without one is a second issue. Duplicate titles in one file are
+  an error.
 - **Additive.** `apply` never deletes or closes. Removing an issue from the
-  file leaves it on the board. Closing is an explicit act
-  (`migrate-comments --close-source`).
+  file leaves it on the board; removing a label leaves it on the issue.
+  Closing is an explicit act (`migrate-comments --close-source`). Closed
+  issues are skipped, not reopened or recreated.
+- **Verify is one-way for the agent.** The AI pass may move an issue into
+  `Verify`; `Done` and `Failed` come from a person's `verified:` /
+  `failed:` comment, read by `ingest`.
 - **Idempotent.** `pull` then `plan` is empty; `apply` twice writes nothing
   the second time. Three normalisations keep it so, and each is pinned by a
   test:

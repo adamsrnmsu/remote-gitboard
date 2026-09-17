@@ -13,20 +13,25 @@ before writing.
 
 | Needs GitLab | Works from files only |
 |---|---|
-| `show`, `plan`, `apply`, `pull`, `snapshot`, `tui`, `migrate-comments` | `show --from`, `plan --against`, `tui --from`, `report`, `ingest`, `bd` |
+| `show`, `plan`, `apply`, `land`, `pull`, `snapshot`, `status`, `tui`, `migrate-comments` | `show --from`, `plan --against`, `tui --from`, `report`, `ingest`, `bd` |
 
 Nothing in the right-hand column opens a connection or looks for a token.
 
 ## Host, before
 
 ```bash
-gitboard pull group/project --base --notes    # boards/x.yaml + boards/x.yaml.base
-gitboard snapshot group/project               # snapshots.jsonl, so report works inside
+gitboard pull group/project --base --notes    # boards/x.yaml + boards/x.yaml.base + a snapshot
 ```
 
 `--base` keeps an untouched copy for `plan --against`. `--notes` includes each
 issue's discussion as a read-only `discussion:` list, so the agent sees the
-team's comments, not just the labels.
+team's comments, not just the labels. `pull` also appends to
+`snapshots.jsonl`, so `report` (and the `age:` suffixes in `show`) work
+inside without a separate `snapshot`. `pull --all` does every board in
+`boards/`.
+
+If `boards/x.yaml` already has edits that were never applied, `pull --force`
+refuses rather than lose them; `--discard-edits` is the explicit override.
 
 **Beads.** `bd` needs git only for `bd init`, so initialise on the host and
 copy `.beads/` in. Inside, `bd metrics off`, set `BD_NON_INTERACTIVE=1`, and
@@ -97,13 +102,18 @@ issues without `iid`, and `notes:` as replies to the team. It never runs
 Copy `boards/x.yaml` (and `issues.jsonl`) back. Then:
 
 ```bash
-gitboard plan boards/x.yaml     # live diff: also shows anything that drifted since the pull
-gitboard apply boards/x.yaml    # write it; notes are posted, existing bodies skipped
+gitboard land boards/x.yaml     # plan, y/n, apply, snapshot, rotate the base
 bd import issues.jsonl          # additive
 ```
 
-`plan` against the live board is the safety net: an issue the team moved
-while the container was thinking shows up here, before anything is written.
+`land` is the four host steps in one: `plan` against the live board (a
+three-way merge with `x.yaml.base`), a y/n on the table, `apply`, a snapshot,
+and `x.yaml.base` replaced by the post-apply state (the old one kept as
+`x.yaml.base.old`). `--yes` skips the prompt. The three-way plan is the
+safety net: an issue the team moved while the container was thinking shows
+as a `drift` row, kept as the team left it, and `land` stops on drift unless
+you pass `--ignore-drift`. `plan boards/x.yaml` and `apply boards/x.yaml`
+remain available as the separate steps.
 
 Inside, export with `bd export --all -o issues.jsonl`. Import is additive
 and deletions do not propagate, so close beads instead of deleting them.
@@ -113,12 +123,14 @@ Run any `migrate-comments` lines from the Hand back section yourself.
 ## Next round: what the team did
 
 ```bash
-mv boards/x.yaml.base boards/x.yaml.base.old
-gitboard pull group/project --force --base --notes
+gitboard status                                                # every board: pulled ago, staged, notes, oldest in Verify, overdue
+gitboard pull group/project --force --base --notes             # rotates the old base to x.yaml.base.old
 gitboard plan boards/x.yaml --against boards/x.yaml.base.old   # what moved on GitLab
-gitboard report group/project                                  # from the snapshot log
+gitboard report group/project --since boards/x.yaml            # from the snapshot log, since that pull; plus the stuck section
 ```
 
-The `--against` diff of the new pull versus the old base is the team's
-changes, label by label. Then the round starts again from
-[Host, before](#host-before).
+`pull --base` rotates: the previous `x.yaml.base` becomes `x.yaml.base.old`
+before the new one is written, so the `--against` diff of the new pull
+versus the old base is the team's changes, label by label. `status` is the
+glance before deciding whether a round is worth starting. Then the round
+starts again from [Host, before](#host-before).

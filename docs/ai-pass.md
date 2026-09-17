@@ -7,26 +7,47 @@
 ```
 
 The command runs `show --markdown` (or `show --from` offline), and if
-`snapshots.jsonl` exists, `report`. It answers in four sections:
+`snapshots.jsonl` exists, `report` for movement, ages and the stuck list.
+Any `tasks.md` in the directory is ingested first. The reply is one status
+line, then only the sections that have something in them:
 
-Progress
-: What moved and what sat still, grounded in `report` when there are two
-  snapshots; otherwise the shape of the board.
+```
+open 14 · Verify 3 (oldest 4d) · overdue 1 · staged 2 moves · 1 unposted note · 1 question
+```
 
-Needs follow-up
-: Quiet, misfiled, unassigned-in-Doing, overdue, or blocked with no
-  unblocker. `#iid`, one line, the label it would add. It does not add it.
+Questions
+: Only a question that blocks a staged move; anything else is staged with
+  the default and marked "reverse if wrong". Every question is also a
+  `notes:` entry starting `Q:` on that issue, so the answer arrives through
+  `discussion:` on the next pull rather than in a chat log.
 
-Questions for you
-: Only what changes the recommendation. None is a valid answer.
+Staged
+: The `plan` table verbatim, one reason per row. A `drift` or `skipped` row
+  is explained, never dropped. A rename (an entry with an `iid` whose title
+  changed) says "rename". Staged notes are rows too.
 
-Suggested moves
-: `#iid: Doing -> Blocked (reason)`. Supersession is offered as a
-  `gitboard migrate-comments OLD NEW --close-source` line for you to run.
+Stuck
+: From the report's stuck section and the `age:` suffixes: the issue, its
+  column and days, what would unstick it, and the `stale` label it staged.
 
 Hand back
-: Offline only. The `plan` and `apply` lines to run on the host, plus any
-  `migrate-comments` lines.
+: Offline only, three lines: the file to copy back,
+  `gitboard land boards/x.yaml` on the host, any `migrate-comments` lines.
+
+No progress prose, no follow-up list, no "shall I apply?": the agent stages
+the moves and the plan table is the question.
+
+## What the agent may and may not stage
+
+- Into `Verify`, never out. `Done` and `Failed` come from a person's
+  `verified:` / `failed:` comment on the card; `ingest` reads them.
+- No retitle without an `iid`; with one it is a rename and is labelled so.
+- `discussion:` is read-only; replies are `notes:`, posted with a
+  `*staged via gitboard*` first line so the team sees which comments the
+  agent staged.
+- Follow-ups are the `stale` and `re-verify` labels, nothing invented.
+- Nothing is deleted or closed. Supersession is a `migrate-comments` line
+  for you to run.
 
 ## The write path
 
@@ -39,9 +60,8 @@ extra issue or a wrong label, never a deletion.
 `migrate-comments` and `--close-source` are deliberately not in the
 command's `allowed-tools`. The AI writes the line; you run it.
 
-Offline, `apply` is never run. Identity is the title, so the AI never
-retitles, never invents or edits an `iid`, and leaves `iid` off issues it
-adds.
+`status` is in the allowed tools (read-only); `land` is not, because it
+writes. Offline, none of `apply`, `land`, `pull` or `snapshot` is run.
 
 ## Revoking write access
 
@@ -51,7 +71,7 @@ Two things allow the write; remove either.
    keychain item), leaving a `read_api` token. Scope is the hard guarantee:
    `apply` then fails with a one-line scope error regardless of the prompt.
 2. Re-restrict `allowed-tools` in `.claude/commands/board.md` to `show`,
-   `plan` and `report`.
+   `plan`, `report` and `status`.
 
 Do both to get the old read-only guarantee back.
 

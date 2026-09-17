@@ -46,8 +46,13 @@ You want **two**, because the scopes differ:
 
 | Token | Scope | Used by |
 |---|---|---|
-| `GITLAB_READ_TOKEN` | `read_api` | `show`, and the `/board` AI pass |
-| `GITLAB_WRITE_TOKEN` | `api` | `apply` only |
+| `GITLAB_READ_TOKEN` | `read_api` | `show`, `pull`, `status`, and the `/board` AI pass |
+| `GITLAB_WRITE_TOKEN` | `api` | `apply`, `land`, `migrate-comments` |
+
+For the write slot, prefer a **project access token** (project → Settings →
+Access tokens, scope `api`, role Reporter): GitLab creates a bot user for
+it, so every move and note the agent stages is visibly the bot's, not
+yours. Details in `docs/install.md`.
 
 `api` is the only scope that can write issues and labels — there is no
 finer-grained "write issues" option, so the write token is necessarily broad
@@ -138,17 +143,21 @@ gitboard show --markdown                 # stable output, for pipes and the AI
 gitboard tui group/project               # interactive: reload, snapshot, apply
 gitboard pull group/project              # save the board as boards/<name>.yaml
 gitboard pull group/project --base       # …and an untouched .base copy, for offline
-gitboard pull group/project --notes --force  # …with comments; overwrite (refresh)
-gitboard plan boards/team.yaml           # what would change
-gitboard plan team.yaml --against team.yaml.base  # same, no network
+gitboard pull group/project --notes --force  # …with comments; overwrite (refresh; rotates .base to .base.old)
+gitboard pull --all                      # every board with a boards/*.yaml (also snapshot, report)
+gitboard status                          # per board: pulled ago, staged, notes, oldest in Verify, overdue
+gitboard plan boards/team.yaml           # three-way: YAML vs live, team.yaml.base as ancestor
+gitboard plan team.yaml --against team.yaml.base  # two files, no network
 gitboard show --from boards/team.yaml    # render a YAML as the board, no network
 gitboard tui --from boards/team.yaml     # the TUI on that YAML, no network
 gitboard ingest tasks.md --into boards/team.yaml  # tasks.md -> issues + notes
-gitboard apply boards/team.yaml          # write it (--yes skips the prompt)
+gitboard apply boards/team.yaml          # write it (--yes; --ignore-drift to override the team)
+gitboard land boards/team.yaml           # plan, y/n, apply, snapshot, rotate the base
 gitboard migrate-comments 12 34 35       # copy #12's comments onto #34 and #35
 gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
 gitboard snapshot group/project          # append board state to snapshots.jsonl
-gitboard report group/project --repo .   # what moved; correlate with commits
+gitboard report group/project --repo .   # what moved, what is stuck; correlate with commits
+gitboard report group/project --since boards/team.yaml  # …since that pull
 gitboard config                          # what URL and tokens resolved
 gitboard --help
 ```
@@ -161,7 +170,17 @@ overdue, and names the YAML that defines the board.
 `pull` is `apply` in reverse: it writes the live board as a YAML spec
 (refusing to clobber an existing file), so a board born in the web UI
 becomes editable text. `pull` then `plan` is always a no-op. Each pulled
-issue carries its `iid` for reference; `plan` and `apply` ignore it.
+issue carries its `iid`, which `apply` uses as the match key, so a retitle
+in the YAML renames the issue instead of creating a twin. `pull` refuses to
+overwrite a file with unapplied edits (`--discard-edits` to insist), and
+every pull takes a snapshot.
+
+`plan` with a `.base` beside the spec is a three-way merge: `added`,
+`changed` (`old -> new`), `skipped` (closed on GitLab, never recreated) and
+`drift` (the team moved it since the pull; theirs is kept, and `apply`
+refuses unless `--ignore-drift`). Labels are truly additive: what the team
+adds in the UI survives. Staged `notes:` post with a `*staged via gitboard*`
+first line.
 
 ### Offline: reason in a container, apply from the host
 
@@ -175,8 +194,7 @@ gitboard pull group/project --base       # host: boards/x.yaml + boards/x.yaml.b
 gitboard show --from boards/x.yaml       # container: the board, from the file
 gitboard plan boards/x.yaml --against boards/x.yaml.base   # container: staged diff
 # copy boards/x.yaml back
-gitboard plan boards/x.yaml              # host: live diff — catches drift since the pull
-gitboard apply boards/x.yaml             # host: write it
+gitboard land boards/x.yaml              # host: plan (drift shown), y/n, apply, snapshot, rotate base
 ```
 
 Neither `--from` nor `--against` ever opens a connection or looks for a
@@ -301,12 +319,28 @@ which made every apply report a phantom description change.
 /board boards/x.yaml                # offline: the file is the board
 ```
 
-Four sections: Progress, Needs follow-up, Questions for you, Suggested moves
-(plus Hand back, offline: the `plan`/`apply` lines to run on the host).
-The command can also **apply** the moves, through one path only: it edits the
-board's YAML, runs `plan`, shows you the pending table, and waits for a yes
-in the conversation before `apply --yes`. `apply` is additive-only — nothing
-is ever deleted or closed — and the YAML stays the source of truth.
+One status line (`open 14 · Verify 3 (oldest 4d) · overdue 1 · staged 2
+moves · 1 unposted note · 1 question`), then only the sections with
+something in them: **Questions** (only ones that block a staged move; each
+is also staged as a `Q:` note on the card so the answer comes back through
+the board), **Staged** (the `plan` table verbatim, one reason per row, drift
+and skipped rows explained), **Stuck** (from the snapshot log: days in
+column, what would unstick it), and offline **Hand back** (three lines:
+what to copy, `gitboard land`, any `migrate-comments`). No progress prose.
+The agent ingests any `tasks.md` first, may move a card into `Verify` but
+never out (Done/Failed come from a person's `verified:` / `failed:`
+comment), never retitles without an `iid`, replies through `notes:`, and
+writes through one path only: YAML edit, `plan`, your yes in the
+conversation, `apply --yes`. Additive-only, so nothing is deleted or closed.
+
+## For the team
+
+- A card in **Verify** is waiting for you: check it, then comment
+  `verified: what you saw` or `failed: what went wrong`. That comment is
+  what moves it; ticking a box is not.
+- Do not retitle cards; labels you add survive; closing is final.
+- A `Q:` comment from the gitboard bot is a question for you. Answer under it.
+- `stale` and `re-verify` are the agent asking for another look.
 
 ## Configuration
 
@@ -490,8 +524,8 @@ mapping and on files, not on more API surface.
 
 The AI pass writes because two things allow it — revoke either:
 
-1. Re-restrict `allowed-tools` in `.claude/commands/board.md` to `show` and
-   `plan`, and put its read-only paragraph back.
+1. Re-restrict `allowed-tools` in `.claude/commands/board.md` to `show`,
+   `plan`, `report` and `status`.
 2. Remove `GITLAB_WRITE_TOKEN` from `.env`, leaving a `read_api`-scope token.
    The scope is the hard guarantee: without an `api` token, `apply` fails
    with a one-line scope error no matter what the prompt says.

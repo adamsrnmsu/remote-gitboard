@@ -38,7 +38,10 @@ untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
 `--force` (overwrite); `show --from FILE`, `plan FILE --against BASE`,
 `tui --from FILE` — the no-network trio for a container: the pulled YAML is
 the board, the agent edits it, the host runs `plan` then `apply`;
-`ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only).
+`ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only);
+`status` (every local board: pulled ago, staged, notes, oldest in Verify,
+overdue); `land SPEC` (plan, y/n, apply, snapshot, rotate `.base`);
+`--all` on `pull`/`snapshot`/`report`; `report --since SPEC`.
 Docs: `make docs` (Sphinx, `docs/`). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI
@@ -95,17 +98,28 @@ PYTHONPATH away.**
 - **`report.py`** — reads `snapshots.jsonl`, no network: batches -> first/last
   diff -> per-assignee tally; `commit_counts` shells to `git log` and
   `match_author` joins heuristically (name or email local part).
-- **`ingest.py`** — pure: `parse` a tasks.md (heading per person, `- [ ]`
-  tasks, verify lines, optional `**Feedback**`) and `merge` it into a spec:
-  new titles become issues in `Verify` (checked -> `Done`), feedback becomes
-  an attributed staged note, every entry gets a `Source:` footer. Identity is
-  the title, like apply, so re-ingesting is a no-op.
+- **`ingest.py`** — pure: `parse` a tasks.md (`docs/tasks-md-contract.md`:
+  header `commit:`/`mr:`, `## Person`, `- [ ] title · id: T-slug`, verify
+  lines, optional `**Feedback**`) and `merge` it into a spec. New tasks
+  become issues in `Verify` with the verify steps as a `- [ ]` task list and
+  a `Source:` footer (source · person · date · id · commit). **Done and
+  Failed come only from a person's `verified:` / `failed:` comment**
+  (`verdict` scans `discussion:`); a `[x]` in the file is advisory and
+  reported, never acted on. Footer `id:` then normalised title is identity;
+  a near-duplicate title (difflib ≥ 0.85) is reported, not added. `stale`
+  (task vanished from its file) and `re-verify` (footer commit changed) are
+  labels, never moves. `merge` reports `changed`; the CLI writes only then.
 - **`apply.py`** — the only writer (`apply`, `migrate_comments`, `close_issue`), and the
   spec schema's home: `spec_from_board`/`dump` are `pull`'s read direction,
-  built so pull-then-plan is always empty. `diff(spec, have)` is the pure
-  core; `plan` builds `have` from the API, `have_from_spec` from a pulled
-  YAML (offline). Assignees compare by username on both sides; ids are
-  resolved by `resolve_users` before any write, never inside the diff. Uses `Config.token(write=True)`: the
+  built so pull-then-plan is always empty. `diff(spec, have, base=None)` is
+  the pure core; `plan` builds `have` from the API (`state="all"`),
+  `have_from_spec` from a pulled YAML (offline). `issue_changes` is the one
+  three-way decision point both plan and apply use, so they cannot disagree:
+  with `base` (the `.base` copy), a field the YAML did not change but GitLab
+  did is `skipped` (kept), a field both changed is `drift` (refused unless
+  `force`). Change kinds: added `+`, changed `~`, skipped `-`, drift `!`;
+  details say old -> new. Assignees compare by username on both sides; ids
+  are resolved by `resolve_users` before any write, never inside the diff. Uses `Config.token(write=True)`: the
   separate `GITLAB_WRITE_TOKEN` / `--write-token` / `gitlab-write-token`
   keychain slot, falling back to the read token when unset (a single `api`
   token is a valid setup). Two slots exist so a `read_api` token can be the
@@ -165,9 +179,14 @@ absence caused real bugs, each pinned by tests — **don't remove them**:
   sides — `wanted_issue` and `current_issue` must always agree, or nothing is
   idempotent.
 
-Issue identity is the **title**. Renaming a title creates a second issue.
-Apply is additive: nothing is deleted or closed, so removing an issue from the
-YAML leaves it on the board. Per-issue `notes:` are staged comments: `apply`
+Issue identity is the **iid when the entry has one, else the stripped
+title**: a retitle in a pulled YAML is a rename; on a hand-written entry it
+creates a second issue. `load()` strips titles and rejects duplicates; two
+open GitLab issues sharing a title is an error, not a coin toss. A title
+whose only live match is **closed** is skipped, never recreated. Apply is
+additive: nothing is deleted or closed, removing an issue from the YAML
+leaves it on the board, and **labels the YAML does not name survive** (only
+column labels and labels the spec mentions are managed). Per-issue `notes:` are staged comments: `apply`
 posts each body not already on the issue (`ensure_notes`, same idempotency
 rule as `migrate_comments`); `discussion:` is what `pull --notes` read and is
 never written. `plan`/`diff` report notes as `("added", "note", ...)`; the
@@ -188,8 +207,11 @@ edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
 ## The AI pass writes now
 
 `.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
-`ingest`, and edit `boards/*.yaml`. Staged `notes:` widen what `apply` can
-write to comments — still additive, still shown in the plan table first. The contract is the flow, stated in the command: YAML
+`ingest`, `status`, and edit `boards/*.yaml` (`land` is deliberately not
+allowed). Staged `notes:` widen what `apply` can write to comments — still
+additive, posted under a `*staged via gitboard*` first line, still shown in
+the plan table first. The agent may move an issue **into** Verify, never
+out: Done/Failed are people's verdict comments. The contract is the flow, stated in the command: YAML
 edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
 additive-only (nothing deleted or closed), which bounds the blast radius;
 `migrate-comments` and its `--close-source` are deliberately NOT in the

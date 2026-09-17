@@ -35,6 +35,30 @@ write slot unset is also valid: `apply` falls back to the read token, and a
 `write_repository` is Git-over-HTTP only. SSH keys and deploy tokens cannot
 call the API at all.
 
+### Make the agent's writes visible: a project access token
+
+A personal `api` token makes every `apply` look like you. Use a **project
+access token** for `GITLAB_WRITE_TOKEN` instead: GitLab creates a bot user
+for it (`project_123_bot_...`), so every label move and every
+`*staged via gitboard*` note the AI pass posts is attributed to the bot, and
+the team can tell at a glance what a person did and what the agent staged.
+
+Mint it: project, **Settings**, **Access tokens**, **Add new token**. Name it
+`gitboard`, scope `api` (the only scope that writes issues and labels), role
+**Reporter** (enough to edit issues, labels and comments; `Developer` if the
+board YAML also creates labels or the project). Set the expiry your instance
+allows and note it. Then:
+
+```bash
+GITLAB_READ_TOKEN=glpat-...    # your read_api PAT: the board is read as you
+GITLAB_WRITE_TOKEN=glpat-...   # the project token: writes are the bot
+```
+
+Project tokens need Premium on gitlab.com; on a self-hosted CE instance they
+are free. The bot user counts as a member with the role you chose, so it is
+listed under **Members** and can be removed there, which is also the
+fastest way to revoke the agent's write access.
+
 ### Keychain (macOS)
 
 ```bash
