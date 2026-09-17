@@ -121,6 +121,14 @@ PYTHONPATH away.**
   with "Your 3 moves" (`stats.three_moves`) and impact tiles. `.eml` is
   multipart/alternative (markdown text + HTML); `digest` also writes
   `index.html` for browser previews.
+- **`migrate.py`** — the one-way writer, kept out of `apply` and out of the
+  agent's tools: `rename_label`, `order_columns`, `split_board`
+  (reversible) and `merge_labels`, `drop_column`, `move_issues` (one-way,
+  `!` rows with card counts). Every op is idempotent; a rerun prints only
+  `skipped`. Merges and drops leave `*migrated by gitboard: …*` on each
+  touched card, which is also the idempotency marker. Label rename is
+  `new_name` (in place, cards keep it); `move_issues` creates the target
+  labels first because GitLab drops labels the target lacks.
 - **`ingest.py`** — pure: `parse` a tasks.md (`docs/tasks-md-contract.md`:
   header `commit:`/`mr:`, `## Person`, `- [ ] title · id: T-slug`, verify
   lines, optional `**Feedback**`) and `merge` it into a spec. New tasks
@@ -237,6 +245,9 @@ the plan table first. The agent may move an issue **into** Verify, never
 out: Done/Failed are people's verdict comments. The contract is the flow, stated in the command: YAML
 edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
 additive-only (nothing deleted or closed), which bounds the blast radius;
+`migrate` (board reformats: `migrate.py`, ops in `boards/*.migration.yaml`,
+one-way rows marked `!`, idempotent, `Verify`/`Done`/`Failed` refused as
+targets; `/migrate-board` drafts the file, a person runs it) and
 `migrate-comments` and its `--close-source` are deliberately NOT in the
 command's allowed-tools — the AI suggests those lines, the user runs them.
 The write token is `GITLAB_WRITE_TOKEN` in `.env`; pulling it (or

@@ -18,6 +18,7 @@ airgap
 agent-briefing
 tasks-flow
 tasks-md-contract
+migrations
 development
 reference
 ```

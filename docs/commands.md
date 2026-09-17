@@ -41,6 +41,7 @@ gitboard digest --all                       # every local board (what `make cron
 gitboard digest group/project --md-only     # markdown + plain-text .eml only, no HTML
 gitboard migrate-comments 12 34 35          # copy #12's comments onto #34 and #35
 gitboard migrate-comments 12 other/proj#7 --close-source   # cross-project, then close #12
+gitboard migrate boards/x.migration.yaml    # reformat: rename/merge/drop labels, reorder/drop columns, move cards; ! rows are one-way, y/n
 
 # local only (no GitLab)
 gitboard stats --from h.json                # see above

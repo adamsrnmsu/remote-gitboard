@@ -55,6 +55,9 @@ Rules for the YAML:
   and one `story::` per card — `stats` flags doubles as `multi_scope`.
 - Every `drift` or `skipped` row in the plan table gets a one-line reason in
   Staged. Never drop a row.
+- A reformat (labels to merge or rename, a column to retire or reorder,
+  cards that belong on another board) is not a YAML edit: say so in one
+  line and point at `/migrate-board`. `gitboard migrate` is not yours to run.
 - Supersession (a retitled twin, split work): suggest the copyable
   `gitboard migrate-comments OLD NEW --close-source` line. You cannot run it.
 
