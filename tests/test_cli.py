@@ -649,3 +649,48 @@ def test_config_command_survives_a_missing_keychain(monkeypatch):
     r = runner.invoke(app, ["config"])
     assert r.exit_code == 0, r.output
     assert "not found" in r.output
+
+
+def _estimate_setup(tmp_path, monkeypatch, estimates=""):
+    """A spec with one undated card and a dump where alice finished 5 cards."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "boards").mkdir()
+    spec = tmp_path / "boards" / "b.yaml"
+    spec.write_text(
+        "project: g/p\nboard: dev\n"
+        + estimates
+        + "issues:\n  - title: next\n    assignee: alice\n    labels: [Doing]\n"
+    )
+    done = [
+        {"iid": n, "title": f"d{n}", "state": "closed", "assignee": "alice",
+         "created_at": "2026-09-01T00:00:00Z", "closed_at": "2026-09-03T00:00:00Z",
+         "updated_at": None, "labels": [], "milestone": None, "due_date": None,
+         "web_url": "u", "transitions": [], "verdicts": [], "notes": []}
+        for n in range(1, 6)
+    ]  # fmt: skip
+    dump = tmp_path / "h.json"
+    dump.write_text(json.dumps({
+        "project": "g/p", "board": "dev", "columns": ["Doing"],
+        "fetched_at": "2026-09-14T12:00:00+00:00", "history": done,
+    }))  # fmt: skip
+    return spec, dump
+
+
+def test_estimate_stages_a_due_date_offline(tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    spec, dump = _estimate_setup(tmp_path, monkeypatch)
+    r = runner.invoke(app, ["estimate", str(spec), "--history", str(dump)])
+    assert r.exit_code == 0, r.output
+    assert "p85 of 5 cards: alice" in r.output
+    due = apply_mod.load(str(spec))["issues"][0]["due_date"]
+    assert due == (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
+
+
+def test_estimate_knob_off_prints_and_leaves_the_file_alone(tmp_path, monkeypatch):
+    spec, dump = _estimate_setup(
+        tmp_path, monkeypatch, "estimates:\n  suggest_due: false\n"
+    )
+    before = spec.read_text()
+    r = runner.invoke(app, ["estimate", str(spec), "--history", str(dump)])
+    assert r.exit_code == 0 and "p85 of 5 cards: alice" in r.output
+    assert spec.read_text() == before

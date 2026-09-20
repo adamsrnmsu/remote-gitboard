@@ -2,7 +2,7 @@
 
 import re
 
-from test_stats import COLUMNS, END, NOW, START, history
+from test_stats import COLUMNS, END, NOW, START, TIGHT, _verified, history
 
 from gitboard import mail, stats
 
@@ -160,3 +160,24 @@ def test_text_is_escaped():
         [{"verb": "Verify", "iid": 1, "title": "<b>x</b>", "age": "1 d", "url": "u"}]
     )
     assert "&lt;b&gt;x&lt;/b&gt;" in html and "<b>x</b>" not in html
+
+
+def test_weak_verdicts_name_the_verifier_on_team_and_not_on_their_own_page():
+    h = [_verified(1, tasks=(0, 2))]
+    s = stats.summarise(h, COLUMNS, START, END, NOW)
+    team = mail.render_team_html(s, stats.daily_series(h, COLUMNS, START, END))
+    assert "bob · steps 0/2" in team and NO_BG.findall(team) == []
+    bob = mail._yours(stats.for_person(s, h, "bob", NOW))
+    assert "steps 0/2" in bob and "bob ·" not in bob and NO_BG.findall(bob) == []
+    assert "unticked" not in mail._yours(stats.for_person(s, h, "ana", NOW))
+
+
+def test_tight_dates_show_on_team_and_on_the_owner_only():
+    s = summary()
+    s["flow"]["tight"] = [TIGHT]
+    team = mail.render_team_html(s, series())
+    assert "bob · due 2026-09-17 · likely 2026-09-19" in team
+    assert NO_BG.findall(team) == []
+    bob = mail._yours(stats.for_person(s, history(), "bob", NOW))
+    assert "due 2026-09-17 · likely 2026-09-19" in bob and NO_BG.findall(bob) == []
+    assert "likely" not in mail._yours(stats.for_person(s, history(), "alice", NOW))

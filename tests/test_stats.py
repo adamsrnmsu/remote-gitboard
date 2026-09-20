@@ -475,6 +475,8 @@ def test_eml_html_is_multipart_alternative():
 # --- over time ----------------------------------------------------------------
 
 ROW_KEYS = {
+    "weak",
+    "tight",
     "ts",
     "project",
     "board",
@@ -564,3 +566,76 @@ def test_render_team_md_weekly_is_opt_in():
     md = stats.render_team_md(s, weekly=[row(done=2, coverage=0.5)])
     assert md.startswith(plain)
     assert "\n## 8-week trend\n| week |" in md and "| 50% |" in md
+
+
+# --- weak verdicts --------------------------------------------------------------
+
+
+IN, AT = ts(10), ts(12)
+
+
+def _verified(iid, tasks=None, at=AT, entered=IN, who="bob", word="verified"):
+    i = issue(
+        iid,
+        labels=["Verify"],
+        transitions=[(entered, "add", "Verify")],
+        verdicts=[(at, who, word)],
+    )
+    if tasks is not None:
+        i["tasks"] = list(tasks)
+    return i
+
+
+def test_weak_verdict_flags_unticked_steps_and_names_the_verifier():
+    weak = stats.weak_verdicts([_verified(1, tasks=(1, 4))], START, END)
+    assert [(w["iid"], w["verifier"], w["reasons"]) for w in weak] == [
+        (1, "bob", ["steps 1/4"])
+    ]
+
+
+def test_weak_verdict_clean_when_all_ticked_or_no_checklist_or_old_dump():
+    history = [_verified(1, tasks=(3, 3)), _verified(2, tasks=(0, 0)), _verified(3)]
+    assert stats.weak_verdicts(history, START, END) == []
+
+
+def test_weak_verdict_flags_a_verdict_minutes_after_entering_verify():
+    i = _verified(1, entered="2026-09-12T00:00:00Z", at="2026-09-12T00:04:00Z")
+    assert stats.weak_verdicts([i], START, END)[0]["reasons"] == ["4 min in Verify"]
+
+
+def test_weak_verdict_ignores_failed_and_a_verified_later_overturned():
+    failed = _verified(1, tasks=(0, 3), word="failed")
+    overturned = _verified(2, tasks=(0, 3))
+    overturned["verdicts"].append([ts(13), "cat", "failed"])
+    assert stats.weak_verdicts([failed, overturned], START, END) == []
+
+
+def test_weak_verdicts_reach_summary_person_row_and_markdown():
+    history = [_verified(1, tasks=(0, 2))]
+    s = stats.summarise(history, COLUMNS, START, END, NOW)
+    assert s["verify"]["weak_by"] == {"bob": 1}
+    assert [w["iid"] for w in stats.for_person(s, history, "bob", NOW)["weak"]] == [1]
+    assert stats.for_person(s, history, "ana", NOW)["weak"] == []
+    assert stats.stat_row(s, "g/p", "b", "t")["weak"] == 1
+    assert "steps 0/2" in stats.render_team_md(s)
+    person = stats.for_person(s, history, "bob", NOW)
+    assert "steps 0/2" in stats.render_person_md(person, s, "bob").split("\n---\n")[0]
+
+
+TIGHT = {
+    "iid": 7, "title": "slow one", "assignee": "bob", "due": "2026-09-17",
+    "expected": "2026-09-19", "basis": "p85 of 5 cards: bob", "url": "http://x/7",
+}  # fmt: skip
+
+
+def test_tight_dates_reach_person_row_and_markdown():
+    s = stats.summarise(history(), COLUMNS, START, END, NOW)
+    assert stats.for_person(s, history(), "bob", NOW)["tight"] == []  # key absent
+    s["flow"]["tight"] = [TIGHT]
+    bob = stats.for_person(s, history(), "bob", NOW)
+    assert bob["tight"] == [TIGHT]
+    assert stats.for_person(s, history(), "alice", NOW)["tight"] == []
+    assert stats.stat_row(s, "g/p", "b", "t")["tight"] == 1
+    assert "| 7 | slow one | bob | 2026-09-17 | 2026-09-19 |" in stats.render_team_md(s)
+    mine = stats.render_person_md(bob, s, "bob").split("\n---\n")[0]
+    assert "| 7 | slow one | 2026-09-17 | 2026-09-19 |" in mine

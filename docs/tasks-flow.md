@@ -66,6 +66,12 @@ gitboard apply boards/x.yaml
 | task with this `--source` missing from the file | label `stale`; nothing removed or moved |
 | task returns to the file | `stale` dropped |
 
+A `verified` comment is still checked afterwards: `stats` and the digests
+list it under **Weak verdicts** when the issue's verify steps are not all
+ticked (`steps 1/4`) or the comment came within ten minutes of the card
+entering Verify. Nothing moves and the verdict stands; tick the steps you
+did run and the flag clears on the next run.
+
 Columns are added to the YAML as needed: `Verify` (carrot orange), `Done`
 (medium sea green), `Failed` (crimson); `--column`, `--done`, `--failed`
 rename them.

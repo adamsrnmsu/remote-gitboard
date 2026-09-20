@@ -343,6 +343,14 @@ def test_history_includes_closed_only_via_the_closed_list():
     assert proj.calls[1]["updated_after"] == SINCE.isoformat()
     assert history[1]["state"] == "closed"
     assert history[1]["closed_at"] is None  # attribute missing: defensive read
+    assert history[1]["tasks"] == [0, 0]
+
+
+def test_history_reads_task_completion():
+    i = HistIssue(1, [])
+    i.task_completion_status = {"count": 4, "completed_count": 1}
+    history, _ = board.fetch_history(StateProject([i], []), FakeBoard([]), SINCE)
+    assert history[0]["tasks"] == [1, 4]
 
 
 def test_history_keeps_only_column_label_events_and_skips_null_labels():
@@ -391,6 +399,6 @@ def test_history_flattens_assignee_and_milestone():
     assert (history[1]["assignee"], history[1]["milestone"]) == (None, None)
     assert set(history[0]) == {
         "iid", "title", "state", "created_at", "closed_at", "updated_at",
-        "assignee", "labels", "milestone", "due_date", "web_url",
+        "assignee", "labels", "milestone", "due_date", "web_url", "tasks",
         "transitions", "verdicts", "notes",
     }  # fmt: skip

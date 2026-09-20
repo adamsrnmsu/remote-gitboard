@@ -31,6 +31,9 @@ gitboard apply boards/x.yaml                # write it (--yes skips the prompt)
 gitboard apply boards/x.yaml --ignore-drift # write even where the team moved things since the pull
 gitboard land boards/x.yaml                 # plan, y/n, apply, snapshot, rotate the base (--yes, --ignore-drift)
 
+gitboard estimate boards/x.yaml             # stage due dates from each person's finished history; local file only
+gitboard estimate boards/x.yaml --history h.json  # same from a `stats --dump` file, no network
+
 # numbers and digests (read_api token; --from FILE works with no network)
 gitboard stats group/project                # team markdown: open by column/epic/story, done, cycle, verify, stuck
 gitboard stats group/project --dump h.json  # ...and keep the fetched history for offline reruns

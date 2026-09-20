@@ -68,6 +68,16 @@ issues:
   every assignee listed here (everyone still gets a `.md`). Not sent to
   GitLab. Example: `emails: {alice: alice@example.com}`.
 
+`estimates`
+: Optional map. `suggest_due` (default `true`; `false` makes
+  `gitboard estimate` print its table and write nothing), `method` (`p85`
+  default, or `median`), `min_samples` (default 5: the fewest finished cards
+  a bucket needs). An estimate is that percentile of the person's finished
+  cards of the same `type::`, widening to the person, the team's `type::`,
+  then the team until a bucket is big enough; none is big enough, no
+  estimate. `stats` and the digests list **Tight dates** — due dates earlier
+  than that — whatever `suggest_due` says. Not sent to GitLab.
+
 Scoped labels
 : `epic::<name>`, `story::<name>`, `type::<bug|task|chore|verify>` are
   plain labels (CE has no epics object) and stay in `labels:`. `stats`

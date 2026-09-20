@@ -1,7 +1,7 @@
 ---
 description: Read a GitLab board, stage the moves it needs, and — after a go-ahead — apply them.
 argument-hint: <group/project> [board name]  |  boards/<file>.yaml (offline)
-allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli ingest:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli status:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli stats:*), Edit(boards/*.yaml)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli ingest:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli status:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli stats:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli estimate:*), Edit(boards/*.yaml)
 ---
 
 `gitboard` below is `PYTHONPATH=src .venv/bin/python -m gitboard.cli`
@@ -27,6 +27,15 @@ list your edits but not a diff). Never run `apply`, `land`, `pull` or
 what it added like any other edit. See `docs/tasks-md-contract.md` for what
 it reads (`id: T-slug`, `commit:`/`mr:` header, `- [ ]` verify steps,
 `@mention` feedback).
+
+**Estimate.** `gitboard estimate <spec>` (offline: `--history h.json`, a
+`stats --dump` file) stages a `due_date` on assigned, undated cards from
+that person's finished history and prints the basis per card. Run it after
+your own edits and before `plan`; quote the basis lines in your summary.
+Never hand-write a due date the tool declined to give — "no estimate" means
+not enough history. Never change a date a person set; if `stats` lists it
+under *Tight dates*, say so and let the lead decide. With
+`estimates: {suggest_due: false}` in the spec it only prints.
 
 **Write path.** Exactly one: edit the board's YAML in `boards/`, run
 `gitboard plan <spec>`, show its table, wait for a yes in this conversation,

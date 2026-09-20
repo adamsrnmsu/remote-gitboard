@@ -20,6 +20,7 @@ BACKLOG = "Backlog"
 NOT_WIP = {BACKLOG, DONE, FAILED}
 QUESTION = "Q:"
 DAY = timedelta(days=1)
+FAST_VERIFY = timedelta(minutes=10)
 
 
 def parse_ts(s):
@@ -159,6 +160,47 @@ def _entered(issue, columns):
 def _in_verify(issue, t):
     """True if some Verify stay covers instant `t`."""
     return any(a <= t and (b is None or b > t) for a, b in dwell(issue, VERIFY))
+
+
+def weak_verdicts(history, start, end):
+    """`verified` verdicts in the window that look like a rubber stamp.
+
+    Two reasons, either flags: the description's task list is not fully
+    ticked (`steps 1/4`), or the verdict came within `FAST_VERIFY` of the
+    card entering Verify. Only an issue's latest verdict counts, so a
+    `verified` later overturned by `failed` is not reported. Ticks are the
+    current state, not the state at verdict time: ticking the steps
+    afterwards clears the flag. A flag, never a move — the verdict stays the
+    person's.
+    """
+    out = []
+    for i in history:
+        if not i["verdicts"]:
+            continue
+        at, who, word = i["verdicts"][-1]
+        at = parse_ts(at)
+        if word != "verified" or not _in(at, start, end):
+            continue
+        reasons = []
+        ticked, total = i.get("tasks") or (0, 0)
+        if ticked < total:
+            reasons.append(f"steps {ticked}/{total}")
+        entered = [a for a, _ in dwell(i, VERIFY) if a <= at]
+        if entered and at - entered[-1] < FAST_VERIFY:
+            reasons.append(
+                f"{int((at - entered[-1]).total_seconds() // 60)} min in Verify"
+            )
+        if reasons:
+            out.append(
+                {
+                    "iid": i["iid"],
+                    "title": i["title"],
+                    "verifier": who,
+                    "reasons": reasons,
+                    "url": i["web_url"],
+                }
+            )
+    return out
 
 
 def daily_series(history, columns, start, end):
@@ -312,6 +354,7 @@ def summarise(history, columns, start, end, now):
     ]
     prev = _period(history, start - (end - start), start)
     cur = _period(history, start, end)
+    weak = weak_verdicts(history, start, end)
     return {
         "period": {
             "start": start.isoformat(),
@@ -349,6 +392,8 @@ def summarise(history, columns, start, end, now):
             "verified": sum(1 for v in verdicts if v[2] == "verified"),
             "failed": sum(1 for v in verdicts if v[2] == "failed"),
             "verifiers": dict(Counter(v[1] for v in verdicts)),
+            "weak": weak,
+            "weak_by": dict(Counter(w["verifier"] for w in weak)),
             "verify_days": _stat(_ended_in(history, VERIFY, start, end)),
             "review_days": _stat(_ended_in(history, REVIEW, start, end)),
             "coverage": round(
@@ -416,6 +461,12 @@ def for_person(summary, history, username, now):
         ],
         "verified": sum(1 for v in verdicts if v[2] == "verified"),
         "failed": sum(1 for v in verdicts if v[2] == "failed"),
+        "weak": [
+            w for w in summary["verify"].get("weak", []) if w["verifier"] == username
+        ],
+        "tight": [
+            t for t in summary["flow"].get("tight", []) if t["assignee"] == username
+        ],
         "questions": [
             q
             for q in summary["flow"]["questions"]
@@ -449,6 +500,8 @@ def stat_row(summary, project, board, ts):
         "review_median": med(v.get("review_days")),
         "cycle_median": med(t.get("cycle_days")),
         "coverage": v.get("coverage"),
+        "weak": len(v.get("weak") or []),
+        "tight": len(f.get("tight") or []),
         "overdue": f.get("overdue", 0),
         "stuck": len(f.get("stuck") or []),
         "by_epic": o.get("by_epic") or {},
@@ -517,6 +570,38 @@ def _counts(d):
 
 def _stat_row(label, s):
     return (label, s["median"], s["mean"], s["n"])
+
+
+def _weak_table(weak, verifier=False):
+    """Verified with steps unticked, or minutes after entering Verify."""
+    who = ("verifier",) if verifier else ()
+    return _table(
+        [
+            (
+                w["iid"],
+                w["title"],
+                *([w["verifier"]] if verifier else []),
+                ", ".join(w["reasons"]),
+            )
+            for w in weak
+        ],
+        "iid",
+        "title",
+        *who,
+        "why",
+    )
+
+
+def _tight_table(tight, who=False):
+    """Due dates earlier than the finish the person's history expects."""
+    return _table(
+        [
+            (t["iid"], t["title"], *([t["assignee"]] if who else []),
+             t["due"], t["expected"], t["basis"])
+            for t in tight
+        ],
+        "iid", "title", *(("assignee",) if who else ()), "due", "expected", "basis",
+    )  # fmt: skip
 
 
 def render_weekly_md(rows):
@@ -612,6 +697,9 @@ def render_team_md(summary, weekly=None):
         "### Verifiers",
         _counts(v["verifiers"]),
         "",
+        "### Weak verdicts",
+        _weak_table(v.get("weak", []), verifier=True),
+        "",
         "### Queue",
         _table(
             [(q["iid"], q["title"], q["assignee"], q["days"]) for q in v["queue"]],
@@ -628,6 +716,9 @@ def render_team_md(summary, weekly=None):
         "",
         "### Stuck",
         _table(f["stuck"], "iid", "column", "days"),
+        "",
+        "### Tight dates",
+        _tight_table(f.get("tight", []), who=True),
         "",
         "### WIP",
         _counts(f["wip"]),
@@ -664,6 +755,9 @@ def render_person_md(person, summary, username):
             "days",
         ),
         "",
+        "## Your weak verdicts",
+        _weak_table(person.get("weak", [])),
+        "",
         "## Overdue",
         _table(
             [(o["iid"], o["title"], o["due"]) for o in person["overdue"]],
@@ -671,6 +765,9 @@ def render_person_md(person, summary, username):
             "title",
             "due",
         ),
+        "",
+        "## Tight dates",
+        _tight_table(person.get("tight", [])),
         "",
         "## Open by column",
         _counts(person["open_by_column"]),

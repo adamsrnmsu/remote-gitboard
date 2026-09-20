@@ -25,6 +25,7 @@ make plan SPEC=boards/test.yaml     # diff YAML against GitLab
 make apply SPEC=boards/test.yaml    # write it
 make snapshot PROJECT=group/project # append board state to snapshots.jsonl
 make report PROJECT=group/project   # what moved, from the snapshot log
+make estimate SPEC=boards/test.yaml # stage due dates from each person's history
 make cron                           # print the crontab line for snapshots
 make test                           # pytest
 make lint / make fmt                # ruff, from .venv
@@ -39,6 +40,7 @@ untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
 `tui --from FILE` — the no-network trio for a container: the pulled YAML is
 the board, the agent edits it, the host runs `plan` then `apply`;
 `ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only);
+`estimate SPEC [--history h.json]` stages due dates from history (local only);
 `status` (every local board: pulled ago, staged, notes, oldest in Verify,
 overdue); `land SPEC` (plan, y/n, apply, snapshot, rotate `.base`);
 `--all` on `pull`/`snapshot`/`report`; `report --since SPEC`; `stats`
@@ -109,7 +111,11 @@ PYTHONPATH away.**
   transitions from `resource_label_events`, verdict and question notes);
   `for_person`, markdown renderers, `eml`. "Done" is the Done column or a
   close (`done_at`). Scoped labels `epic::`/`story::`/`type::` are the
-  grouping vocabulary; they stay plain labels in the YAML. `emails:` in the
+  grouping vocabulary; they stay plain labels in the YAML.
+  `weak_verdicts` flags a latest `verified` whose task list
+  (`task_completion_status`, kept as `tasks: [ticked, total]`) is not fully
+  ticked, or that came within `FAST_VERIFY` of entering Verify — a flag in
+  stats/digest (`verify.weak`, `weak` in `stats.jsonl`), never a move. `emails:` in the
   spec maps username to address for `digest`.
 - **`mail.py`** — the HTML digest, stdlib only. Outlook on Windows renders
   with Word, so: 600px tables, inline styles, px widths, no images, no SVG,
@@ -121,6 +127,17 @@ PYTHONPATH away.**
   with "Your 3 moves" (`stats.three_moves`) and impact tiles. `.eml` is
   multipart/alternative (markdown text + HTML); `digest` also writes
   `index.html` for browser previews.
+- **`estimate.py`** — pure, stdlib: a sample is a finished card's active days
+  (first column `add` -> `done_at`); `estimate` takes the nearest-rank
+  `median`/`p85` of the narrowest bucket with `min_samples` — person+`type::`,
+  person, team+`type::`, team — else None, never a guess. `suggest` stages
+  `due_date = today + days` on assigned, undated cards outside
+  Verify/Done/Failed and **never overwrites a date**; `estimates.suggest_due:
+  false` makes it print only. `tight` (due before the expected finish) is
+  attached by `cli._summary` as `flow.tight` — `estimate` imports `stats`,
+  so **`stats` must not import it back**; renderers read it with `.get`.
+  `_history` fetches back at least `HISTORY_DAYS` (90) so a weekly run has
+  samples.
 - **`migrate.py`** — the one-way writer, kept out of `apply` and out of the
   agent's tools: `rename_label`, `order_columns`, `split_board`
   (reversible) and `merge_labels`, `drop_column`, `move_issues` (one-way,
@@ -238,7 +255,7 @@ edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
 ## The AI pass writes now
 
 `.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
-`ingest`, `status`, and edit `boards/*.yaml` (`land` is deliberately not
+`ingest`, `estimate`, `status`, and edit `boards/*.yaml` (`land` is deliberately not
 allowed). Staged `notes:` widen what `apply` can write to comments — still
 additive, posted under a `*staged via gitboard*` first line, still shown in
 the plan table first. The agent may move an issue **into** Verify, never

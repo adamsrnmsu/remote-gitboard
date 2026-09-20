@@ -165,6 +165,7 @@ def fetch_history(project, board, since):
                 verdicts.append([note.created_at, who, m.group(1).lower()])
         assignee = getattr(issue, "assignee", None)
         milestone = getattr(issue, "milestone", None)
+        ticks = getattr(issue, "task_completion_status", None) or {}
         history.append(
             {
                 "iid": issue.iid,
@@ -178,6 +179,7 @@ def fetch_history(project, board, since):
                 "milestone": milestone["title"] if milestone else None,
                 "due_date": getattr(issue, "due_date", None),
                 "web_url": getattr(issue, "web_url", None),
+                "tasks": [ticks.get("completed_count", 0), ticks.get("count", 0)],
                 "transitions": sorted(transitions, key=_ts),
                 "verdicts": sorted(verdicts, key=_ts),
                 "notes": sorted(notes, key=_ts),

@@ -27,6 +27,7 @@ from rich.text import Text
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import client
+from gitboard import estimate as estimate_mod
 from gitboard import ingest as ingest_mod
 from gitboard import mail as mail_mod
 from gitboard import migrate as migrate_mod
@@ -671,6 +672,49 @@ def pull(
 
 
 @app.command()
+def estimate(
+    spec: str | None = typer.Argument(
+        None, help="Board YAML. Defaults to the config spec."
+    ),
+    history_file: str | None = typer.Option(
+        None, "--history", help="A `stats --dump` file instead of GitLab. No network."
+    ),
+):
+    """Stage due dates from each person's history into a board YAML. Local only."""
+
+    def go():
+        spec_path = _need(spec, "spec", "spec file")
+        sp = apply_mod.load(spec_path)
+        history, _, _ = _history(
+            sp["project"], sp["board"], estimate_mod.HISTORY_DAYS // 2, history_file
+        )
+        out = estimate_mod.suggest(sp, history, datetime.now(UTC).date())
+        table = Table(box=None)
+        for head in ("card", "assignee", "due", "basis"):
+            table.add_column(head)
+        for r in out["rows"]:
+            card = f"#{r['iid']} {r['title']}" if r["iid"] else f"(new) {r['title']}"
+            table.add_row(card, r["assignee"], r["due"], r["basis"])
+        if out["rows"]:
+            err().print(table)
+        if out["changed"]:
+            Path(spec_path).write_text(apply_mod.dump(sp))
+            err().print(
+                f"[added]{len(out['rows'])} due date(s) staged[/] -> "
+                f"{_shortest(spec_path)} — `gitboard plan` shows them"
+            )
+        elif out["rows"]:
+            err().print("[muted]estimates.suggest_due is false: nothing written[/]")
+        else:
+            err().print(
+                "[muted]nothing to estimate: every assigned card has a date, or "
+                "too little finished history stands behind it[/]"
+            )
+
+    _run(go)
+
+
+@app.command()
 def ingest(
     tasks: str = typer.Argument(
         ..., help="A tasks.md: a heading per person, checkboxes."
@@ -930,9 +974,9 @@ def _history(project, board_name, days, from_file=None, dump=None):
         return meta["history"], meta["columns"], meta
     now = datetime.now(UTC)
     proj, board = board_mod.fetch(project, board_name)
-    history, columns = board_mod.fetch_history(
-        proj, board, since=now - timedelta(days=2 * days)
-    )
+    # far enough back that a weekly run still has samples to estimate from
+    since = now - timedelta(days=max(2 * days, estimate_mod.HISTORY_DAYS))
+    history, columns = board_mod.fetch_history(proj, board, since=since)
     meta = {
         "project": proj.path_with_namespace,
         "board": board.name,
@@ -956,6 +1000,9 @@ def _summary(history, columns, meta, days, log=STATS_LOG):
     summary = stats_mod.summarise(
         history, columns, now - timedelta(days=days), now, now
     )
+    spec_path = find_spec(meta["project"])
+    cfg = estimate_mod.config(apply_mod.load(spec_path) if spec_path else {})
+    summary["flow"]["tight"] = estimate_mod.tight(history, columns, now, cfg)
     stats_mod.append_row(
         log,
         stats_mod.stat_row(summary, meta["project"], meta["board"], meta["fetched_at"]),

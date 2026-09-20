@@ -254,6 +254,30 @@ def _days(it):
     return f"{it.get('days', '')} d"
 
 
+def _weak(items, who=False):
+    """Weak-verdict rows; nothing at all when there are none."""
+    if not items:
+        return ""
+
+    def why(w):
+        name = [w.get("verifier", "")] if who else []
+        return " · ".join(name + w.get("reasons", []))
+
+    return sub("Verified, steps unticked or in minutes") + _rows(items, "weak", why)
+
+
+def _tight(items, who=False):
+    """Tight-date rows; nothing at all when there are none."""
+    if not items:
+        return ""
+
+    def why(t):
+        name = [t.get("assignee", "")] if who else []
+        return " · ".join(name + [f"due {t.get('due')}", f"likely {t.get('expected')}"])
+
+    return sub("Tight dates, by each person's own history") + _rows(items, "tight", why)
+
+
 def section(title, inner):
     """Heading row + body row, for the inner 600 table."""
     head = span(
@@ -427,6 +451,7 @@ def _verification(summary, series):
         stat_tile("coverage", "–" if cov is None else f"{cov:.0%}"),
     )
     inner += sub("Oldest in the queue") + _rows(queue[:3], "verify", _days)
+    inner += _weak(v.get("weak", []), who=True)
     return section("Verification", inner)
 
 
@@ -457,15 +482,18 @@ def _stuck(summary, person=None):
     )
     if person is None:
         inner += sub("Stuck") + _rows(stuck, "stuck", _days)
+        inner += _tight(f.get("tight", []), who=True)
     return section("Stuck / questions", inner)
 
 
 def _yours(person):
     """What is on this person: verify queue, overdue, questions."""
     inner = sub("Verify queue") + _rows(person.get("verify_queue", []), "verify", _days)
+    inner += _weak(person.get("weak", []))
     inner += sub("Overdue") + _rows(
         person.get("overdue", []), "due", lambda i: str(i.get("due", ""))
     )
+    inner += _tight(person.get("tight", []))
     inner += sub("Questions waiting on you") + _rows(
         person.get("questions", []),
         "ask",

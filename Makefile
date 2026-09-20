@@ -17,7 +17,7 @@ SPEC       ?=
 FILE       ?=
 GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land migrate test fmt lint docs clean stats digest
+.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land migrate test fmt lint docs clean stats digest estimate
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -94,6 +94,9 @@ cron:  ## print crontab lines: snapshots every 30 minutes, digests Monday 07:00
 
 stats: install  ## team numbers for one board, as markdown: make stats PROJECT=group/project
 	@$(GITBOARD) stats $(PROJECT)
+
+estimate: install  ## stage due dates from each person's history: make estimate SPEC=boards/x.yaml
+	@$(GITBOARD) estimate $(SPEC)
 
 digest: install  ## write reports/<date>/<board>/{team,<user>}.md + .eml: make digest PROJECT=group/project
 	@$(GITBOARD) digest $(PROJECT)
