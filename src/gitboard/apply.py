@@ -161,6 +161,25 @@ def discussion(issue):
     ]
 
 
+def issue_entry(issue):
+    """One live issue as a spec entry; empty fields dropped.
+
+    iid lets an offline `show --from` name issues and lets plan/apply treat
+    a retitled entry as a rename rather than a new issue. Also how the TUI
+    adopts a card a stale YAML has not seen.
+    """
+    entry = {"title": issue.title.strip(), "iid": issue.iid}
+    if issue.labels:
+        entry["labels"] = sorted(issue.labels)
+    if body := norm_text(getattr(issue, "description", None)):
+        entry["description"] = body
+    if issue.due_date:
+        entry["due_date"] = issue.due_date
+    if issue.assignee:
+        entry["assignee"] = issue.assignee["username"]
+    return entry
+
+
 def spec_from_board(project, board, columns, notes=False):
     """The live board as an apply()-shaped spec — the pull direction.
 
@@ -177,17 +196,7 @@ def spec_from_board(project, board, columns, notes=False):
 
     spec_issues = []
     for issue in sorted(seen.values(), key=lambda i: i.iid):
-        # iid lets an offline `show --from` name issues and lets plan/apply
-        # treat a retitled entry as a rename rather than a new issue.
-        entry = {"title": issue.title.strip(), "iid": issue.iid}
-        if issue.labels:
-            entry["labels"] = sorted(issue.labels)
-        if body := norm_text(issue.description):
-            entry["description"] = body
-        if issue.due_date:
-            entry["due_date"] = issue.due_date
-        if issue.assignee:
-            entry["assignee"] = issue.assignee["username"]
+        entry = issue_entry(issue)
         if notes and (talk := discussion(issue)):
             entry["discussion"] = talk
         spec_issues.append(entry)

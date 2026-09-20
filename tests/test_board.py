@@ -402,3 +402,23 @@ def test_history_flattens_assignee_and_milestone():
         "assignee", "labels", "milestone", "due_date", "web_url", "tasks",
         "transitions", "verdicts", "notes",
     }  # fmt: skip
+
+
+def test_board_view_marks_only_the_selected_card():
+    from io import StringIO
+
+    from rich.console import Console
+
+    from gitboard.log import THEME
+
+    proj = FakeProject([FakeIssue(1, ["Doing"], "one"), FakeIssue(2, ["Doing"], "two")])
+    lists = FakeBoard([FakeList("Doing", 1)])
+
+    def render(**kw):
+        console = Console(width=120, file=StringIO(), theme=THEME)
+        console.print(board.board_view(proj, lists, **kw)[0])
+        return console.file.getvalue()
+
+    assert "▶" not in render()
+    marked = [x for x in render(selected=("Doing", 1)).splitlines() if "▶" in x]
+    assert len(marked) == 1 and ("one" in marked[0]) != ("two" in marked[0])

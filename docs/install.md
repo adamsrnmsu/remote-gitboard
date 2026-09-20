@@ -94,6 +94,7 @@ url = "https://gitlab.example.com"
 project = "group/project"    # makes the argument optional
 spec = "boards/team.yaml"    # relative to this file, not your cwd
 # board = "Dev Board"        # only if the project has several
+# guide = false              # hide the TUI's per-mode guide panels
 ```
 
 Found by walking up from the cwd (also `--config PATH`, `$GITBOARD_CONFIG`,

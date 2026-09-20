@@ -547,3 +547,15 @@ def test_no_security_binary_is_just_no_keychain(monkeypatch):
     with pytest.raises(config.ConfigError) as e:
         config.get_config().token()
     assert "GITLAB_READ_TOKEN" in str(e.value)
+
+
+def test_guide_is_on_by_default_and_toml_or_env_turn_it_off(tmp_path, monkeypatch):
+    assert config.get_config().guide is True
+    (tmp_path / "gitboard.toml").write_text("guide = false\n")
+    monkeypatch.chdir(tmp_path)
+    config.reset()
+    assert config.get_config().guide is False
+    for value, want in (("1", True), ("0", False), ("off", False), ("False", False)):
+        monkeypatch.setenv("GITBOARD_GUIDE", value)  # env beats the toml
+        config.reset()
+        assert config.get_config().guide is want

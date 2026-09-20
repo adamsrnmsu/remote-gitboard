@@ -694,3 +694,38 @@ def test_estimate_knob_off_prints_and_leaves_the_file_alone(tmp_path, monkeypatc
     r = runner.invoke(app, ["estimate", str(spec), "--history", str(dump)])
     assert r.exit_code == 0 and "p85 of 5 cards: alice" in r.output
     assert spec.read_text() == before
+
+
+def test_split_keys_names_arrows_and_keeps_everything_else_per_char():
+    assert cli._split_keys("\x1b[A") == ["up"]
+    assert cli._split_keys("\x1bOB\x1b[C\x1b[D") == ["down", "right", "left"]
+    assert cli._split_keys("12\r") == ["1", "2", "\r"]
+    assert cli._split_keys("\x1b") == ["\x1b"]  # a lone esc still cancels
+    assert cli._split_keys("é\x1b[Bq") == ["é", "down", "q"]
+
+
+def test_move_cursor_walks_cards_and_skips_empty_columns():
+    sizes = [2, 0, 3]  # shown cards per column
+    assert cli._move_cursor(None, "down", sizes) == (0, 0)
+    assert cli._move_cursor((0, 0), "down", sizes) == (0, 1)
+    assert cli._move_cursor((0, 1), "down", sizes) == (2, 0)  # over the empty one
+    assert cli._move_cursor((2, 0), "up", sizes) == (0, 1)
+    assert cli._move_cursor((0, 0), "up", sizes) == (2, 2)  # wraps
+    assert cli._move_cursor((2, 2), "left", sizes) == (0, 1)  # row clamped
+    assert cli._move_cursor((0, 1), "right", sizes) == (2, 1)
+    assert cli._move_cursor((1, 5), "down", sizes) == (0, 0)  # stale cursor resets
+    assert cli._move_cursor(None, "down", [0, 0]) is None
+
+
+def test_find_card_follows_a_resorted_card_and_prefers_its_column():
+    def card(iid, title="t"):
+        return types.SimpleNamespace(iid=iid, title=title)
+
+    two = card(2)
+    columns = [("Doing", [card(1), two]), ("Blocked", [card(2)]), ("Review", [])]
+    assert cli._find_card(columns, two, 5, prefer=1) == (1, 0)  # on screen twice
+    assert cli._find_card(columns, two, 5, prefer=0) == (0, 1)
+    assert cli._find_card(columns, two, 1, prefer=0) == (1, 0)  # hidden in Doing
+    assert cli._find_card(columns, card(9), 5) is None
+    new = card(None, "fresh")
+    assert cli._find_card([("Doing", [card(None, "other"), new])], new, 5) == (0, 1)

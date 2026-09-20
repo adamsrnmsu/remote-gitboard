@@ -88,8 +88,9 @@ PYTHONPATH away.**
   `.env` and `gitboard.toml` are found by **walking up from the cwd**; when
   only `.env` did, running from `boards/` silently lost the repo config. A
   relative `spec` resolves against *the config file's* directory, not the cwd.
-  Keys: `url`, `project`, `board`, `spec` — `project`/`spec` make the CLI
-  arguments optional. A `token` key is deliberately **ignored with a warning**:
+  Keys: `url`, `project`, `board`, `spec`, `guide` — `project`/`spec` make
+  the CLI arguments optional; `guide` (default true, `GITBOARD_GUIDE`) is the
+  TUI's per-mode guide. A `token` key is deliberately **ignored with a warning**:
   credentials belong in `.env` or the keychain, not a file meant to be shared.
 - **`log.py`** — console + logger singletons. **`out()` is stdout, `err()` is
   stderr.** The board goes to stdout; logs, spinners and change tables go to
@@ -138,6 +139,13 @@ PYTHONPATH away.**
   so **`stats` must not import it back**; renderers read it with `.get`.
   `_history` fetches back at least `HISTORY_DAYS` (90) so a weekly run has
   samples.
+- **`edit.py`** — pure: the spec mutations behind the TUI's card keys
+  (`move`, `assign`, `set_due`, `add_note`, `new_card`, `adopt`). Each
+  returns the staged line or raises `EditError`. **The verdict rule holds
+  for people too**: no move out of Verify, Done/Failed are never targets.
+- **`guide.py`** — the TUI keybar (`rows`) and the guide texts (`GUIDE`); a
+  test pins that every keybar key has a text and every prompting key an
+  example, so a new key cannot ship unexplained.
 - **`migrate.py`** — the one-way writer, kept out of `apply` and out of the
   agent's tools: `rename_label`, `order_columns`, `split_board`
   (reversible) and `merge_labels`, `drop_column`, `move_issues` (one-way,
@@ -197,6 +205,19 @@ from terminal height each draw, and SIGWINCH redraws, so resizing works.
 Raw input is `_key()` (termios cbreak, dies without a tty); all prompts
 render inside the layout — `read_iid` echoes digits into the prompt line
 and takes single-key escapes (b = pick a destination project in `m`).
+Card keys `v u d c n` stage into the YAML through `stage()` -> `edit.py`:
+the file is read **raw** (`raw_spec`; `load` only validates, because it
+rewrites colour names to hex), a card a stale YAML lacks is adopted via
+`apply.issue_entry`, and nothing touches GitLab until `a`. The guide panel
+(`st["tip"]`) is set per key and never blocks. The cursor (`st["cursor"]`,
+`(column index, row among the shown cards)`; arrows or `hjkl`, `esc` drops
+it) is a **position, not an iid** — a two-column card is on screen twice and
+an offline `(new)` card has no number, so `edit.find` takes an iid or a
+title. `board_view(selected=...)` draws it; `_move_cursor` and `_find_card`
+(the selection follows its card across a reload) are pure and tested.
+`_key()` reads the fd, not `sys.stdin`: an arrow is three bytes in one read,
+and a paste is many keys, queued in `_pending` by `_split_keys`. The keybar is two rows
+(board, card); the status line is its own line above it.
 Only `$EDITOR` stops the Live screen. Keybar labels are styled `Text`
 chips, never markup — `[s]napshot` renders as strikethrough-then-text
 because `[s]` is rich's strike tag.

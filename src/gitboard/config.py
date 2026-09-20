@@ -46,7 +46,8 @@ LEGACY_KEYCHAIN_SERVICE = "gitlab-token"  # pre-rename name, still honoured
 LEGACY_ENV_VAR = "GITLAB_TOKEN"  # ditto — warned about, not broken
 FILENAME = "gitboard.toml"
 ENV_FILENAME = ".env"
-KNOWN_KEYS = {"url", "project", "board", "spec"}
+KNOWN_KEYS = {"url", "project", "board", "spec", "guide"}
+OFF = {"0", "false", "no", "off"}  # how GITBOARD_GUIDE (a string) says no
 
 _overrides: dict[str, object] = {}
 
@@ -62,6 +63,7 @@ class Config:
     project: str | None = None  # default for `show`
     board: str | None = None  # default board name
     spec: str | None = None  # default for `plan` / `apply`
+    guide: bool = True  # the TUI's per-mode guide panels
     source: Path | None = None  # which toml file these came from, if any
     env_source: Path | None = None  # which .env file was read, if any
     warnings: tuple[str, ...] = ()
@@ -261,6 +263,7 @@ def get_config() -> Config:
         project=pick("project"),
         board=pick("board"),
         spec=spec,
+        guide=str(pick("guide", "GITBOARD_GUIDE", True)).strip().lower() not in OFF,
         source=source,
         env_source=env_source,
         warnings=tuple(warnings),

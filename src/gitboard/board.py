@@ -283,7 +283,7 @@ def snapshot_records(project, board, ts):
     return list(records.values())
 
 
-def board_view(project, board, limit=5, columns=None, ages=None):
+def board_view(project, board, limit=5, columns=None, ages=None, selected=None):
     """Tree + totals as one renderable, plus the hidden count.
 
     `show` prints it once; `tui` redraws it on every keypress and resize.
@@ -291,6 +291,9 @@ def board_view(project, board, limit=5, columns=None, ages=None):
     screen, and the point of the overview is shape, not every title.
     `limit=0` renders everything. `columns` skips the refetch when the
     caller already has them; `ages` (see issue_line) adds time-in-column.
+    `selected` is the TUI's cursor, `(column name, index among the shown
+    cards)`: a position, not an iid, because a two-column card is on screen
+    twice and an offline `(new)` card has no number.
     """
     columns = board_columns(project, board) if columns is None else columns
     tree = Tree(
@@ -308,8 +311,12 @@ def board_view(project, board, limit=5, columns=None, ages=None):
         node = tree.add(header)
 
         shown = issues if limit == 0 else issues[:limit]
-        for issue in shown:
-            node.add(issue_line(issue, name, ages))
+        for at, issue in enumerate(shown):
+            line = issue_line(issue, name, ages)
+            if selected == (name, at):
+                line = Text("▶ ", "bold") + line
+                line.stylize("reverse", 2)
+            node.add(line)
         if not issues:
             node.add(Text("empty", "muted"))
         if rest := len(issues) - len(shown):

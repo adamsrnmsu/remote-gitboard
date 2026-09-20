@@ -22,3 +22,6 @@ spec = "boards/demo.yaml"  # gitboard plan / apply
                            # relative to THIS file, not your cwd
 
 # board = "Dev Board"      # only needed if a project has more than one board
+
+# guide = false            # the TUI explains each mode as you enter it; this
+                           # hides that (also: g inside, or GITBOARD_GUIDE=0)

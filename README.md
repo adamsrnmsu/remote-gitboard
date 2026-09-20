@@ -215,7 +215,11 @@ project's own, plus any board a `boards/*.yaml` defines, other projects
 included, `s` snapshot, `e` edit the YAML
 in `$EDITOR` (pulling the board into one first if none exists) with the diff
 shown on return, `p` plan, `a` apply after a y/n on the change table, `m`
-migrate comments between issues, `?` help, `q` quit.
+migrate comments between issues, `?` help, `q` quit. Arrows (or `h j k l`) select a card; card keys stage a
+change into the YAML without an editor — `v` move, `u` assign, `d` due date
+(`e` there asks the estimate), `c` comment, `n` new card — and a guide panel
+explains each mode with an example as you enter it (`g` hides it;
+`guide = false` in `gitboard.toml` for good).
 
 `--url`, `--read-token` and `--write-token` override the environment for one
 invocation; `-v` turns on debug logging.

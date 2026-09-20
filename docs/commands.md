@@ -134,12 +134,35 @@ full-screen loop; resizing redraws.
 | `p` | plan |
 | `a` | apply, after y/n on the change table |
 | `m` | migrate comments; `b` in the destination prompt picks another project; y/n to close the source |
+| `g` | show or hide the guide panels for this session |
 | `?` | help |
 | `q` | quit |
 
-`gitboard tui --from boards/x.yaml` is the offline variant: `r` reloads the
-file, `e` edits it, `p` shows the staged diff against `x.yaml.base`, `?`
-help, `q` quit. No GitLab keys.
+**Card keys** stage a change into the YAML for you — no editor. Select a
+card with the arrows (or `h j k l`) and press the key, or press the key and
+type the card's number; then pick a value. `p` shows what is staged, `a`
+writes it. The first one pulls the board into a YAML if there is none. `esc`
+drops the selection; it follows its card when a reload re-sorts or moves it.
+
+| Key | Does |
+|---|---|
+| `v` | move: number, then a column by number. A card in Verify does not move by key and Done / Failed are not offered — those are a `verified:` / `failed:` comment on the card |
+| `u` | assign: number, then a person by number, or `t` to type a username |
+| `d` | due date: number, then `YYYY-MM-DD`, `+N` days, or `e` for the [estimate](board-yaml.md) from the assignee's finished history |
+| `c` | comment: number, then one line; staged under `notes:` and posted by `a` |
+| `n` | new card: a title, then a column |
+
+`e` is still there for bulk edits. An offline `(new)` card has no number
+yet, so it is reached with the cursor and named by its title.
+
+**Guide.** Pressing a key shows a panel beside the prompt: what the mode
+does, a worked example, what it will and will not write. It never waits for
+a keypress. On by default; off with `g` (this session), `tui --no-guide`,
+`GITBOARD_GUIDE=0`, or `guide = false` in `gitboard.toml`.
+
+`gitboard tui --from boards/x.yaml` is the offline variant: the YAML is the
+board. `r` reloads the file, `e` and the card keys edit it, `p` shows the
+staged diff against `x.yaml.base`. No `b`/`s`/`m`/`a`; the host applies.
 
 ## stdout / stderr
 
