@@ -44,3 +44,6 @@ boards/*.yaml.base
 
 # weekly digests (data, like snapshots.jsonl)
 reports/
+
+# /brag launch-video runs (video, frames, node_modules)
+brag-output*/
