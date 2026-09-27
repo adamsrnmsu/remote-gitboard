@@ -273,10 +273,10 @@ breadcrumb `close_issue` leaves, or re-runs would copy the bookkeeping.
 edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
 (gitignored — the script is the source) and is idempotent per `--seed`.
 
-## The AI pass writes now
+## What the AI pass may write
 
 `.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
-`ingest`, `estimate`, `status`, and edit `boards/*.yaml` (`land` is deliberately not
+`ingest`, `estimate`, `status`, `stats`, and edit `boards/*.yaml` (`land` is deliberately not
 allowed). Staged `notes:` widen what `apply` can write to comments — still
 additive, posted under a `*staged via gitboard*` first line, still shown in
 the plan table first. The agent may move an issue **into** Verify, never
