@@ -29,10 +29,17 @@ labels:                        # non-column labels: colour + description, so
   - name: stale
     color: gray
 
-issues:
+milestones:                    # optional; apply creates and updates, never closes
+  - title: Beta launch
+    due_date: "2026-11-01"
+    description: What "beta" means for us.
+
+issues:                        # list order = GitLab board order (with a .base)
   - title: Set up the board from YAML     # identity when there is no iid
     iid: 12                    # from pull; the match key, so a new title here is a rename
-    labels: [Doing, stale]     # column labels place it; others (stale, re-verify) are follow-ups
+    labels: [Doing, stale, "priority::1"]   # column labels place it; priority::1 is most urgent
+    milestone: Beta launch     # must be under milestones:; null clears it
+    blocked_by: [9, "infra/platform#4", "Rotate the PAT"]   # iid, other project, or a title here
     assignee: alice
     due_date: "2026-09-01"     # quote it, or YAML makes a date object
     description: |
@@ -114,6 +121,49 @@ Scoped labels
   verify steps are a `- [ ]` task list gets GitLab's task progress on the
   card, and `ingest` writes them that way.
 
+`milestones[].title`, `due_date`, `description`
+: Optional. `apply` creates a missing milestone and fixes a due date or
+  description that differs; it never closes or deletes one. A group
+  milestone with the same title counts as existing. `pull` writes an entry
+  for every milestone a card carries.
+
+`issues[].milestone`
+: A title from `milestones:` (anything else is a load error). **No key
+  leaves the card's milestone alone**; `milestone: null` clears it.
+
+`issues[].blocked_by`
+: The cards this one waits on, as a list of any of:
+  - an int, an iid in this project (`9`);
+  - a string `group/project#iid`, a card in another project;
+  - the exact title of another card in this file, which `apply` resolves
+    after creating that card, so new cards can block each other.
+
+  **No key leaves the card's links alone**; `blocked_by: []` removes them.
+  A card blocking itself, a title that names no card, or a cycle among the
+  file's cards is a load error. Written as native GitLab `is_blocked_by`
+  links, which need Premium; on an instance that downgrades them to
+  `relates_to`, `apply` removes the stray link and stops with one error.
+
+Description footer (read only)
+: A description whose last line is `Blocked by: #9, infra/platform#4`
+  counts as blockers too, so a Free/CE instance can still draw a graph.
+  `pull` reads the union of links and footer; gitboard never writes a
+  footer. Removing a ref only the footer holds shows as `skipped`: edit the
+  description in GitLab.
+
+`priority::N`
+: An ordinary label, `priority::1` (most urgent) to `priority::4`. One per
+  card; two is a load error. A card without one ranks below 4. `stats`
+  and `graph` flag a blocker that ranks below the card it blocks.
+
+List order
+: The order of `issues:` is GitLab's board order (one manual order per
+  project; every list shows it). `pull` writes it; moving entries
+  reorders the board, with the fewest drags. **Only with a `.base`**: a
+  hand-written file never reshuffles the board. When the team dragged
+  cards since the pull and you did not, `plan` shows `skipped`; when both
+  did, `drift`. Cards new on either side go wherever GitLab puts them.
+
 `issues[].notes`
 : List of strings. Each is posted as a comment on `apply`, with a
   `*staged via gitboard*` first line so the team can tell a staged note
@@ -147,8 +197,12 @@ detect: that is the plain two-way plan.
 - **Identity is `iid`, else title.** A retitle with an `iid` is a rename; a
   retitle without one is a second issue. Duplicate titles in one file are
   an error.
-- **Additive.** `apply` never deletes or closes. Removing an issue from the
-  file leaves it on the board; removing a label leaves it on the issue.
+- **Additive.** `apply` never deletes or closes an issue or a milestone.
+  Removing an issue from the file leaves it on the board; removing a label
+  leaves it on the issue. A blocker link is the one thing it removes, and
+  only when the card has a `blocked_by` key that no longer lists it.
+- **An absent key is unmanaged.** No `blocked_by`, no `milestone`, no
+  `.base` for the order: `apply` leaves that part of the board alone.
   Closing is an explicit act (`migrate-comments --close-source`). Closed
   issues are skipped, not reopened or recreated.
 - **Verify is one-way for the agent.** The AI pass may move an issue into
