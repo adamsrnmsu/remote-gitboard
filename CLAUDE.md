@@ -66,8 +66,12 @@ Plain venv + pip. **No uv anywhere** — it was removed deliberately after
 through a `.pth` in `.venv` that adds `src/`; it stops being honoured ~8
 seconds after install, with the file present and readable, its target
 existing, and `site` listing it in the directory. Reproduced identically with
-pip and with uv, so it is not a packaging-tool problem. Root cause unknown.
-Every make target therefore runs
+pip and with uv, so it is not a packaging-tool problem. Likely cause (found in
+Budgie, same machine): `site` silently skips a `.pth` carrying the macOS
+`hidden` flag, and something here sets that flag inside the tree; `.venv`
+itself carries it (`/bin/ls -lOd .venv`). Check the `.pth` with `/bin/ls -lO`
+on site-packages; `chflags nohidden <file>` clears it. Budgie avoids it with a
+venv outside the repo. Every make target therefore runs
 `PYTHONPATH=src .venv/bin/python -m gitboard.cli`, which names `src` directly
 and makes edits live with no reinstall. `make link` writes a
 `~/.local/bin/gitboard` wrapper doing the same. **Do not "simplify" the
