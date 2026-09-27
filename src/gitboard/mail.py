@@ -235,14 +235,16 @@ def moves_block(moves):
 
 
 def _rows(items, tag, age):
-    """Linked rows `tag · #iid title · age`, capped, for queues and questions."""
+    """Linked rows `tag · #iid title · age`, capped, for queues and questions.
+    `tag` is a string, or a function of the item when rows differ in kind."""
     items, rest = _cap(items)
     if not items:
         return table(_none())
     rows = []
     for it in items:
+        t = tag(it) if callable(tag) else tag
         cells = [
-            td(span(tag, THEME["muted"], MONO, 11), width=64, style="padding:4px 0"),
+            td(span(t, THEME["muted"], MONO, 11), width=64, style="padding:4px 0"),
             td(link(it), style="padding:4px 8px"),
             td(span(age(it), THEME["muted"], MONO, 12), align="right"),
         ]
@@ -276,6 +278,30 @@ def _tight(items, who=False):
         return " · ".join(name + [f"due {t.get('due')}", f"likely {t.get('expected')}"])
 
     return sub("Tight dates, by each person's own history") + _rows(items, "tight", why)
+
+
+FLAG_TAGS = {
+    "blocked_stale": "stale",
+    "blocked_unmarked": "unmarked",
+    "priority_inversion": "priority",
+    "date_inversion": "date",
+    "unowned_blocker": "unowned",
+}
+
+
+def _blockers(items, who=False):
+    """Blocker-flag rows (`stats.blocker_items`); nothing when there are none."""
+    if not items:
+        return ""
+
+    def why(x):
+        name = [x["assignee"]] if who and x.get("assignee") else []
+        return " · ".join(name + [x.get("detail", "")])
+
+    def tag(x):
+        return FLAG_TAGS.get(x.get("kind"), "flag")
+
+    return sub("Blockers the board disagrees with") + _rows(items, tag, why)
 
 
 def section(title, inner):
@@ -483,6 +509,7 @@ def _stuck(summary, person=None):
     if person is None:
         inner += sub("Stuck") + _rows(stuck, "stuck", _days)
         inner += _tight(f.get("tight", []), who=True)
+        inner += _blockers(stats.blocker_items(f), who=True)
     return section("Stuck / questions", inner)
 
 
@@ -494,6 +521,7 @@ def _yours(person):
         person.get("overdue", []), "due", lambda i: str(i.get("due", ""))
     )
     inner += _tight(person.get("tight", []))
+    inner += _blockers(stats.blocker_items(person))
     inner += sub("Questions waiting on you") + _rows(
         person.get("questions", []),
         "ask",

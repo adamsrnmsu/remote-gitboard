@@ -1238,3 +1238,152 @@ def test_downgrade_raises_one_problem(monkeypatch):
         apply.apply(gl, spec)
     assert first.links.items == [] and len(first.links.deleted) == 1
     assert second.links.created == []  # the first refusal stopped the run
+
+
+# --- board order -------------------------------------------------------------
+
+
+def ordered_project(iids, closed=()):
+    """A writable project whose open issues sit in `iids` board order. Each
+    issue's `reorder` moves it the way GitLab does, so a re-read sees it."""
+    issues = [FakeIssue(f"card {n}", labels=["Doing"], iid=n) for n in iids]
+    issues += [FakeIssue(f"card {n}", iid=n, state="closed") for n in closed]
+    project = writable_project(issues[0])
+    project.issues.list()[1:] = issues[1:]
+    project.reorders = []
+
+    def renumber(order):
+        for at, issue in enumerate(order):
+            issue.relative_position = at * 10
+
+    def reorder_of(issue):
+        def reorder(move_after_id=None, move_before_id=None):
+            project.reorders.append((issue.iid, move_after_id, move_before_id))
+            # GitLab: move_after_id names the card that ends up *after* this
+            # one, move_before_id the card that ends up before it
+            order = [i for i in board_order(project) if i is not issue]
+            target = move_after_id or move_before_id
+            at = next(n for n, i in enumerate(order) if i.id == target)
+            order.insert(at if move_after_id else at + 1, issue)
+            renumber(order)
+
+        return reorder
+
+    for issue in issues:
+        issue.reorder = reorder_of(issue)
+    renumber([i for i in issues if i.state == "opened"])
+    return project
+
+
+def board_order(project):
+    opened = [i for i in project.issues.list() if i.state == "opened"]
+    return sorted(opened, key=lambda i: i.relative_position)
+
+
+def order_spec(iids):
+    return {
+        **SPEC,
+        "issues": [{"title": f"card {n}", "labels": ["Doing"], "iid": n} for n in iids],
+    }
+
+
+def test_pull_writes_issues_in_board_order():
+    project = ordered_project([3, 1, 2])
+    project.issues.list()[1].relative_position = None  # #1 never dragged
+    columns = [("Doing", project.issues.list())]
+    board = types.SimpleNamespace(name="Dev Board")
+    spec = apply.spec_from_board(project, board, columns)
+    assert [i["iid"] for i in spec["issues"]] == [3, 2, 1]
+
+
+def test_order_unmanaged_without_base(monkeypatch):
+    """A hand-written YAML never reshuffles the board."""
+    project = ordered_project([1, 2, 3, 4])
+    gl = use_project(monkeypatch, project)
+    spec = order_spec([4, 1, 2, 3])
+    assert apply.plan(gl, spec) == []
+    assert apply.apply(gl, spec) == []
+    assert project.reorders == []
+
+
+def test_order_write_uses_minimal_moves(monkeypatch):
+    project = ordered_project([1, 2, 3, 4])
+    gl = use_project(monkeypatch, project)
+    base, spec = order_spec([1, 2, 3, 4]), order_spec([4, 1, 2, 3])
+    assert apply.plan(gl, spec, base=base) == [("changed", "order", "#4 to the top")]
+    assert apply.apply(gl, spec, base=base) == [("changed", "order", "#4 to the top")]
+    assert project.reorders == [(4, 1001, None)]  # #1 placed after it, global id
+    assert [i.iid for i in board_order(project)] == [4, 1, 2, 3]
+    assert apply.plan(gl, spec, base=spec) == []
+
+
+def test_order_skipped_when_only_gitlab_moved(monkeypatch):
+    project = ordered_project([2, 1, 3])
+    gl = use_project(monkeypatch, project)
+    spec = order_spec([1, 2, 3])
+    kept = [("skipped", "order", "board order changed on GitLab, kept")]
+    assert apply.plan(gl, spec, base=spec) == kept
+    assert apply.apply(gl, spec, base=spec) == kept
+    assert project.reorders == []
+
+
+def test_order_drift_refused_then_forced(monkeypatch):
+    project = ordered_project([2, 1, 3])
+    gl = use_project(monkeypatch, project)
+    base, spec = order_spec([1, 2, 3]), order_spec([3, 1, 2])
+    drift = [("drift", "order", "board order changed on GitLab and in the YAML")]
+    assert apply.plan(gl, spec, base=base) == drift
+    assert apply.apply(gl, spec, base=base) == drift
+    assert project.reorders == []
+    offline = apply.have_from_spec(order_spec([2, 1, 3]))
+    assert apply.diff(spec, offline, base) == drift
+    assert apply.apply(gl, spec, base=base, force=True) == [
+        ("changed", "order", "#3 to the top"),
+        ("changed", "order", "#1 after #3"),
+    ]
+    assert [i.iid for i in board_order(project)] == [3, 1, 2]
+
+
+def test_pull_then_plan_is_empty_with_order(monkeypatch, tmp_path):
+    project = ordered_project([3, 1, 2], closed=[5])
+    columns = [("Doing", board_order(project))]
+    board = types.SimpleNamespace(name="Dev Board")
+    spec = reload(apply.spec_from_board(project, board, columns), tmp_path, "b.yaml")
+    assert [i["iid"] for i in spec["issues"]] == [3, 1, 2]
+    gl = use_project(monkeypatch, project)
+    assert apply.plan(gl, spec, base=spec) == []
+    assert apply.diff(spec, apply.have_from_spec(spec), base=spec) == []
+
+
+def test_order_rerun_after_partial_failure(monkeypatch):
+    """GitLab moves one card per call: the first move lands, the second
+    fails. A plain rerun against the same base sees where the write stopped
+    and finishes it; it is not drift."""
+    project = ordered_project([1, 2, 3, 4, 5])
+    gl = use_project(monkeypatch, project)
+    base, spec = order_spec([1, 2, 3, 4, 5]), order_spec([5, 4, 1, 2, 3])
+    card4 = project.issues.list()[3]
+    real = card4.reorder
+
+    def broken(**_):
+        raise GitlabGetError("boom", response_code=500)
+
+    card4.reorder = broken
+    with pytest.raises(client.GitlabProblem, match="#4"):
+        apply.apply(gl, spec, base=base)
+    assert [i.iid for i in board_order(project)] == [5, 1, 2, 3, 4]
+    card4.reorder = real
+    rest = [("changed", "order", "#4 after #5")]
+    assert apply.plan(gl, spec, base=base) == rest
+    assert apply.apply(gl, spec, base=base) == rest
+    assert [i.iid for i in board_order(project)] == [5, 4, 1, 2, 3]
+
+
+def test_offline_diff_shows_a_yaml_reorder():
+    """plan --against / status / pull --force read the .base as the live
+    board: a reorder staged offline is an edit, not invisible."""
+    base, spec = order_spec([1, 2, 3]), order_spec([3, 1, 2])
+    assert apply.diff(spec, apply.have_from_spec(base)) == [
+        ("changed", "order", "#3 to the top")
+    ]
+    assert apply.diff(base, apply.have_from_spec(base)) == []

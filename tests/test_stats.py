@@ -475,6 +475,11 @@ def test_eml_html_is_multipart_alternative():
 # --- over time ----------------------------------------------------------------
 
 ROW_KEYS = {
+    "blocked_stale",
+    "blocked_unmarked",
+    "priority_inversion",
+    "date_inversion",
+    "unowned_blocker",
     "weak",
     "tight",
     "ts",
@@ -639,3 +644,114 @@ def test_tight_dates_reach_person_row_and_markdown():
     assert "| 7 | slow one | bob | 2026-09-17 | 2026-09-19 |" in stats.render_team_md(s)
     mine = stats.render_person_md(bob, s, "bob").split("\n---\n")[0]
     assert "| 7 | slow one | 2026-09-17 | 2026-09-19 |" in mine
+
+
+# --- blocker flags ---------------------------------------------------------------
+
+BLOCKED_COLUMNS = ["Doing", "Blocked", "Review", "Verify", "Done", "Failed"]
+
+
+def blk(iid, labels=("Doing",), blocked_by=(), priority=None, milestone=None, **kw):
+    """A history card with the blocker fields, as fetch_history now dumps it."""
+    i = issue(iid, labels=labels, **{"assignee": "alice", **kw})
+    i.update(
+        priority=priority,
+        milestone=milestone,
+        milestone_due=None,
+        blocked_by=[{"ref": r, "state": st, "since": None} for r, st in blocked_by],
+    )
+    return i
+
+
+def blockers():
+    return [
+        blk(1, priority=3, due_date="2026-11-05", assignee=None),
+        blk(
+            2,
+            priority=1,
+            due_date="2026-10-20",
+            blocked_by=[("1", "opened")],
+            milestone="Beta",
+        ),
+        blk(3, labels=["Blocked"], blocked_by=[("9", "closed")], assignee="bob"),
+    ]
+
+
+def flagged(d):
+    return {k: [x["iid"] for x in d[k]] for k in stats.FLAGS}
+
+
+def test_summarise_flags_blockers():
+    f = stats.summarise(blockers(), BLOCKED_COLUMNS, START, END, NOW)["flow"]
+    assert flagged(f) == {
+        "blocked_stale": [3],
+        "blocked_unmarked": [2],
+        "priority_inversion": [2],
+        "date_inversion": [2],
+        "unowned_blocker": [1],
+    }
+    assert f["priority_inversion"][0]["detail"] == "#2 (P1) waits on #1 (P3)"
+
+
+def test_old_dump_without_blocked_by_has_no_flags():
+    # a card in Blocked in a pre-links dump is unknown, not "no open blocker"
+    old = [*history(), issue(40, labels=["Blocked"], assignee="bob")]
+    f = stats.summarise(old, BLOCKED_COLUMNS, START, END, NOW)["flow"]
+    assert all(f[k] == [] for k in stats.FLAGS)
+
+
+def test_for_person_filters_flags():
+    h = blockers()
+    s = stats.summarise(h, BLOCKED_COLUMNS, START, END, NOW)
+    # an unowned blocker has no assignee by definition: it reaches the person
+    # whose card waits on it
+    assert flagged(stats.for_person(s, h, "alice", NOW)) == {
+        "blocked_stale": [],
+        "blocked_unmarked": [2],
+        "priority_inversion": [2],
+        "date_inversion": [2],
+        "unowned_blocker": [1],
+    }
+    bob = flagged(stats.for_person(s, h, "bob", NOW))
+    assert bob["blocked_stale"] == [3] and bob["unowned_blocker"] == []
+
+
+def test_three_moves_includes_unblock_after_overdue():
+    def it(iid, **kw):
+        return {"iid": iid, "title": f"t{iid}", "url": f"u{iid}", **kw}
+
+    person = {
+        "verify_queue": [it(1, days=2.0)],
+        "overdue": [it(2, due="2026-09-01")],
+        "questions": [it(3, days=1.0, author="root")],
+        "unowned_blocker": [it(5, detail="#5 (unassigned) blocks #6 in Beta")],
+        "priority_inversion": [it(6, detail="#6 (P1) waits on #7 (P3)")],
+    }
+    assert [(m["verb"], m["iid"], m["age"]) for m in stats.three_moves(person)] == [
+        ("Verify", 1, "2.0 d in Verify"),
+        ("Finish", 2, "due 2026-09-01"),
+        ("Unblock", 5, "#5 (unassigned) blocks #6 in Beta"),
+    ]
+    person["unowned_blocker"] = []
+    assert stats.three_moves(person)[2]["age"] == "#6 (P1) waits on #7 (P3)"
+
+
+def test_stat_row_counts_flags():
+    s = stats.summarise(blockers(), BLOCKED_COLUMNS, START, END, NOW)
+    r = stats.stat_row(s, "g/p", "b", "t")
+    assert [r[k] for k in stats.FLAGS] == [1, 1, 1, 1, 1]
+    assert all(stats.stat_row({}, "g/p", "b", "t")[k] == 0 for k in stats.FLAGS)
+
+
+def test_team_markdown_has_blockers_section_only_when_flagged():
+    h = blockers()
+    s = stats.summarise(h, BLOCKED_COLUMNS, START, END, NOW)
+    md = stats.render_team_md(s)
+    assert "### Blockers\n| kind | card | detail |" in md
+    assert "| priority_inversion | #2 issue 2 | #2 (P1) waits on #1 (P3) |" in md
+    mine = stats.render_person_md(stats.for_person(s, h, "bob", NOW), s, "bob")
+    assert "## Your blockers" in mine.split("\n---\n")[0]
+    clean = stats.summarise(history(), COLUMNS, START, END, NOW)
+    assert "Blockers" not in stats.render_team_md(clean)
+    alice = stats.for_person(clean, history(), "alice", NOW)
+    assert "blockers" not in stats.render_person_md(alice, clean, "alice")

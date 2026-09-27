@@ -17,7 +17,7 @@ import re
 import yaml
 from gitlab.exceptions import GitlabError
 
-from gitboard import client, links
+from gitboard import client, links, order
 from gitboard.log import get_logger
 
 log = get_logger()
@@ -234,7 +234,7 @@ def spec_from_board(project, board, columns, notes=False):
             seen[issue.iid] = issue
 
     spec_issues, milestones = [], {}
-    for issue in sorted(seen.values(), key=lambda i: i.iid):
+    for issue in sorted(seen.values(), key=_board_key):
         refs = [x["ref"] for x in links.read(issue, project)]
         entry = issue_entry(issue, refs)
         if notes and (talk := discussion(issue)):
@@ -277,6 +277,99 @@ def spec_from_board(project, board, columns, notes=False):
             entry["description"] = desc
         spec.setdefault("labels", []).append(entry)
     return spec
+
+
+def _board_key(issue):
+    """GitLab's manual order: relative_position, never-dragged cards last,
+    then iid. The YAML's issue order is this, so pull writes it."""
+    rp = getattr(issue, "relative_position", None)
+    return (rp is None, rp or 0, issue.iid)
+
+
+def _live_order(project):
+    """(open iids in board order, {iid: issue}). Sorted here too: the API
+    breaks relative_position ties however it likes."""
+    found = project.issues.list(
+        state="opened", order_by="relative_position", sort="asc", all=True
+    )
+    found = sorted((i for i in found if i.state != "closed"), key=_board_key)
+    return [i.iid for i in found], {i.iid: i for i in found}
+
+
+def order_changes(spec, live, base, force=False):
+    """Pure: the board order as one field of the three-way merge.
+
+    Returns (records, moves). No base means a hand-written YAML, which never
+    reorders. Drift that is exactly a prefix of this same write is where a
+    failed apply stopped (GitLab moves one card per call), so a rerun
+    finishes it instead of refusing.
+    """
+    if base is None:
+        return [], []
+    edited = [i["iid"] for i in spec["issues"] if i.get("iid")]
+    old = [i["iid"] for i in base["issues"] if i.get("iid")]
+    kind = order.merge(edited, live, old)
+    if kind == "drift" and (force or _stopped_partway(edited, live, old)):
+        kind = "write"
+    if kind == "skipped":
+        return [("skipped", "order", "board order changed on GitLab, kept")], []
+    if kind == "drift":
+        return [("drift", "order", "board order changed on GitLab and in the YAML")], []
+    if kind != "write":
+        return [], []
+    steps = order.moves(edited, live)
+    return [
+        (
+            "changed",
+            "order",
+            f"#{iid} after #{after}" if after else f"#{iid} to the top",
+        )
+        for iid, after, _ in steps
+    ], steps
+
+
+def _stopped_partway(edited, live, old):
+    # ponytail: replays each prefix, O(moves² · n); moves are a handful of drags
+    keep = set(edited) & set(live) & set(old)
+    live = [x for x in live if x in keep]
+    steps = order.moves(edited, old)
+    return any(
+        [x for x in order.apply_moves(old, steps[:k]) if x in keep] == live
+        for k in range(1, len(steps))
+    )
+
+
+def ensure_order(project, spec, base, record, force=False):
+    """Reorder the board to the YAML's issue order, fewest calls first.
+
+    Runs after ensure_issues and re-reads the live order, so the moves are
+    computed against the board as it is now; a rerun after a partial
+    failure continues from where it stopped.
+    """
+    if base is None:  # unmanaged: not even the read
+        return
+    live, by_iid = _live_order(project)
+    records, steps = order_changes(spec, live, base, force)
+    if not steps:  # skipped, drift, or nothing
+        for change in records:
+            record(*change)
+        return
+    for change, (iid, after, before) in zip(records, steps, strict=True):
+        try:
+            # GitLab names the neighbour, not the side: move_before_id is the
+            # card that ends up before this one, move_after_id the one after.
+            if after:
+                by_iid[iid].reorder(move_before_id=by_iid[after].id)
+            else:
+                by_iid[iid].reorder(move_after_id=by_iid[before].id)
+        except GitlabError as e:
+            if getattr(e, "response_code", None) in (401, 403):
+                raise  # write_errors names the missing scope
+            raise client.GitlabProblem(
+                f"reordering #{iid} failed ({e}); the cards before it moved — "
+                "re-run apply to continue"
+            ) from e
+        record(*change)
 
 
 def _friendly(color):
@@ -793,6 +886,7 @@ def apply(gl, spec, base=None, force=False, on_change=None):
     live = ensure_issues(
         project, spec, record, users, base, force, milestones, _project_id_of(gl)
     )
+    ensure_order(project, spec, base, record, force)
     ensure_notes(project, spec["issues"], record, live)
     return changes
 
@@ -837,6 +931,8 @@ def plan(gl, spec, base=None):
         if "blocked_by" in spec_i:
             refs = [x["ref"] for x in links.read(opened[title], project)]
             have["issues"][title] = current_issue(opened[title], refs)
+    if base:  # order is managed only with a base; without one, skip the read
+        have["order"] = _live_order(project)[0]
     return diff(spec, have, base)
 
 
@@ -864,6 +960,7 @@ def have_from_spec(base):
         },
         "iids": {i["iid"]: title for title, i in issues if i.get("iid") is not None},
         "closed": set(),
+        "order": [i["iid"] for i in base["issues"] if i.get("iid")],
         "milestones": {
             m["title"]: {
                 "due_date": _iso(m.get("due_date")),
@@ -906,7 +1003,8 @@ def diff(spec, have, base=None, force=False):
     {"labels": set, "label_meta": {name: (hex colour, description)},
     "boards": set, "issues": {title: current_issue-shaped}, "iids": {iid:
     title}, "closed": {titles}, "notes": {title: {bodies already posted}},
-    "milestones": {title: {"due_date", "description"}}}, or None for a
+    "milestones": {title: {"due_date", "description"}}, "order": [open iids
+    in board order]}, or None for a
     project that does not exist yet. `base` is the spec as pulled; see
     apply()."""
     if have is None:
@@ -955,6 +1053,9 @@ def diff(spec, have, base=None, force=False):
             force,
         )
         pending += records
+    if "order" in have:  # offline, have_from_spec(.base) is the old order too
+        old = base or {"issues": [{"iid": i} for i in have["order"]]}
+        pending += order_changes(spec, have["order"], old, force)[0]
     posted = have.get("notes", {})
     for spec_i in spec["issues"]:
         live_title, is_closed = _find(spec_i, have)
