@@ -60,7 +60,7 @@ def cards_from_spec(spec, url):
         for i in spec["issues"]
         if i.get("iid") is not None
     }
-    due = {m["title"]: _iso(m.get("due_date")) for m in spec.get("milestones", [])}
+    due = {m["title"]: _iso(m.get("due_date")) for m in spec.get("milestones") or []}
 
     def state(ref):
         if links._is_iid(ref):
@@ -359,28 +359,13 @@ def _head(n):
     return name if name == n["title"] else f"{name} {n['title']}"
 
 
-def _flagged(g):
-    """Open cards on either end of a contradiction the graph can see."""
-    nodes, out = g["nodes"], set()
-
-    def date(n):
-        m = nodes.get(f"m:{n['milestone']}") if n["milestone"] else None
-        return n["due_date"] or (m and m["due_date"])
-
-    for a, b in g["edges"]:
-        na, nb = nodes[a], nodes[b]
-        both = na["kind"] == nb["kind"] == "card" and na["open"] and nb["open"]
-        if both and _pair(na, nb, date(na), date(nb)):
-            out |= {a, b}
-    return out
-
-
-def render_tree(g, today):
-    """One tree per milestone, blockers nested under what they block."""
+def render_tree(g, today, flagged=frozenset()):
+    """One tree per milestone, blockers nested under what they block.
+    `flagged` is the keys `flags` names (the caller has the columns), ⚑."""
     nodes, preds = g["nodes"], _preds(g["edges"])
     succs = _succs(g["edges"])
     star = {k for path in g["critical"].values() for k in path}
-    flagged, printed = _flagged(g), set()
+    printed = set()
 
     def line(k):
         n = nodes[k]

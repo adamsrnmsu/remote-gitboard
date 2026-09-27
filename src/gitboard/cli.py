@@ -1232,15 +1232,16 @@ def graph(
         if not g["edges"]:
             err().print("[muted]no blockers or milestones on this board[/]")
             return
+        flagged = _flagged(graph_mod.flags(cards, columns))
         if html:
             title = f"{name} — {milestone or 'blockers and milestones'}"
-            flagged = _flagged(graph_mod.flags(cards, columns))
             Path(html).write_text(graph_html.render_html(g, title, flagged))
             err().print(f"[muted]wrote {html}[/]")
         elif mermaid:
             print(graph_mod.render_mermaid(g), end="")
         else:
-            out().print(graph_mod.render_tree(g, datetime.now().date().isoformat()))
+            today = datetime.now().date().isoformat()
+            out().print(graph_mod.render_tree(g, today, flagged))
 
     _run(go)
 

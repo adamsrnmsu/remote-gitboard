@@ -57,8 +57,10 @@ contradiction. The flags are in `stats` under Flow: `blocked_stale`,
 - For each flag, propose one fix in Staged: raise the blocker's priority,
   move it up the list, pull its date in, assign it, or move the card into
   or out of Blocked (never out of Verify).
-- Never edit a `Blocked by:` footer line in a description. A ref only the
-  footer holds shows in `plan` as skipped; name it for the lead to edit.
+- Never edit a `Blocked by:` footer line in a description, and do not
+  drop a ref only the footer holds from `blocked_by`: `plan` shows it as a
+  change, but `apply` skips it and it comes back on every plan. Name it
+  for the lead to edit in GitLab instead.
 - Link removals and order moves go first in your summary, right after
   notes — they are the rows the lead reads before saying yes.
 

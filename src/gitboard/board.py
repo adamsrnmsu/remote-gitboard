@@ -183,7 +183,12 @@ def fetch_history(project, board, since):
         ticks = getattr(issue, "task_completion_status", None) or {}
         labels = list(getattr(issue, "labels", None) or [])
         blocked_by = [
-            {"ref": x["ref"], "state": blocker_state(x["ref"]), "since": x["since"]}
+            {
+                "ref": x["ref"],
+                # another project's card: the link carries its state
+                "state": blocker_state(x["ref"]) or x.get("state"),
+                "since": x["since"],
+            }
             for x in links.read(issue, project)
         ]
         history.append(

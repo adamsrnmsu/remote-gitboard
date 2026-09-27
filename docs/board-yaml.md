@@ -148,8 +148,9 @@ Description footer (read only)
 : A description whose last line is `Blocked by: #9, infra/platform#4`
   counts as blockers too, so a Free/CE instance can still draw a graph.
   `pull` reads the union of links and footer; gitboard never writes a
-  footer. Removing a ref only the footer holds shows as `skipped`: edit the
-  description in GitLab.
+  footer. Removing a ref only the footer holds shows in `plan` as a
+  `blocked_by` change, but `apply` reports it `skipped` and the ref stays:
+  edit the description in GitLab.
 
 `priority::N`
 : An ordinary label, `priority::1` (most urgent) to `priority::4`. One per

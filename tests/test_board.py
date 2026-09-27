@@ -502,6 +502,20 @@ def test_history_carries_blocked_by_priority_and_milestone_due():
     )
 
 
+def test_history_takes_an_external_blockers_state_from_the_link():
+    """The links API returns the linked issue's state: a closed card in
+    another project is closed, not unknown. A footer ref stays unknown."""
+    closed = link(4, project_id=99, full="other/x#4")
+    closed.state = "closed"
+    card = HistIssue(12, ["Doing"], links=[closed])
+    card.description = "Blocked by: other/y#2"
+    history, _ = board.fetch_history(StateProject([card], []), FakeBoard([]), SINCE)
+    assert [(b["ref"], b["state"]) for b in history[0]["blocked_by"]] == [
+        ("other/x#4", "closed"),
+        ("other/y#2", None),
+    ]
+
+
 def test_board_view_marks_only_the_selected_card():
     from io import StringIO
 

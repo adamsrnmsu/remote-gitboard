@@ -789,6 +789,27 @@ def test_graph_from_file_prints_tree(tmp_path, offline):
     assert "⚑" in r.stdout  # #1 (P3) blocks #2 (P1): a priority inversion
 
 
+def test_graph_tree_marks_every_flag_kind(tmp_path, offline):
+    """⚑ is "the same flags stats lists": a Blocked card whose only blocker
+    is closed (blocked_stale) is marked, not just blocker/card pairs."""
+    spec = {
+        **GRAPH_SPEC,
+        "issues": [
+            {
+                "title": "Stale",
+                "iid": 5,
+                "labels": ["Blocked"],
+                "assignee": "ana",
+                "milestone": "Beta",
+                "blocked_by": [9],
+            }
+        ],
+    }
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path, spec)])
+    assert r.exit_code == 0, r.output
+    assert "#5 Stale  @ana ★  ⚑" in r.stdout
+
+
 def test_graph_milestone_narrows_the_tree(tmp_path, offline):
     r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path), "-M", "Beta"])
     assert r.exit_code == 0, r.output

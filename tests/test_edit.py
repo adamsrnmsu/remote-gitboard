@@ -96,6 +96,20 @@ def test_adopt_appends_a_missing_card_once():
     assert len(s["issues"]) == 4
 
 
+def test_adopt_lists_the_cards_milestone_so_load_still_passes(tmp_path):
+    """A card adopted from GitLab carries `milestone:`; without a
+    `milestones:` entry the next load() refuses the whole file."""
+    from gitboard import apply
+
+    s = spec()
+    edit.adopt(s, {"title": "four", "iid": 4, "milestone": "Beta"})
+    edit.adopt(s, {"title": "five", "iid": 5, "milestone": "Beta"})
+    assert s["milestones"] == [{"title": "Beta"}]
+    path = tmp_path / "b.yaml"
+    path.write_text(apply.dump(s))
+    apply.load(str(path))
+
+
 def test_columns_and_column_of():
     s = spec()
     assert edit.columns(s) == ["Doing", "Review", "Verify", "Done", "Failed"]

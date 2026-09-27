@@ -136,6 +136,7 @@ def read(issue, project):
                 "since": getattr(x, "link_created_at", None),
                 "link_id": x.issue_link_id,
                 "source": "native",
+                "state": getattr(x, "state", None),  # the linked issue's
             }
             for x in issue.links.list(all=True)
             if getattr(x, "link_type", None) == BLOCKED_BY
@@ -153,7 +154,7 @@ def read(issue, project):
         native = []
     seen = {x["ref"] for x in native}
     footer = [
-        {"ref": r, "since": None, "link_id": None, "source": "footer"}
+        {"ref": r, "since": None, "link_id": None, "source": "footer", "state": None}
         for r in footer_refs(getattr(issue, "description", None), path)
         if r not in seen
     ]

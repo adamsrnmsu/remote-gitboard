@@ -216,3 +216,9 @@ def test_offline_closed_blocker_is_faded_and_raises_no_flag():
     g = graph.build(cards)
     assert g["nodes"]["9"]["open"] is False
     assert "class i9 done;" in graph.render_mermaid(g)
+
+
+def test_cards_from_spec_takes_an_empty_milestones_key():
+    """`milestones:` with nothing under it is None in YAML; load() takes it."""
+    spec = {**SPEC, "milestones": None, "issues": [{"title": "a", "iid": 1}]}
+    assert graph.cards_from_spec(spec, "https://gl")[0]["milestone_due"] is None
