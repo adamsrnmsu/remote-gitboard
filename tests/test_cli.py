@@ -875,7 +875,7 @@ def test_changes_table_puts_link_and_order_rows_first():
         ("added", "note", "b: bye"),
     ]
     table = _changes_table(pending, "t")
-    assert list(table.columns[2].cells) == [
+    assert [str(c) for c in table.columns[2].cells] == [
         "a: hi",
         "b: bye",
         "#3 after #1",
@@ -884,3 +884,16 @@ def test_changes_table_puts_link_and_order_rows_first():
         "a: labels [Doing] -> [Verify]",
         "x",
     ]
+
+
+def test_changes_table_prints_bracketed_values_verbatim():
+    """`[#11]` is a rich colour tag; as markup the old blocked_by vanished."""
+    from rich.console import Console
+
+    from gitboard.log import THEME
+
+    console = Console(record=True, width=120, color_system=None, theme=THEME)
+    console.print(
+        _changes_table([("changed", "issue", "d: blocked_by [#11] -> []")], "t")
+    )
+    assert "d: blocked_by [#11] -> []" in console.export_text()

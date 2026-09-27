@@ -1995,7 +1995,10 @@ def _changes_table(pending, title):
     table.add_column("", style="muted", width=7)
     table.add_column("")
     for kind, what, detail in sorted(pending, key=_review_first):
-        table.add_row(Text(SIGN.get(kind, "?"), STYLE.get(kind, "")), what, detail)
+        # Text, not markup: `[#11]` (a blocked_by value) is a rich colour tag
+        table.add_row(
+            Text(SIGN.get(kind, "?"), STYLE.get(kind, "")), Text(what), Text(detail)
+        )
     return table
 
 
