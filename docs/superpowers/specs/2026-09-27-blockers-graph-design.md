@@ -166,9 +166,11 @@ represents it.
   shows their real place.
 - **Minimal moves:** keep the longest run of cards that are already in the
   wanted order (a longest increasing subsequence, stdlib, O(n log n)). Move
-  each other card with `issue.reorder(move_after_id=<previous card's
-  global id>)`. `plan` shows each move as
-  `~ order: #12 after #9 (was after #31)`.
+  each other card with `issue.reorder(move_before_id=<previous card's
+  global id>)`. GitLab's `move_before_id` names the card that ends up
+  *before* this one; the names read backwards, and the build caught it.
+  A card moving to the front uses `move_after_id=<first kept card>`.
+  `plan` shows each move as `~ order: #12 after #9`.
 
 ### The AI pass
 
