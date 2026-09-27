@@ -13,7 +13,7 @@ from rich.console import Group
 from rich.text import Text
 from rich.tree import Tree
 
-from gitboard import client
+from gitboard import client, links
 from gitboard.apply import MARKER
 from gitboard.ingest import VERDICT
 from gitboard.log import out
@@ -43,17 +43,15 @@ def board_columns(project, board):
 
 
 def _urgency(issue):
-    """Overdue first, then soonest due, then newest.
+    """Overdue first, then board order (nulls last), then newest.
 
-    Deterministic — the API's own order is not — and it means a truncated
-    column shows the issues you would have gone looking for. An issue with
-    no iid yet (a spec entry not applied) sorts last, in spec order.
+    Board order is GitLab's manual order, which the lead sets through the
+    YAML, so `show` matches what the team sees in GitLab. Overdue still
+    surfaces first so a truncated column shows it. Deterministic — the
+    API's own order is not.
     """
-    return (
-        not is_overdue(issue),
-        issue.due_date or "9999-12-31",
-        -(issue.iid or 0),
-    )
+    rp = getattr(issue, "relative_position", None)
+    return (not is_overdue(issue), rp is None, rp or 0, -(issue.iid or 0))
 
 
 def ref(issue):
@@ -66,14 +64,17 @@ def columns_from_spec(spec, url):
 
     Same shape, same Backlog rule, same sort, so every renderer works
     unchanged. Issues are duck-typed; `url` is the GitLab base for the
-    per-issue links (only entries carrying an iid get one).
+    per-issue links (only entries carrying an iid get one). The YAML's list
+    index stands in for `relative_position`: the file's order is the board
+    order offline.
     """
     names = [c["name"] for c in spec["columns"]]
     issues = []
-    for entry in spec["issues"]:
+    for index, entry in enumerate(spec["issues"]):
         iid = entry.get("iid")
         who = entry.get("assignee")
         due = entry.get("due_date")
+        milestone = entry.get("milestone")
         issues.append(
             types.SimpleNamespace(
                 iid=iid,
@@ -83,6 +84,8 @@ def columns_from_spec(spec, url):
                 due_date=due.isoformat() if hasattr(due, "isoformat") else due,
                 assignee={"username": who} if who else None,
                 web_url=f"{url}/{spec['project']}/-/issues/{iid}" if iid else None,
+                relative_position=index,
+                milestone={"title": milestone} if milestone else None,
             )
         )
     backlog = [i for i in issues if not (set(i.labels) & set(names))]
@@ -130,11 +133,11 @@ def fetch_history(project, board, since):
     """(history, columns): every open issue plus those closed since `since`
     (aware datetime), with label events and notes flattened for stats.py.
 
-    Two list calls plus two requests per issue (label events, notes). Each
-    issue is a JSON-able dict; timestamps stay the API's ISO strings. Label
-    events are kept only for this board's columns, so `transitions` is the
-    card's path across the board and nothing else. Every attribute read is
-    defensive — CE payloads vary by version.
+    Two list calls plus three requests per issue (label events, notes,
+    links). Each issue is a JSON-able dict; timestamps stay the API's ISO
+    strings. Label events are kept only for this board's columns, so
+    `transitions` is the card's path across the board and nothing else.
+    Every attribute read is defensive — CE payloads vary by version.
     """
     lists = sorted(board.lists.list(all=True), key=lambda x: x.position)
     columns = [x.label["name"] for x in lists if getattr(x, "label", None)]
@@ -146,6 +149,18 @@ def fetch_history(project, board, since):
     )
     for issue in closed:
         seen.setdefault(issue.iid, issue)
+
+    def blocker_state(ref):
+        """Same-project only: every open issue is in `seen`, so an absent one
+        is closed. Done counts as closed, as it does for stats.done_at."""
+        if not links._is_iid(ref):
+            return None
+        other = seen.get(int(ref))
+        if other is None or getattr(other, "state", None) != "opened":
+            return "closed"
+        return (
+            "closed" if "Done" in (getattr(other, "labels", None) or []) else "opened"
+        )
 
     history = []
     for issue in seen.values():
@@ -166,6 +181,11 @@ def fetch_history(project, board, since):
         assignee = getattr(issue, "assignee", None)
         milestone = getattr(issue, "milestone", None)
         ticks = getattr(issue, "task_completion_status", None) or {}
+        labels = list(getattr(issue, "labels", None) or [])
+        blocked_by = [
+            {"ref": x["ref"], "state": blocker_state(x["ref"]), "since": x["since"]}
+            for x in links.read(issue, project)
+        ]
         history.append(
             {
                 "iid": issue.iid,
@@ -175,8 +195,11 @@ def fetch_history(project, board, since):
                 "closed_at": getattr(issue, "closed_at", None),
                 "updated_at": getattr(issue, "updated_at", None),
                 "assignee": assignee["username"] if assignee else None,
-                "labels": list(getattr(issue, "labels", None) or []),
+                "labels": labels,
                 "milestone": milestone["title"] if milestone else None,
+                "milestone_due": milestone.get("due_date") if milestone else None,
+                "priority": links.priority(labels),
+                "blocked_by": blocked_by,
                 "due_date": getattr(issue, "due_date", None),
                 "web_url": getattr(issue, "web_url", None),
                 "tasks": [ticks.get("completed_count", 0), ticks.get("count", 0)],

@@ -9,6 +9,7 @@ import datetime
 import types
 
 import pytest
+from gitlab.exceptions import GitlabGetError
 
 from gitboard import apply, client
 
@@ -24,23 +25,39 @@ class FakeIssue:
         iid=1,
         state="opened",
         notes=(),
+        milestone=None,
+        links=(),
     ):
         self.title, self.labels, self.iid = title, list(labels), iid
+        self.id, self.relative_position = iid + 1000, None
         self.description, self.due_date = description, due_date
         self.assignee = {"username": assignee} if assignee else None
+        self.milestone = milestone  # the API's dict: title, due_date, description
         self.state, self.saved = state, False
         self.notes = FakeNotes([fake_note(b) for b in notes])
+        self.links = FakeLinks(links)
 
     def save(self):
         self.saved = True
 
 
 class FakeProject:
-    def __init__(self, labels=(), boards=(), issues=()):
+    def __init__(self, labels=(), boards=(), issues=(), milestones=()):
+        self.id, self.path_with_namespace = 1, "grp/proj"
+        self.namespace = {"kind": "user", "full_path": "grp"}
         self.labels = _lister([types.SimpleNamespace(name=n) for n in labels])
         self.boards = _lister([types.SimpleNamespace(name=n) for n in boards])
         self.issues = _lister(list(issues))
         self.issues.create = self._create
+        self.milestones = _lister(list(milestones))
+        self.milestones.create = self._create_milestone
+
+    def _create_milestone(self, payload):
+        items = self.milestones.list()
+        found = milestone(id=len(items) + 50, **payload)
+        found.created = payload
+        items.append(found)
+        return found
 
     def _create(self, payload):
         items = self.issues.list()
@@ -53,6 +70,53 @@ class FakeProject:
 
 def _lister(items):
     return types.SimpleNamespace(list=lambda **_: items)
+
+
+def milestone(title, due_date=None, description="", id=50):
+    m = types.SimpleNamespace(
+        title=title, due_date=due_date, description=description, id=id, saved=False
+    )
+    m.save = lambda: setattr(m, "saved", True)
+    return m
+
+
+def link(iid, project_id=1, kind="is_blocked_by", link_id=1, full=None):
+    return types.SimpleNamespace(
+        iid=iid,
+        project_id=project_id,
+        link_type=kind,
+        issue_link_id=link_id,
+        link_created_at="2026-09-20T10:00:00Z",
+        references={"full": full or f"grp/proj#{iid}"},
+    )
+
+
+class FakeLinks:
+    """issue.links; `downgrade` answers the way CE does, storing relates_to."""
+
+    def __init__(self, items=(), downgrade=False):
+        self.items, self.downgrade = list(items), downgrade
+        self.created, self.deleted, self.listed = [], [], 0
+
+    def list(self, **_):
+        self.listed += 1
+        return list(self.items)
+
+    def create(self, data):
+        self.created.append(data)
+        kind = "relates_to" if self.downgrade else data["link_type"]
+        self.items.append(
+            link(
+                data["target_issue_iid"],
+                data["target_project_id"],
+                kind,
+                900 + len(self.created),
+            )
+        )
+
+    def delete(self, link_id):
+        self.deleted.append(link_id)
+        self.items = [x for x in self.items if x.issue_link_id != link_id]
 
 
 def use_project(monkeypatch, project):
@@ -110,7 +174,12 @@ def test_labels_are_sorted_so_yaml_order_is_not_a_diff():
 
 def test_a_settled_issue_shows_no_drift():
     """wanted_issue and current_issue must agree, or apply is never idempotent."""
-    spec = {"title": "t", "labels": ["Doing"], "description": "body\n"}
+    spec = {
+        "title": "t",
+        "labels": ["Doing"],
+        "description": "body\n",
+        "milestone": None,
+    }
     issue = FakeIssue("t", labels=["Doing"], description="body")
     assert apply.wanted_issue(spec) == apply.current_issue(issue)
 
@@ -890,3 +959,282 @@ def test_an_issue_missing_from_the_base_is_diffed_two_way():
     assert apply.diff(edited, live, base=base) == [
         ("changed", "issue", "one: labels [] -> [Blocked]")
     ]
+
+
+# --- blockers and milestones ------------------------------------------------
+
+
+def write_yaml(tmp_path, text):
+    f = tmp_path / "b.yaml"
+    f.write_text("project: grp/proj\nboard: B\n" + text)
+    return str(f)
+
+
+def test_load_rejects_blocked_by_cycle(tmp_path):
+    path = write_yaml(
+        tmp_path,
+        "issues:\n"
+        "  - {title: a, iid: 1, blocked_by: [2]}\n"
+        "  - {title: b, iid: 2, blocked_by: [a]}\n",
+    )
+    with pytest.raises(apply.SpecError, match="b.yaml: blocked_by cycle"):
+        apply.load(path)
+    # a scalar is a typo, not one ref: a string would be iterated per letter
+    path = write_yaml(tmp_path, "issues:\n  - {title: a, blocked_by: 9}\n")
+    with pytest.raises(apply.SpecError, match="blocked_by must be a list"):
+        apply.load(path)
+
+
+def test_load_rejects_unknown_milestone(tmp_path):
+    path = write_yaml(tmp_path, "issues:\n  - {title: t, milestone: X}\n")
+    with pytest.raises(
+        apply.SpecError, match=r"milestone 'X' \(issue 't'\) is not under milestones:"
+    ):
+        apply.load(path)
+    path = write_yaml(tmp_path, "milestones:\n  - {due_date: 2026-11-01}\n")
+    with pytest.raises(apply.SpecError, match="needs a title"):
+        apply.load(path)
+    path = write_yaml(tmp_path, "milestones:\n  - {title: X}\n  - {title: 'X '}\n")
+    with pytest.raises(apply.SpecError, match="duplicate milestone 'X'"):
+        apply.load(path)
+    path = write_yaml(
+        tmp_path, "milestones:\n  - {title: X}\nissues:\n  - {title: t, milestone: X}\n"
+    )
+    assert apply.load(path)["issues"][0]["milestone"] == "X"
+
+
+def test_load_rejects_two_priorities(tmp_path):
+    path = write_yaml(
+        tmp_path, "issues:\n  - {title: t, labels: ['priority::1', 'priority::2']}\n"
+    )
+    with pytest.raises(apply.SpecError, match="two priority:: labels"):
+        apply.load(path)
+
+
+def test_absent_blocked_by_is_unmanaged(monkeypatch):
+    """A hand-written spec must not wipe every link on the board."""
+    issue = FakeIssue("one", labels=["Doing"], links=[link(9)])
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert apply.plan(gl, SPEC) == []
+    assert apply.apply(gl, SPEC) == []
+    assert issue.links.created == issue.links.deleted == []
+    assert issue.links.listed == 0  # no key, no links request
+
+
+def test_empty_blocked_by_removes_native_links(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"], links=[link(9, link_id=5)])
+    spec = {**SPEC, "issues": [{"title": "one", "labels": ["Doing"], "blocked_by": []}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    want = [("changed", "issue", "one: blocked_by [#9] -> []")]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    assert issue.links.deleted == [5]
+    assert apply.plan(gl, spec) == []
+
+
+def test_blocked_by_three_way_skipped_and_drift():
+    def bb(*refs):
+        return {"blocked_by": list(refs)}
+
+    assert apply.issue_changes("one", bb("9"), bb("9", "11"), bb("9"), set()) == (
+        {},
+        [("skipped", "issue", "one: blocked_by changed on GitLab, kept")],
+    )
+    assert apply.issue_changes("one", bb("10"), bb("11"), bb("9"), set()) == (
+        {},
+        [("drift", "issue", "one: blocked_by [#11] -> [#10]")],
+    )
+    # a base card that lacked the key had no blockers
+    assert apply.issue_changes("one", bb("10"), bb(), {"labels": []}, set()) == (
+        {"blocked_by": ["10"]},
+        [("changed", "issue", "one: blocked_by [] -> [#10]")],
+    )
+
+
+def test_new_title_ref_links_after_create(monkeypatch):
+    a = FakeIssue("A", iid=1)
+    spec = {
+        **SPEC,
+        "issues": [{"title": "A", "iid": 1, "blocked_by": ["B"]}, {"title": "B"}],
+    }
+    project = writable_project(a)
+    gl = use_project(monkeypatch, project)
+    changed = ("changed", "issue", "A: blocked_by [] -> [new:B]")
+    assert apply.plan(gl, spec) == [changed, ("added", "issue", "B")]
+    assert apply.apply(gl, spec) == [changed, ("added", "issue", "B")]
+    b = project.issues.list()[-1]
+    assert b.title == "B" and not hasattr(b, "blocked_by")
+    assert a.links.created == [
+        {
+            "target_project_id": 1,
+            "target_issue_iid": b.iid,
+            "link_type": "is_blocked_by",
+        }
+    ]
+    # B is live now: the title ref resolves to its iid, so a YAML not yet
+    # re-pulled shows neither a phantom change nor drift against its base
+    assert apply.plan(gl, spec) == []
+    base = {**SPEC, "issues": [{"title": "A", "iid": 1}]}
+    assert apply.plan(gl, spec, base=base) == []
+
+
+def test_milestone_created_and_assigned(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"])
+    project = writable_project(issue)
+    spec = {
+        **SPEC,
+        "milestones": [{"title": "Beta", "due_date": datetime.date(2026, 11, 1)}],
+        "issues": [{"title": "one", "labels": ["Doing"], "milestone": "Beta"}],
+    }
+    gl = use_project(monkeypatch, project)
+    want = [
+        ("added", "milestone", "Beta"),
+        ("changed", "issue", "one: milestone none -> Beta"),
+    ]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    (made,) = project.milestones.list()
+    assert made.created == {"title": "Beta", "due_date": "2026-11-01"}
+    assert issue.milestone_id == made.id and issue.saved
+
+
+def test_milestone_clear_with_null(monkeypatch):
+    beta = {"title": "Beta", "due_date": None, "description": ""}
+    issue = FakeIssue("one", labels=["Doing"], milestone=beta)
+    project = writable_project(issue)
+    project.milestones.list().append(milestone("Beta"))
+    spec = {
+        **SPEC,
+        "issues": [{"title": "one", "labels": ["Doing"], "milestone": None}],
+    }
+    gl = use_project(monkeypatch, project)
+    want = [("changed", "issue", "one: milestone Beta -> none")]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    assert issue.milestone_id is None and issue.saved
+    # no key: the milestone is left alone
+    assert apply.plan(gl, SPEC) == []
+
+
+def test_plan_reports_milestone_changes(monkeypatch):
+    beta = milestone("Beta", "2026-11-01", "old")
+    project = writable_project(FakeIssue("one", labels=["Doing"]))
+    project.milestones.list().append(beta)
+    spec = {
+        **SPEC,
+        "milestones": [
+            {
+                "title": "Beta",
+                "due_date": datetime.date(2026, 11, 15),
+                "description": "new",
+            },
+            {"title": "Gamma"},
+        ],
+    }
+    want = [
+        ("changed", "milestone", "Beta: due_date 2026-11-01 -> 2026-11-15"),
+        ("changed", "milestone", "Beta: description (edited)"),
+        ("added", "milestone", "Gamma"),
+    ]
+    gl = use_project(monkeypatch, project)
+    assert apply.plan(gl, spec) == want
+    base = {**SPEC, "milestones": [{"title": "Beta", "due_date": "2026-11-01"}]}
+    assert apply.diff(spec, apply.have_from_spec(base))[-1] == want[-1]
+    assert ("added", "milestone", "Gamma") in apply.diff(spec, None)
+    assert apply.apply(gl, spec) == want
+    assert beta.saved and beta.due_date == "2026-11-15" and beta.description == "new"
+    assert apply.plan(gl, spec) == []
+
+
+def test_group_milestone_counts_as_existing(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"])
+    project = writable_project(issue)
+    project.namespace = {"kind": "group", "full_path": "grp"}
+    group = types.SimpleNamespace(milestones=_lister([milestone("Beta", id=77)]))
+    spec = {
+        **SPEC,
+        "milestones": [{"title": "Beta"}],
+        "issues": [{"title": "one", "labels": ["Doing"], "milestone": "Beta"}],
+    }
+    gl = use_project(monkeypatch, project)
+    gl.groups = types.SimpleNamespace(get=lambda path: group)
+    want = [("changed", "issue", "one: milestone none -> Beta")]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    assert project.milestones.list() == [] and issue.milestone_id == 77
+
+    def forbidden(path):
+        raise GitlabGetError("403 Forbidden", response_code=403)
+
+    gl.groups.get = forbidden  # unreadable group: project milestones only
+    assert apply.plan(gl, spec)[0] == ("added", "milestone", "Beta")
+
+
+def test_pull_then_plan_is_empty_with_links_milestones_priority(monkeypatch, tmp_path):
+    project, board, columns = board_fixture()
+    issue = project.issues.list()[0]
+    issue.description = "body\n\nBlocked by: #11"
+    issue.milestone = {
+        "title": "Beta",
+        "due_date": "2026-11-01",
+        "description": "what beta means\n",
+    }
+    issue.links = FakeLinks(
+        [link(9), link(4, project_id=8, link_id=2, full="infra/platform#4")]
+    )
+    project.milestones.list().append(
+        milestone("Beta", "2026-11-01", "what beta means\n")
+    )
+    scoped_label(project, "priority::2", "#ff0000", None)
+    spec = apply.spec_from_board(project, board, columns)
+    assert spec["issues"][0]["blocked_by"] == [9, 11, "infra/platform#4"]
+    assert spec["issues"][0]["milestone"] == "Beta"
+    assert spec["milestones"] == [
+        {"title": "Beta", "due_date": "2026-11-01", "description": "what beta means"}
+    ]
+    spec = reload(spec, tmp_path, "b.yaml")
+    assert apply.plan(use_project(monkeypatch, project), spec) == []
+    assert apply.diff(spec, apply.have_from_spec(spec)) == []
+
+
+def test_blocker_not_found_is_skipped_and_rest_applies(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"])
+    project = writable_project(issue)
+
+    def get_project(_gl, path):
+        if path != "grp/proj":
+            raise client.GitlabProblem(f"no project {path!r}")
+        return project
+
+    monkeypatch.setattr(apply.client, "get_project", get_project)
+    spec = {
+        **SPEC,
+        "issues": [
+            {"title": "one", "labels": ["Doing"], "blocked_by": [9, "gone/x#4"]}
+        ],
+    }
+    assert apply.apply(types.SimpleNamespace(), spec) == [
+        ("changed", "issue", "one: blocked_by [] -> [#9, gone/x#4]"),
+        ("skipped", "link", "one: blocker gone/x#4 not found"),
+    ]
+    assert [c["target_issue_iid"] for c in issue.links.created] == [9]
+
+
+def test_downgrade_raises_one_problem(monkeypatch):
+    first = FakeIssue("one", iid=1)
+    second = FakeIssue("two", iid=2)
+    first.links.downgrade = second.links.downgrade = True
+    project = writable_project(first)
+    project.issues.list().append(second)
+    spec = {
+        **SPEC,
+        "issues": [
+            {"title": "one", "iid": 1, "blocked_by": [9]},
+            {"title": "two", "iid": 2, "blocked_by": [9]},
+        ],
+    }
+    gl = use_project(monkeypatch, project)
+    with pytest.raises(client.GitlabProblem, match="Premium"):
+        apply.apply(gl, spec)
+    assert first.links.items == [] and len(first.links.deleted) == 1
+    assert second.links.created == []  # the first refusal stopped the run

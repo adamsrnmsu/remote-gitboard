@@ -21,9 +21,10 @@ class FakeList:
 
 
 class FakeIssue:
-    def __init__(self, iid, labels, title="t", assignee=None, due_date=None):
+    def __init__(self, iid, labels, title="t", assignee=None, due_date=None, rp=None):
         self.iid, self.labels, self.title = iid, labels, title
         self.assignee, self.due_date = assignee, due_date
+        self.relative_position = rp
         self.web_url = f"http://gl/-/issues/{iid}"
 
 
@@ -48,12 +49,15 @@ class FakeNote:
 
 
 class HistIssue(FakeIssue):
-    def __init__(self, iid, labels, state="opened", events=(), notes=(), **kw):
+    def __init__(
+        self, iid, labels, state="opened", events=(), notes=(), links=(), **kw
+    ):
         super().__init__(iid, labels, **kw)
         self.state = state
         self.created_at = "2026-09-01T00:00:00Z"
         self.resourcelabelevents = Mgr(list(events))
         self.notes = Mgr(list(notes))
+        self.links = Mgr(list(links))
 
 
 class FakeBoard:
@@ -65,6 +69,7 @@ class FakeBoard:
 class FakeProject:
     def __init__(self, issues, path="grp/proj"):
         self.path_with_namespace = path
+        self.id = 7
         self.issues = type("I", (), {"list": lambda _s, **_: issues})()
 
 
@@ -177,22 +182,37 @@ def test_no_due_date_is_never_overdue():
 
 
 def test_columns_put_overdue_first():
-    """A truncated column must show what you would have gone looking for."""
+    """A truncated column must show what you would have gone looking for,
+    even when the board order puts it last."""
     issues = [
-        FakeIssue(1, ["Doing"]),
-        FakeIssue(2, ["Doing"], due_date="2000-01-01"),
-        FakeIssue(3, ["Doing"]),
+        FakeIssue(1, ["Doing"], rp=1),
+        FakeIssue(2, ["Doing"], due_date="2000-01-01", rp=9),
+        FakeIssue(3, ["Doing"], rp=2),
     ]
     cols = columns(issues, [FakeList("Doing", 1)])
     assert [i.iid for i in cols[1][1]][0] == 2
 
 
 def test_columns_are_ordered_deterministically():
-    """The API's own order is not stable; two calls must not differ."""
+    """The API's own order is not stable; two calls must not differ. Equal
+    (null) board positions fall back to newest first."""
     issues = [FakeIssue(3, []), FakeIssue(1, []), FakeIssue(2, [])]
     first = [i.iid for i in columns(issues, [])[0][1]]
     second = [i.iid for i in columns(list(reversed(issues)), [])[0][1]]
     assert first == second == [3, 2, 1]
+
+
+def test_columns_follow_board_order_after_overdue():
+    """GitLab's manual order (the one the lead sets through the YAML), nulls
+    last; a due date no longer reorders anything but an overdue card."""
+    issues = [
+        FakeIssue(1, ["Doing"], rp=3),
+        FakeIssue(2, ["Doing"], rp=1, due_date="2999-01-01"),
+        FakeIssue(3, ["Doing"]),
+        FakeIssue(4, ["Doing"], rp=9, due_date="2000-01-01"),
+    ]
+    cols = columns(issues, [FakeList("Doing", 1)])
+    assert [i.iid for i in cols[1][1]] == [4, 2, 1, 3]
 
 
 def test_summarise_does_not_double_count_multi_column_issues():
@@ -254,11 +274,12 @@ SPEC = {
 
 
 def test_columns_from_spec_matches_board_columns():
+    """A pulled YAML lists issues in board order, so offline matches live."""
     live = columns(
         [
-            FakeIssue(3, ["Doing", "Review"]),
-            FakeIssue(4, []),
-            FakeIssue(5, ["Doing"]),
+            FakeIssue(5, ["Doing"], rp=300),
+            FakeIssue(3, ["Doing", "Review"], rp=100),
+            FakeIssue(4, [], rp=200),
         ],
         [FakeList("Doing", 1), FakeList("Review", 2)],
     )
@@ -266,7 +287,26 @@ def test_columns_from_spec_matches_board_columns():
     shape = lambda cols: [(n, [i.iid for i in issues]) for n, issues in cols]  # noqa: E731
     assert shape(offline) == shape(live)
     assert offline[0][0] == "Backlog"
-    assert offline[1][1][0].web_url == "http://gl/grp/proj/-/issues/5"
+    assert offline[1][1][0].web_url == "http://gl/grp/proj/-/issues/3"
+
+
+def test_columns_from_spec_use_yaml_order():
+    """Offline, the YAML's list order is the board order; overdue still
+    surfaces first, and each stand-in carries its milestone."""
+    spec = {
+        **SPEC,
+        "issues": [
+            {"title": "c", "iid": 1, "labels": ["Doing"]},
+            {"title": "a", "labels": ["Doing"], "milestone": "Beta"},
+            {"title": "b", "iid": 9, "labels": ["Doing"]},
+            {"title": "late", "iid": 2, "labels": ["Doing"], "due_date": "2000-01-01"},
+        ],
+    }
+    doing = board.columns_from_spec(spec, "http://gl")[1][1]
+    assert [i.title for i in doing] == ["late", "c", "a", "b"]
+    assert [i.relative_position for i in doing] == [3, 0, 1, 2]
+    assert doing[2].milestone == {"title": "Beta"}
+    assert doing[1].milestone is None
 
 
 def test_markdown_from_spec_handles_new_issues():
@@ -399,9 +439,67 @@ def test_history_flattens_assignee_and_milestone():
     assert (history[1]["assignee"], history[1]["milestone"]) == (None, None)
     assert set(history[0]) == {
         "iid", "title", "state", "created_at", "closed_at", "updated_at",
-        "assignee", "labels", "milestone", "due_date", "web_url", "tasks",
-        "transitions", "verdicts", "notes",
+        "assignee", "labels", "milestone", "milestone_due", "priority",
+        "due_date", "web_url", "tasks", "blocked_by", "transitions",
+        "verdicts", "notes",
     }  # fmt: skip
+
+
+def link(iid, project_id=7, full=None, kind="is_blocked_by", since="2026-09-20"):
+    return types.SimpleNamespace(
+        iid=iid,
+        project_id=project_id,
+        link_type=kind,
+        issue_link_id=iid,
+        link_created_at=since,
+        references={"full": full or f"grp/proj#{iid}"},
+    )
+
+
+def test_history_carries_blocked_by_priority_and_milestone_due():
+    """A blocker's state comes from the fetched issues: open and not in Done
+    is opened; closed, in Done, or absent (every open issue was fetched) is
+    closed; another project's card is unknown."""
+    card = HistIssue(
+        12,
+        ["Doing", "priority::2", "priority::1"],
+        links=[
+            link(9),
+            link(8),
+            link(77),
+            link(6),
+            link(4, project_id=99, full="other/x#4"),
+            link(5, kind="relates_to"),
+        ],
+    )
+    card.milestone = {"title": "Beta", "due_date": "2026-11-01"}
+    card.description = "Body\n\nBlocked by: #9, #3"
+    opened = [
+        card,
+        HistIssue(9, ["Doing"]),
+        HistIssue(6, ["Done"]),
+        HistIssue(3, []),
+        HistIssue(5, []),
+    ]
+    closed = [HistIssue(8, [], state="closed")]
+    history, _ = board.fetch_history(StateProject(opened, closed), FakeBoard([]), SINCE)
+    got = next(h for h in history if h["iid"] == 12)
+    assert got["priority"] == 1
+    assert (got["milestone"], got["milestone_due"]) == ("Beta", "2026-11-01")
+    assert got["blocked_by"] == [
+        {"ref": "6", "state": "closed", "since": "2026-09-20"},
+        {"ref": "8", "state": "closed", "since": "2026-09-20"},
+        {"ref": "9", "state": "opened", "since": "2026-09-20"},
+        {"ref": "77", "state": "closed", "since": "2026-09-20"},
+        {"ref": "other/x#4", "state": None, "since": "2026-09-20"},
+        {"ref": "3", "state": "opened", "since": None},
+    ]
+    plain = next(h for h in history if h["iid"] == 9)
+    assert (plain["priority"], plain["milestone_due"], plain["blocked_by"]) == (
+        None,
+        None,
+        [],
+    )
 
 
 def test_board_view_marks_only_the_selected_card():
