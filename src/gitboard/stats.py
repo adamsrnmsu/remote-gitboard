@@ -1,4 +1,5 @@
-"""Board statistics over an issue history. Pure: no network, stdlib only.
+"""Board statistics over an issue history. Pure: no network; stdlib plus
+`graph` for the blocker flags.
 
 Input is what `board.fetch_history` returns — plain dicts with ISO
 timestamps, label `transitions` (column labels only), `verdicts` and
@@ -13,8 +14,9 @@ from email.utils import format_datetime
 from pathlib import Path
 from statistics import mean, median
 
-from gitboard import ingest, report
+from gitboard import graph, ingest, report
 
+FLAGS = graph.FLAGS
 VERIFY, REVIEW, DONE, FAILED = "Verify", "Review", "Done", "Failed"
 BACKLOG = "Backlog"
 NOT_WIP = {BACKLOG, DONE, FAILED}
@@ -252,7 +254,8 @@ def momentum(summary):
 
 
 def three_moves(person):
-    """Oldest verify, first overdue, first question, then more verify; at most 3."""
+    """Oldest verify, first overdue, first unblock, first question, then more
+    verify; at most 3."""
 
     def move(verb, item, age):
         return {
@@ -267,6 +270,11 @@ def three_moves(person):
         move("Verify", q, f"{q['days']} d in Verify") for q in person["verify_queue"]
     ]
     overdue = [move("Finish", o, f"due {o['due']}") for o in person["overdue"]]
+    unblock = [
+        move("Unblock", x, x["detail"])
+        for k in ("unowned_blocker", "priority_inversion")
+        for x in person.get(k, [])
+    ]
     questions = [
         move("Answer", q, f"asked {q['days']} d ago by {q['author']}")
         for q in person["questions"]
@@ -274,7 +282,7 @@ def three_moves(person):
     # one row per card: a card that is overdue *and* in Verify is one move, so
     # each bucket contributes its first card not already picked
     picked, seen = [], set()
-    for bucket in (queue[:1], overdue, questions, queue[1:]):
+    for bucket in (queue[:1], overdue, unblock, questions, queue[1:]):
         for m in bucket:
             if m["iid"] not in seen:
                 seen.add(m["iid"])
@@ -415,6 +423,13 @@ def summarise(history, columns, start, end, now):
                 for i in opened
                 if any(len(scopes(i["labels"], s)) > 1 for s in ("epic", "story"))
             ),
+            # a dump written before links were read has no `blocked_by` at
+            # all; its Blocked cards are unknown, not stale
+            **(
+                graph.flags(history, columns)
+                if any("blocked_by" in i for i in history)
+                else {k: [] for k in FLAGS}
+            ),
         },
         "trend": {
             **{k: (prev[k], cur[k]) for k in cur},
@@ -472,6 +487,22 @@ def for_person(summary, history, username, now):
             for q in summary["flow"]["questions"]
             if q["assignee"] == username and q["author"] != username
         ],
+        **_my_flags(summary["flow"], history, username),
+    }
+
+
+def _my_flags(flow, history, username):
+    """The flags on this person's cards. An unowned blocker has no assignee
+    by definition, so it goes to whoever owns the card waiting on it."""
+    owner = {str(i["iid"]): i["assignee"] for i in history}
+    return {
+        k: [
+            x
+            for x in flow.get(k, [])
+            if (owner.get(x["blocker"]) if k == "unowned_blocker" else x["assignee"])
+            == username
+        ]
+        for k in FLAGS
     }
 
 
@@ -504,6 +535,7 @@ def stat_row(summary, project, board, ts):
         "tight": len(f.get("tight") or []),
         "overdue": f.get("overdue", 0),
         "stuck": len(f.get("stuck") or []),
+        **{k: len(f.get(k) or []) for k in FLAGS},
         "by_epic": o.get("by_epic") or {},
         "by_assignee": o.get("by_assignee") or {},
     }
@@ -602,6 +634,20 @@ def _tight_table(tight, who=False):
         ],
         "iid", "title", *(("assignee",) if who else ()), "due", "expected", "basis",
     )  # fmt: skip
+
+
+def blocker_items(d):
+    """Every flag in `d` (a flow or person dict) as one list, `kind` added."""
+    return [{"kind": k, **x} for k in FLAGS for x in d.get(k, [])]
+
+
+def _blockers_md(d, heading):
+    """Where the board disagrees with its links; no section when it agrees."""
+    items = blocker_items(d)
+    if not items:
+        return []
+    rows = [(x["kind"], f"#{x['iid']} {x['title']}", x["detail"]) for x in items]
+    return [heading, _table(rows, "kind", "card", "detail"), ""]
 
 
 def render_weekly_md(rows):
@@ -720,6 +766,7 @@ def render_team_md(summary, weekly=None):
         "### Tight dates",
         _tight_table(f.get("tight", []), who=True),
         "",
+        *_blockers_md(f, "### Blockers"),
         "### WIP",
         _counts(f["wip"]),
         "",
@@ -769,6 +816,7 @@ def render_person_md(person, summary, username):
         "## Tight dates",
         _tight_table(person.get("tight", [])),
         "",
+        *_blockers_md(person, "## Your blockers"),
         "## Open by column",
         _counts(person["open_by_column"]),
         "",

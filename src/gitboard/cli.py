@@ -27,9 +27,10 @@ from rich.text import Text
 
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
-from gitboard import client
+from gitboard import client, graph_html
 from gitboard import edit as edit_mod
 from gitboard import estimate as estimate_mod
+from gitboard import graph as graph_mod
 from gitboard import guide as guide_mod
 from gitboard import ingest as ingest_mod
 from gitboard import mail as mail_mod
@@ -1152,6 +1153,14 @@ def digest(
             entries.append(
                 {"name": who, "to": to or "", "subject": subject, "files": files}
             )
+        g = graph_mod.build(history)
+        if series is not None and g["edges"]:
+            title = f"{meta['project']} — blockers and milestones"
+            write(
+                "graph.html",
+                graph_html.render_html(g, title, _flagged(summary["flow"])),
+            )
+            entries.append({"name": "graph", "files": {"html": "graph.html"}})
         if series is not None:
             write("index.html", mail_mod.render_index_html(entries))
         for w in written:
@@ -1163,6 +1172,76 @@ def digest(
             return
         path = None if from_file else _need(project, "project", "project")
         one(path, board_name or get_config().board)
+
+    _run(go)
+
+
+def _flagged(found):
+    """Graph keys of both cards each flag names: what the page draws red."""
+    keys = set()
+    for item in (x for f in graph_mod.FLAGS for x in found[f]):
+        keys.add(
+            str(item["iid"]) if item["iid"] is not None else f"new:{item['title']}"
+        )
+        if item["blocker"]:
+            keys.add(item["blocker"])
+    return keys
+
+
+@app.command()
+def graph(
+    project: str | None = typer.Argument(None, help="group/project"),
+    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    from_file: str | None = typer.Option(
+        None, "--from", help="Draw a board YAML instead of GitLab. No network."
+    ),
+    milestone: str | None = typer.Option(
+        None, "--milestone", "-M", help="Only this milestone and what feeds it."
+    ),
+    html: str | None = typer.Option(
+        None, "--html", help="Write a self-contained interactive page here."
+    ),
+    mermaid: bool = typer.Option(
+        False, "--mermaid", help="Print a Mermaid flowchart to stdout."
+    ),
+):
+    """Draw how cards block each other on the way to their milestones."""
+
+    def go():
+        if from_file:
+            spec = apply_mod.load(from_file)
+            cards = graph_mod.cards_from_spec(spec, get_config().url)
+            columns = [c["name"] for c in spec["columns"]]
+            name = spec["project"]
+        else:
+            path = _need(project, "project", "project")
+            proj, board = board_mod.fetch(path, board_name or get_config().board)
+            since = datetime.now(UTC) - timedelta(days=30)
+            cards, columns = board_mod.fetch_history(proj, board, since=since)
+            name = proj.path_with_namespace
+        g = graph_mod.build(cards)
+        if milestone:
+            known = sorted(
+                n["title"] for n in g["nodes"].values() if n["kind"] == "milestone"
+            )
+            if milestone not in known:
+                raise ConfigError(
+                    f"no milestone {milestone!r}; have: {', '.join(known) or 'none'}"
+                )
+            g = graph_mod.subgraph(g, milestone)
+        if not g["edges"]:
+            err().print("[muted]no blockers or milestones on this board[/]")
+            return
+        flagged = _flagged(graph_mod.flags(cards, columns))
+        if html:
+            title = f"{name} — {milestone or 'blockers and milestones'}"
+            Path(html).write_text(graph_html.render_html(g, title, flagged))
+            err().print(f"[muted]wrote {html}[/]")
+        elif mermaid:
+            print(graph_mod.render_mermaid(g), end="")
+        else:
+            today = datetime.now().date().isoformat()
+            out().print(graph_mod.render_tree(g, today, flagged))
 
     _run(go)
 
@@ -1901,13 +1980,25 @@ def tui(
     _run(go)
 
 
+def _review_first(row):
+    """Notes, then link removals and reorders: what the lead reads before a
+    go-ahead goes above the routine label and date churn."""
+    _, what, detail = row
+    if what == "note":
+        return 0
+    return 1 if what in ("link", "order") or ": blocked_by " in detail else 2
+
+
 def _changes_table(pending, title):
     table = Table(title=title, title_justify="left", title_style="muted", box=None)
     table.add_column("", width=1)
     table.add_column("", style="muted", width=7)
     table.add_column("")
-    for kind, what, detail in pending:
-        table.add_row(Text(SIGN.get(kind, "?"), STYLE.get(kind, "")), what, detail)
+    for kind, what, detail in sorted(pending, key=_review_first):
+        # Text, not markup: `[#11]` (a blocked_by value) is a rich colour tag
+        table.add_row(
+            Text(SIGN.get(kind, "?"), STYLE.get(kind, "")), Text(what), Text(detail)
+        )
     return table
 
 

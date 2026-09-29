@@ -17,7 +17,8 @@ extensions = [
 
 myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]
 myst_heading_anchors = 2
-exclude_patterns = ["_build", "_cli.md", "superpowers"]  # specs and plans, not user docs
+# superpowers holds specs and plans, not user docs
+exclude_patterns = ["_build", "_cli.md", "superpowers"]
 
 html_theme = "shibuya"
 html_theme_options = {

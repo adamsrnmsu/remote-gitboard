@@ -9,6 +9,7 @@ import datetime
 import types
 
 import pytest
+from gitlab.exceptions import GitlabGetError
 
 from gitboard import apply, client
 
@@ -24,23 +25,39 @@ class FakeIssue:
         iid=1,
         state="opened",
         notes=(),
+        milestone=None,
+        links=(),
     ):
         self.title, self.labels, self.iid = title, list(labels), iid
+        self.id, self.relative_position = iid + 1000, None
         self.description, self.due_date = description, due_date
         self.assignee = {"username": assignee} if assignee else None
+        self.milestone = milestone  # the API's dict: title, due_date, description
         self.state, self.saved = state, False
         self.notes = FakeNotes([fake_note(b) for b in notes])
+        self.links = FakeLinks(links)
 
     def save(self):
         self.saved = True
 
 
 class FakeProject:
-    def __init__(self, labels=(), boards=(), issues=()):
+    def __init__(self, labels=(), boards=(), issues=(), milestones=()):
+        self.id, self.path_with_namespace = 1, "grp/proj"
+        self.namespace = {"kind": "user", "full_path": "grp"}
         self.labels = _lister([types.SimpleNamespace(name=n) for n in labels])
         self.boards = _lister([types.SimpleNamespace(name=n) for n in boards])
         self.issues = _lister(list(issues))
         self.issues.create = self._create
+        self.milestones = _lister(list(milestones))
+        self.milestones.create = self._create_milestone
+
+    def _create_milestone(self, payload):
+        items = self.milestones.list()
+        found = milestone(id=len(items) + 50, **payload)
+        found.created = payload
+        items.append(found)
+        return found
 
     def _create(self, payload):
         items = self.issues.list()
@@ -53,6 +70,53 @@ class FakeProject:
 
 def _lister(items):
     return types.SimpleNamespace(list=lambda **_: items)
+
+
+def milestone(title, due_date=None, description="", id=50):
+    m = types.SimpleNamespace(
+        title=title, due_date=due_date, description=description, id=id, saved=False
+    )
+    m.save = lambda: setattr(m, "saved", True)
+    return m
+
+
+def link(iid, project_id=1, kind="is_blocked_by", link_id=1, full=None):
+    return types.SimpleNamespace(
+        iid=iid,
+        project_id=project_id,
+        link_type=kind,
+        issue_link_id=link_id,
+        link_created_at="2026-09-20T10:00:00Z",
+        references={"full": full or f"grp/proj#{iid}"},
+    )
+
+
+class FakeLinks:
+    """issue.links; `downgrade` answers the way CE does, storing relates_to."""
+
+    def __init__(self, items=(), downgrade=False):
+        self.items, self.downgrade = list(items), downgrade
+        self.created, self.deleted, self.listed = [], [], 0
+
+    def list(self, **_):
+        self.listed += 1
+        return list(self.items)
+
+    def create(self, data):
+        self.created.append(data)
+        kind = "relates_to" if self.downgrade else data["link_type"]
+        self.items.append(
+            link(
+                data["target_issue_iid"],
+                data["target_project_id"],
+                kind,
+                900 + len(self.created),
+            )
+        )
+
+    def delete(self, link_id):
+        self.deleted.append(link_id)
+        self.items = [x for x in self.items if x.issue_link_id != link_id]
 
 
 def use_project(monkeypatch, project):
@@ -110,7 +174,12 @@ def test_labels_are_sorted_so_yaml_order_is_not_a_diff():
 
 def test_a_settled_issue_shows_no_drift():
     """wanted_issue and current_issue must agree, or apply is never idempotent."""
-    spec = {"title": "t", "labels": ["Doing"], "description": "body\n"}
+    spec = {
+        "title": "t",
+        "labels": ["Doing"],
+        "description": "body\n",
+        "milestone": None,
+    }
     issue = FakeIssue("t", labels=["Doing"], description="body")
     assert apply.wanted_issue(spec) == apply.current_issue(issue)
 
@@ -890,3 +959,431 @@ def test_an_issue_missing_from_the_base_is_diffed_two_way():
     assert apply.diff(edited, live, base=base) == [
         ("changed", "issue", "one: labels [] -> [Blocked]")
     ]
+
+
+# --- blockers and milestones ------------------------------------------------
+
+
+def write_yaml(tmp_path, text):
+    f = tmp_path / "b.yaml"
+    f.write_text("project: grp/proj\nboard: B\n" + text)
+    return str(f)
+
+
+def test_load_rejects_blocked_by_cycle(tmp_path):
+    path = write_yaml(
+        tmp_path,
+        "issues:\n"
+        "  - {title: a, iid: 1, blocked_by: [2]}\n"
+        "  - {title: b, iid: 2, blocked_by: [a]}\n",
+    )
+    with pytest.raises(apply.SpecError, match="b.yaml: blocked_by cycle"):
+        apply.load(path)
+    # a scalar is a typo, not one ref: a string would be iterated per letter
+    path = write_yaml(tmp_path, "issues:\n  - {title: a, blocked_by: 9}\n")
+    with pytest.raises(apply.SpecError, match="blocked_by must be a list"):
+        apply.load(path)
+
+
+def test_load_rejects_unknown_milestone(tmp_path):
+    path = write_yaml(tmp_path, "issues:\n  - {title: t, milestone: X}\n")
+    with pytest.raises(
+        apply.SpecError, match=r"milestone 'X' \(issue 't'\) is not under milestones:"
+    ):
+        apply.load(path)
+    path = write_yaml(tmp_path, "milestones:\n  - {due_date: 2026-11-01}\n")
+    with pytest.raises(apply.SpecError, match="needs a title"):
+        apply.load(path)
+    path = write_yaml(tmp_path, "milestones:\n  - {title: X}\n  - {title: 'X '}\n")
+    with pytest.raises(apply.SpecError, match="duplicate milestone 'X'"):
+        apply.load(path)
+    path = write_yaml(
+        tmp_path, "milestones:\n  - {title: X}\nissues:\n  - {title: t, milestone: X}\n"
+    )
+    assert apply.load(path)["issues"][0]["milestone"] == "X"
+
+
+def test_load_rejects_two_priorities(tmp_path):
+    path = write_yaml(
+        tmp_path, "issues:\n  - {title: t, labels: ['priority::1', 'priority::2']}\n"
+    )
+    with pytest.raises(apply.SpecError, match="two priority:: labels"):
+        apply.load(path)
+
+
+def test_absent_blocked_by_is_unmanaged(monkeypatch):
+    """A hand-written spec must not wipe every link on the board."""
+    issue = FakeIssue("one", labels=["Doing"], links=[link(9)])
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert apply.plan(gl, SPEC) == []
+    assert apply.apply(gl, SPEC) == []
+    assert issue.links.created == issue.links.deleted == []
+    assert issue.links.listed == 0  # no key, no links request
+
+
+def test_empty_blocked_by_removes_native_links(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"], links=[link(9, link_id=5)])
+    spec = {**SPEC, "issues": [{"title": "one", "labels": ["Doing"], "blocked_by": []}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    want = [("changed", "issue", "one: blocked_by [#9] -> []")]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    assert issue.links.deleted == [5]
+    assert apply.plan(gl, spec) == []
+
+
+def test_blocked_by_three_way_skipped_and_drift():
+    def bb(*refs):
+        return {"blocked_by": list(refs)}
+
+    assert apply.issue_changes("one", bb("9"), bb("9", "11"), bb("9"), set()) == (
+        {},
+        [("skipped", "issue", "one: blocked_by changed on GitLab, kept")],
+    )
+    assert apply.issue_changes("one", bb("10"), bb("11"), bb("9"), set()) == (
+        {},
+        [("drift", "issue", "one: blocked_by [#11] -> [#10]")],
+    )
+    # a base card that lacked the key had no blockers
+    assert apply.issue_changes("one", bb("10"), bb(), {"labels": []}, set()) == (
+        {"blocked_by": ["10"]},
+        [("changed", "issue", "one: blocked_by [] -> [#10]")],
+    )
+
+
+def test_new_title_ref_links_after_create(monkeypatch):
+    a = FakeIssue("A", iid=1)
+    spec = {
+        **SPEC,
+        "issues": [{"title": "A", "iid": 1, "blocked_by": ["B"]}, {"title": "B"}],
+    }
+    project = writable_project(a)
+    gl = use_project(monkeypatch, project)
+    changed = ("changed", "issue", "A: blocked_by [] -> [new:B]")
+    assert apply.plan(gl, spec) == [changed, ("added", "issue", "B")]
+    assert apply.apply(gl, spec) == [changed, ("added", "issue", "B")]
+    b = project.issues.list()[-1]
+    assert b.title == "B" and not hasattr(b, "blocked_by")
+    assert a.links.created == [
+        {
+            "target_project_id": 1,
+            "target_issue_iid": b.iid,
+            "link_type": "is_blocked_by",
+        }
+    ]
+    # B is live now: the title ref resolves to its iid, so a YAML not yet
+    # re-pulled shows neither a phantom change nor drift against its base
+    assert apply.plan(gl, spec) == []
+    base = {**SPEC, "issues": [{"title": "A", "iid": 1}]}
+    assert apply.plan(gl, spec, base=base) == []
+
+
+def test_milestone_created_and_assigned(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"])
+    project = writable_project(issue)
+    spec = {
+        **SPEC,
+        "milestones": [{"title": "Beta", "due_date": datetime.date(2026, 11, 1)}],
+        "issues": [{"title": "one", "labels": ["Doing"], "milestone": "Beta"}],
+    }
+    gl = use_project(monkeypatch, project)
+    want = [
+        ("added", "milestone", "Beta"),
+        ("changed", "issue", "one: milestone none -> Beta"),
+    ]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    (made,) = project.milestones.list()
+    assert made.created == {"title": "Beta", "due_date": "2026-11-01"}
+    assert issue.milestone_id == made.id and issue.saved
+
+
+def test_milestone_clear_with_null(monkeypatch):
+    beta = {"title": "Beta", "due_date": None, "description": ""}
+    issue = FakeIssue("one", labels=["Doing"], milestone=beta)
+    project = writable_project(issue)
+    project.milestones.list().append(milestone("Beta"))
+    spec = {
+        **SPEC,
+        "issues": [{"title": "one", "labels": ["Doing"], "milestone": None}],
+    }
+    gl = use_project(monkeypatch, project)
+    want = [("changed", "issue", "one: milestone Beta -> none")]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    assert issue.milestone_id is None and issue.saved
+    # no key: the milestone is left alone
+    assert apply.plan(gl, SPEC) == []
+
+
+def test_plan_reports_milestone_changes(monkeypatch):
+    beta = milestone("Beta", "2026-11-01", "old")
+    project = writable_project(FakeIssue("one", labels=["Doing"]))
+    project.milestones.list().append(beta)
+    spec = {
+        **SPEC,
+        "milestones": [
+            {
+                "title": "Beta",
+                "due_date": datetime.date(2026, 11, 15),
+                "description": "new",
+            },
+            {"title": "Gamma"},
+        ],
+    }
+    want = [
+        ("changed", "milestone", "Beta: due_date 2026-11-01 -> 2026-11-15"),
+        ("changed", "milestone", "Beta: description (edited)"),
+        ("added", "milestone", "Gamma"),
+    ]
+    gl = use_project(monkeypatch, project)
+    assert apply.plan(gl, spec) == want
+    base = {**SPEC, "milestones": [{"title": "Beta", "due_date": "2026-11-01"}]}
+    assert apply.diff(spec, apply.have_from_spec(base))[-1] == want[-1]
+    assert ("added", "milestone", "Gamma") in apply.diff(spec, None)
+    assert apply.apply(gl, spec) == want
+    assert beta.saved and beta.due_date == "2026-11-15" and beta.description == "new"
+    assert apply.plan(gl, spec) == []
+
+
+def test_group_milestone_counts_as_existing(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"])
+    project = writable_project(issue)
+    project.namespace = {"kind": "group", "full_path": "grp"}
+    group = types.SimpleNamespace(milestones=_lister([milestone("Beta", id=77)]))
+    spec = {
+        **SPEC,
+        "milestones": [{"title": "Beta"}],
+        "issues": [{"title": "one", "labels": ["Doing"], "milestone": "Beta"}],
+    }
+    gl = use_project(monkeypatch, project)
+    gl.groups = types.SimpleNamespace(get=lambda path: group)
+    want = [("changed", "issue", "one: milestone none -> Beta")]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    assert project.milestones.list() == [] and issue.milestone_id == 77
+
+    def forbidden(path):
+        raise GitlabGetError("403 Forbidden", response_code=403)
+
+    gl.groups.get = forbidden  # unreadable group: project milestones only
+    assert apply.plan(gl, spec)[0] == ("added", "milestone", "Beta")
+
+
+def test_pull_then_plan_is_empty_with_links_milestones_priority(monkeypatch, tmp_path):
+    project, board, columns = board_fixture()
+    issue = project.issues.list()[0]
+    issue.description = "body\n\nBlocked by: #11"
+    issue.milestone = {
+        "title": "Beta",
+        "due_date": "2026-11-01",
+        "description": "what beta means\n",
+    }
+    issue.links = FakeLinks(
+        [link(9), link(4, project_id=8, link_id=2, full="infra/platform#4")]
+    )
+    project.milestones.list().append(
+        milestone("Beta", "2026-11-01", "what beta means\n")
+    )
+    scoped_label(project, "priority::2", "#ff0000", None)
+    spec = apply.spec_from_board(project, board, columns)
+    assert spec["issues"][0]["blocked_by"] == [9, 11, "infra/platform#4"]
+    assert spec["issues"][0]["milestone"] == "Beta"
+    assert spec["milestones"] == [
+        {"title": "Beta", "due_date": "2026-11-01", "description": "what beta means"}
+    ]
+    spec = reload(spec, tmp_path, "b.yaml")
+    assert apply.plan(use_project(monkeypatch, project), spec) == []
+    assert apply.diff(spec, apply.have_from_spec(spec)) == []
+
+
+def test_blocker_not_found_is_skipped_and_rest_applies(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"])
+    project = writable_project(issue)
+
+    def get_project(_gl, path):
+        if path != "grp/proj":
+            raise client.GitlabProblem(f"no project {path!r}")
+        return project
+
+    monkeypatch.setattr(apply.client, "get_project", get_project)
+    spec = {
+        **SPEC,
+        "issues": [
+            {"title": "one", "labels": ["Doing"], "blocked_by": [9, "gone/x#4"]}
+        ],
+    }
+    assert apply.apply(types.SimpleNamespace(), spec) == [
+        ("changed", "issue", "one: blocked_by [] -> [#9, gone/x#4]"),
+        ("skipped", "link", "one: blocker gone/x#4 not found"),
+    ]
+    assert [c["target_issue_iid"] for c in issue.links.created] == [9]
+
+
+def test_downgrade_raises_one_problem(monkeypatch):
+    first = FakeIssue("one", iid=1)
+    second = FakeIssue("two", iid=2)
+    first.links.downgrade = second.links.downgrade = True
+    project = writable_project(first)
+    project.issues.list().append(second)
+    spec = {
+        **SPEC,
+        "issues": [
+            {"title": "one", "iid": 1, "blocked_by": [9]},
+            {"title": "two", "iid": 2, "blocked_by": [9]},
+        ],
+    }
+    gl = use_project(monkeypatch, project)
+    with pytest.raises(client.GitlabProblem, match="Premium"):
+        apply.apply(gl, spec)
+    assert first.links.items == [] and len(first.links.deleted) == 1
+    assert second.links.created == []  # the first refusal stopped the run
+
+
+# --- board order -------------------------------------------------------------
+
+
+def ordered_project(iids, closed=()):
+    """A writable project whose open issues sit in `iids` board order. Each
+    issue's `reorder` moves it the way GitLab does, so a re-read sees it."""
+    issues = [FakeIssue(f"card {n}", labels=["Doing"], iid=n) for n in iids]
+    issues += [FakeIssue(f"card {n}", iid=n, state="closed") for n in closed]
+    project = writable_project(issues[0])
+    project.issues.list()[1:] = issues[1:]
+    project.reorders = []
+
+    def renumber(order):
+        for at, issue in enumerate(order):
+            issue.relative_position = at * 10
+
+    def reorder_of(issue):
+        def reorder(move_after_id=None, move_before_id=None):
+            project.reorders.append((issue.iid, move_after_id, move_before_id))
+            # GitLab: move_after_id names the card that ends up *after* this
+            # one, move_before_id the card that ends up before it
+            order = [i for i in board_order(project) if i is not issue]
+            target = move_after_id or move_before_id
+            at = next(n for n, i in enumerate(order) if i.id == target)
+            order.insert(at if move_after_id else at + 1, issue)
+            renumber(order)
+
+        return reorder
+
+    for issue in issues:
+        issue.reorder = reorder_of(issue)
+    renumber([i for i in issues if i.state == "opened"])
+    return project
+
+
+def board_order(project):
+    opened = [i for i in project.issues.list() if i.state == "opened"]
+    return sorted(opened, key=lambda i: i.relative_position)
+
+
+def order_spec(iids):
+    return {
+        **SPEC,
+        "issues": [{"title": f"card {n}", "labels": ["Doing"], "iid": n} for n in iids],
+    }
+
+
+def test_pull_writes_issues_in_board_order():
+    project = ordered_project([3, 1, 2])
+    project.issues.list()[1].relative_position = None  # #1 never dragged
+    columns = [("Doing", project.issues.list())]
+    board = types.SimpleNamespace(name="Dev Board")
+    spec = apply.spec_from_board(project, board, columns)
+    assert [i["iid"] for i in spec["issues"]] == [3, 2, 1]
+
+
+def test_order_unmanaged_without_base(monkeypatch):
+    """A hand-written YAML never reshuffles the board."""
+    project = ordered_project([1, 2, 3, 4])
+    gl = use_project(monkeypatch, project)
+    spec = order_spec([4, 1, 2, 3])
+    assert apply.plan(gl, spec) == []
+    assert apply.apply(gl, spec) == []
+    assert project.reorders == []
+
+
+def test_order_write_uses_minimal_moves(monkeypatch):
+    project = ordered_project([1, 2, 3, 4])
+    gl = use_project(monkeypatch, project)
+    base, spec = order_spec([1, 2, 3, 4]), order_spec([4, 1, 2, 3])
+    assert apply.plan(gl, spec, base=base) == [("changed", "order", "#4 to the top")]
+    assert apply.apply(gl, spec, base=base) == [("changed", "order", "#4 to the top")]
+    assert project.reorders == [(4, 1001, None)]  # #1 placed after it, global id
+    assert [i.iid for i in board_order(project)] == [4, 1, 2, 3]
+    assert apply.plan(gl, spec, base=spec) == []
+
+
+def test_order_skipped_when_only_gitlab_moved(monkeypatch):
+    project = ordered_project([2, 1, 3])
+    gl = use_project(monkeypatch, project)
+    spec = order_spec([1, 2, 3])
+    kept = [("skipped", "order", "board order changed on GitLab, kept")]
+    assert apply.plan(gl, spec, base=spec) == kept
+    assert apply.apply(gl, spec, base=spec) == kept
+    assert project.reorders == []
+
+
+def test_order_drift_refused_then_forced(monkeypatch):
+    project = ordered_project([2, 1, 3])
+    gl = use_project(monkeypatch, project)
+    base, spec = order_spec([1, 2, 3]), order_spec([3, 1, 2])
+    drift = [("drift", "order", "board order changed on GitLab and in the YAML")]
+    assert apply.plan(gl, spec, base=base) == drift
+    assert apply.apply(gl, spec, base=base) == drift
+    assert project.reorders == []
+    offline = apply.have_from_spec(order_spec([2, 1, 3]))
+    assert apply.diff(spec, offline, base) == drift
+    assert apply.apply(gl, spec, base=base, force=True) == [
+        ("changed", "order", "#3 to the top"),
+        ("changed", "order", "#1 after #3"),
+    ]
+    assert [i.iid for i in board_order(project)] == [3, 1, 2]
+
+
+def test_pull_then_plan_is_empty_with_order(monkeypatch, tmp_path):
+    project = ordered_project([3, 1, 2], closed=[5])
+    columns = [("Doing", board_order(project))]
+    board = types.SimpleNamespace(name="Dev Board")
+    spec = reload(apply.spec_from_board(project, board, columns), tmp_path, "b.yaml")
+    assert [i["iid"] for i in spec["issues"]] == [3, 1, 2]
+    gl = use_project(monkeypatch, project)
+    assert apply.plan(gl, spec, base=spec) == []
+    assert apply.diff(spec, apply.have_from_spec(spec), base=spec) == []
+
+
+def test_order_rerun_after_partial_failure(monkeypatch):
+    """GitLab moves one card per call: the first move lands, the second
+    fails. A plain rerun against the same base sees where the write stopped
+    and finishes it; it is not drift."""
+    project = ordered_project([1, 2, 3, 4, 5])
+    gl = use_project(monkeypatch, project)
+    base, spec = order_spec([1, 2, 3, 4, 5]), order_spec([5, 4, 1, 2, 3])
+    card4 = project.issues.list()[3]
+    real = card4.reorder
+
+    def broken(**_):
+        raise GitlabGetError("boom", response_code=500)
+
+    card4.reorder = broken
+    with pytest.raises(client.GitlabProblem, match="#4"):
+        apply.apply(gl, spec, base=base)
+    assert [i.iid for i in board_order(project)] == [5, 1, 2, 3, 4]
+    card4.reorder = real
+    rest = [("changed", "order", "#4 after #5")]
+    assert apply.plan(gl, spec, base=base) == rest
+    assert apply.apply(gl, spec, base=base) == rest
+    assert [i.iid for i in board_order(project)] == [5, 4, 1, 2, 3]
+
+
+def test_offline_diff_shows_a_yaml_reorder():
+    """plan --against / status / pull --force read the .base as the live
+    board: a reorder staged offline is an edit, not invisible."""
+    base, spec = order_spec([1, 2, 3]), order_spec([3, 1, 2])
+    assert apply.diff(spec, apply.have_from_spec(base)) == [
+        ("changed", "order", "#3 to the top")
+    ]
+    assert apply.diff(base, apply.have_from_spec(base)) == []

@@ -47,10 +47,14 @@ def name(ref):
 
 
 def adopt(spec, entry):
-    """Add a card the YAML has not seen yet; the existing entry wins."""
+    """Add a card the YAML has not seen yet; the existing entry wins. Its
+    milestone gets a `milestones:` entry, or load() refuses the file."""
     if (have := find(spec, entry["iid"])) is not None:
         return have
     spec["issues"].append(entry)
+    known = spec.get("milestones") or []
+    if (m := entry.get("milestone")) and m not in {x["title"] for x in known}:
+        spec["milestones"] = [*known, {"title": m}]
     return entry
 
 

@@ -2,7 +2,17 @@
 
 import re
 
-from test_stats import COLUMNS, END, NOW, START, TIGHT, _verified, history
+from test_stats import (
+    BLOCKED_COLUMNS,
+    COLUMNS,
+    END,
+    NOW,
+    START,
+    TIGHT,
+    _verified,
+    blockers,
+    history,
+)
 
 from gitboard import mail, stats
 
@@ -181,3 +191,21 @@ def test_tight_dates_show_on_team_and_on_the_owner_only():
     bob = mail._yours(stats.for_person(s, history(), "bob", NOW))
     assert "due 2026-09-17 · likely 2026-09-19" in bob and NO_BG.findall(bob) == []
     assert "likely" not in mail._yours(stats.for_person(s, history(), "alice", NOW))
+
+
+def test_mail_blockers_block_renders_and_is_outlook_safe():
+    h = blockers()
+    h[1]["title"] = "<script>x</script>"
+    s = stats.summarise(h, BLOCKED_COLUMNS, START, END, NOW)
+    team = mail.render_team_html(s, stats.daily_series(h, BLOCKED_COLUMNS, START, END))
+    assert team.index("Blockers the board disagrees with") > team.index("Stuck")
+    assert "alice · #2 (P1) waits on #1 (P3)" in team
+    assert "<script>x" not in team and NO_BG.findall(team) == []
+    assert re.findall(r'<span style="(?![^"]*color:)', team) == []
+    alice = stats.for_person(s, h, "alice", NOW)
+    mine = mail._yours(alice)
+    assert "#1 (unassigned) blocks #2 in Beta" in mine and "alice ·" not in mine
+    assert NO_BG.findall(mine) == []
+    page = mail.render_person_html(alice, s, "alice", [])
+    assert "Unblock" in page and NO_BG.findall(page) == []
+    assert "Blockers the board" not in mail.render_team_html(summary(), series())

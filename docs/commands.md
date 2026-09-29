@@ -21,6 +21,10 @@ gitboard pull --all                         # every board that has a boards/*.ya
 gitboard snapshot group/project             # append board state to snapshots.jsonl (--all: every board)
 gitboard status                             # per board: pulled ago, staged, notes, Q: waiting, oldest in Verify, overdue, snapshot ago
 gitboard tui group/project                  # interactive loop, see below
+gitboard graph group/project                # who waits on whom, one tree per milestone
+gitboard graph group/project -M Beta        # only the Beta milestone and what feeds it
+gitboard graph group/project --html g.html  # interactive page (click a card: its chain)
+gitboard graph group/project --mermaid      # flowchart LR, paste into a GitLab description
 gitboard config                             # what URL/tokens resolved, and from where
 
 # plan / write (api token for apply and migrate)
@@ -39,7 +43,7 @@ gitboard stats group/project                # team markdown: open by column/epic
 gitboard stats group/project --dump h.json  # ...and keep the fetched history for offline reruns
 gitboard stats --from h.json [--json]       # same, from the dump; --json prints the summary dict
 gitboard stats group/project --weeks 8      # the trend table from reports/stats.jsonl; no network
-gitboard digest group/project               # reports/<date>/<board>/: team + <user> as .md and .html, <user>.eml, index.html
+gitboard digest group/project               # reports/<date>/<board>/: team + <user> as .md and .html, <user>.eml, graph.html, index.html
 gitboard digest --all                       # every local board (what `make cron` runs Monday 07:00)
 gitboard digest group/project --md-only     # markdown + plain-text .eml only, no HTML
 gitboard migrate-comments 12 34 35          # copy #12's comments onto #34 and #35
@@ -53,6 +57,7 @@ gitboard report group/project --since boards/x.yaml   # since that file was pull
 gitboard report group/project --history h.json   # + a verified column: verdicts per verifier from a stats --dump
 gitboard ingest TASKS.md --into boards/x.yaml   # tasks.md -> board issues, see tasks-flow
 gitboard tui --from boards/x.yaml           # offline TUI
+gitboard graph --from boards/x.yaml         # the blocker graph from the YAML
 ```
 
 Global flags go before the command: `--url`, `--read-token`, `--write-token`,
@@ -61,8 +66,9 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 ## Notes per command
 
 `show`
-: Sorts each column overdue first, then soonest due, then newest, and
-  truncates to 5 per column so a long board fits a screen and the cut never
+: Sorts each column overdue first, then in GitLab's board order (the
+  manual order the team drags, which is the YAML's `issues:` order after
+  a pull), then newest, and truncates to 5 per column so a long board fits a screen and the cut never
   hides what you were looking for. An issue with two column labels appears in
   both columns and is counted once. `Backlog` is synthesised for issues with
   no column label.
@@ -83,7 +89,9 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
   ancestor (`--base FILE` for another). Rows are `added`, `changed` (with
   `old -> new`), `skipped` (closed on GitLab: never recreated) or `drift`
   (the board changed since the base and the YAML did not: the board's value
-  is kept). Without a base it is the plain two-way diff.
+  is kept). Without a base it is the plain two-way diff. The table lists
+  notes first, then link and order rows and `blocked_by` changes, then the
+  rest: what to read before saying yes goes on top.
 
 `plan --against FILE`
 : Diffs two YAML files. Never opens a connection or looks for a token.
@@ -119,6 +127,27 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 : Folds a tasks markdown file (a heading per person, checkboxes) into the
   spec: open tasks land in `--column` (default `Verify`), checked ones in
   `--done` (default `Done`). Local files only. Details in {doc}`tasks-flow`.
+
+`graph`
+: Which card waits on which on the way to each milestone. The default is
+  one tree per milestone, soonest due first: the root shows the due date,
+  days left and how many of its cards are done; under each card are its
+  blockers, recursively, and a blocker already printed shows as
+  `(see #9 above)`. Each line carries the assignee, `P1`..`P4`, the due
+  date, `⇠ N waiting` (cards downstream of it), `★` for the longest chain
+  into the milestone, and `⚑` where the board contradicts itself (the
+  same flags `stats` lists). Cards with blockers but no milestone go under
+  a final `No milestone` root. `-M/--milestone` keeps one milestone and
+  everything upstream of it; an unknown one is an error listing the known
+  ones. `--html PATH` writes one self-contained page (inline SVG, no CDN,
+  works air-gapped): blockers left, milestones right, closed cards faded,
+  flagged cards and their edges red; click a card to light its whole
+  chain, hover for details, click empty space to clear. `--mermaid`
+  prints a `flowchart LR` to stdout for a GitLab description or wiki
+  page. Live, it reads the board plus 30 days of history (one links
+  request per issue); `--from FILE` draws a YAML with no network, where a
+  same-project blocker missing from the pull counts as closed. A board
+  with no blockers and no milestones says so on stderr and exits 0.
 
 ## TUI keys
 

@@ -45,9 +45,12 @@ the board, the agent edits it, the host runs `plan` then `apply`;
 overdue); `land SPEC` (plan, y/n, apply, snapshot, rotate `.base`);
 `--all` on `pull`/`snapshot`/`report`; `report --since SPEC`; `stats`
 (team markdown: open by column/epic/story, done, cycle time, verify
-queue/times/coverage, stuck, questions; `--dump`/`--from` for offline) and
-`digest` (writes `reports/<date>/<board>/{team,<user>}.md` + `.eml` for
-users named under `emails:`; `--all`; Monday 07:00 in `make cron`). Every
+queue/times/coverage, stuck, questions, blocker flags; `--dump`/`--from`
+for offline) and `digest` (writes `reports/<date>/<board>/{team,<user>}.md`
++ `.eml` for users named under `emails:`, and `graph.html` when the board
+has blockers or milestones; `--all`; Monday 07:00 in `make cron`);
+`graph [PROJECT] [--from FILE] [-M MILESTONE] [--html PATH] [--mermaid]`
+(which card waits on which, one tree per milestone). Every
 `stats`/`digest` run appends one row per board to `reports/stats.jsonl`
 (deduped per week); `stats --weeks N` and the mails' "8-week trend" read it.
 Docs: `make docs` (Sphinx, `docs/`). See README "Offline".
@@ -143,6 +146,41 @@ PYTHONPATH away.**
   so **`stats` must not import it back**; renderers read it with `.get`.
   `_history` fetches back at least `HISTORY_DAYS` (90) so a weekly run has
   samples.
+- **`links.py`** — blocker refs: `"9"` (this project), `"grp/x#4"`
+  (another), `"new:<title>"` (a spec card with no iid yet). `norm_refs`
+  turns YAML entries (int, `group/project#iid`, exact title) into refs;
+  `check` is `load()`'s cycle/self-block/unknown-title guard (stdlib
+  `graphlib`); `priority` is the lowest `priority::N` digit. `read`/`sync`
+  are the only API-touching parts: native `is_blocked_by` links, plus a
+  `Blocked by: #9, grp/x#4` last description line that is **read, never
+  written** — it keeps the CE demo drawable, since CE silently stores
+  `blocks` as `relates_to`. `sync` re-reads after creating and, on that
+  downgrade, deletes the link and raises one `GitlabProblem`. A footer ref
+  is never duplicated as a link nor removed (skipped: edit the
+  description). Must not import `apply`, `board` or `graph`.
+- **`order.py`** — pure: the board order (`relative_position`, one per
+  project) as one three-way field. `merge(edited, live, old)` compares only
+  iids on every side; no `old` (no `.base`) returns None, so a hand-written
+  YAML never reshuffles the board. `moves` keeps the longest run already in
+  order (patience LIS, `bisect`) and moves every other card once, since
+  GitLab reorders one card per call.
+- **`graph.py`** — pure, stdlib (plus rich for the tree): `build(cards)`
+  over `fetch_history`'s card shape (or `cards_from_spec` from a YAML, where
+  a same-project blocker missing from the pull counts as closed) gives
+  nodes, edges (blocker -> card, card -> `m:<milestone>`), `downstream`
+  counts, the `critical` longest chain per milestone (ties: lowest ref) and
+  Sugiyama-lite `layers`. `subgraph` keeps one milestone and its upstream.
+  `flags(cards, columns)` is the five contradiction lists stats and digest
+  carry — flags, never moves; the `blocked_*` two need a Blocked column.
+  `render_tree` (one rich tree per milestone, a shared blocker printed once,
+  then `(see #9 above)`) and `render_mermaid` (escaped labels, `i12` /
+  `m_<slug>` ids). Must not import `stats`, `apply`, `board` or `cli`.
+- **`graph_html.py`** — `render_html(g, title, flagged)`: one
+  self-contained page, inline SVG from `layers`, a native `<title>` per
+  node for hover, ~30 lines of JS for click-to-highlight up- and
+  downstream. No CDN, no vendored library: it works air-gapped and as a
+  digest file. Every title goes through `html.escape`; the adjacency JSON
+  escapes `<`, so a `</script>` title cannot close the script.
 - **`edit.py`** — pure: the spec mutations behind the TUI's card keys
   (`move`, `assign`, `set_due`, `add_note`, `new_card`, `adopt`). Each
   returns the staged line or raises `EditError`. **The verdict rule holds
@@ -195,9 +233,11 @@ user config leaks in — twelve tests failed before the fixture existed.
 
 ## Rendering rules
 
-`board_columns` sorts by `_urgency` (overdue, then soonest due, then newest).
-The API's order is not stable, and a truncated column has to show what the
-reader would have gone looking for. `summarise` de-duplicates by iid — a
+`board_columns` sorts by `_urgency`: overdue first, then GitLab's board
+order (`relative_position`, nulls last, then newest). A truncated column
+has to show what the reader would have gone looking for, and otherwise
+the order the team sees in GitLab — the one the lead and Claude set
+through the YAML. `columns_from_spec` uses the YAML's list order. `summarise` de-duplicates by iid — a
 two-column issue is one issue, and summing per-column counts double-counts it.
 `show` truncates to 5 per column by default; `--all` / `-n` override.
 `tui` is a keypress loop over `board_view` (shared with `show`, so they
@@ -257,14 +297,29 @@ title**: a retitle in a pulled YAML is a rename; on a hand-written entry it
 creates a second issue. `load()` strips titles and rejects duplicates; two
 open GitLab issues sharing a title is an error, not a coin toss. A title
 whose only live match is **closed** is skipped, never recreated. Apply is
-additive: nothing is deleted or closed, removing an issue from the YAML
+additive for issues and milestones: nothing is deleted or closed, removing an issue from the YAML
 leaves it on the board, and **labels the YAML does not name survive** (only
 column labels and labels the spec mentions are managed). Per-issue `notes:` are staged comments: `apply`
 posts each body not already on the issue (`ensure_notes`, same idempotency
 rule as `migrate_comments`); `discussion:` is what `pull --notes` read and is
 never written. `plan`/`diff` report notes as `("added", "note", ...)`; the
 online `plan` fetches notes only for issues that stage some. `people:`,
-`iid`, `discussion:` are spec keys apply ignores. Closing exists but only as an explicit act —
+`iid`, `discussion:` are spec keys apply ignores.
+
+Blockers, milestones and order: **an absent key is unmanaged.** No
+`blocked_by` key leaves a card's links alone (`[]` removes them); no
+`milestone` key leaves its milestone alone (`null` clears it); without
+a `.base` the order is never touched — otherwise a hand-written spec
+would wipe every link and reshuffle the board. Removing a **link** is
+allowed, like removing a label: it is reversible metadata. `milestone`
+and `blocked_by` are two more fields of `issue_changes`, and the order
+is one more three-way field (`order_changes` over `order.merge`), so
+plan and apply still share one decision point. `ensure_milestones`
+creates and updates, never closes; titles resolve to ids before any
+write, like users. `pull` writes issues in board order and a
+`milestones:` entry for every milestone a card carries, so
+pull-then-plan stays empty. The plan table lists notes, then link and
+order rows and `blocked_by` changes, then the rest (`cli._review_first`). Closing exists but only as an explicit act —
 `migrate-comments --close-source` / `close_issue()` — never as a side effect
 of `apply`. `migrate_comments` skips system notes and the `superseded by`
 breadcrumb `close_issue` leaves, or re-runs would copy the bookkeeping.
@@ -280,11 +335,14 @@ edits back to the YAML. `scripts/bulk_demo.py` generates `boards/demo-*.yaml`
 ## What the AI pass may write
 
 `.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
-`ingest`, `estimate`, `status`, `stats`, and edit `boards/*.yaml` (`land` is deliberately not
+`ingest`, `estimate`, `status`, `stats`, `graph`, and edit `boards/*.yaml` (`land` is deliberately not
 allowed). Staged `notes:` widen what `apply` can write to comments — still
 additive, posted under a `*staged via gitboard*` first line, still shown in
 the plan table first. The agent may move an issue **into** Verify, never
-out: Done/Failed are people's verdict comments. The contract is the flow, stated in the command: YAML
+out: Done/Failed are people's verdict comments. It may stage
+`milestone`, `milestones:`, `priority::N`, `blocked_by` additions and
+removals and YAML reorders, proposing one fix per graph flag; it never
+edits a `Blocked by:` footer. The contract is the flow, stated in the command: YAML
 edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
 additive-only (nothing deleted or closed), which bounds the blast radius;
 `migrate` (board reformats: `migrate.py`, ops in `boards/*.migration.yaml`,

@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import cli, client, config
+from gitboard import graph as graph_mod
 from gitboard.cli import SIGN, STYLE, _changes_table, app
 from gitboard.log import THEME
 
@@ -614,6 +615,7 @@ def test_digest_writes_html_previews_and_a_multipart_eml(tmp_path, monkeypatch):
         "alice.md",
         "bob.html",
         "bob.md",
+        "graph.html",  # #2 carries milestone M1, so there is a graph
         "index.html",
         "team.html",
         "team.md",
@@ -632,6 +634,8 @@ def test_digest_writes_html_previews_and_a_multipart_eml(tmp_path, monkeypatch):
     assert "<svg" in preview and "a@x" in preview  # browser copy: chart + headers
     index = (folder / "index.html").read_text()
     assert 'href="alice.eml"' in index and 'href="bob.html"' in index
+    assert 'href="graph.html"' in index
+    assert (folder / "graph.html").read_text().count("<svg") == 1
     assert "index.html" in r.output
 
 
@@ -729,3 +733,167 @@ def test_find_card_follows_a_resorted_card_and_prefers_its_column():
     assert cli._find_card(columns, card(9), 5) is None
     new = card(None, "fresh")
     assert cli._find_card([("Doing", [card(None, "other"), new])], new, 5) == (0, 1)
+
+
+# --- graph -----------------------------------------------------------------
+
+GRAPH_SPEC = {
+    "project": "grp/proj",
+    "board": "Dev Board",
+    "columns": [{"name": "Doing"}, {"name": "Blocked"}, {"name": "Verify"}],
+    "milestones": [
+        {"title": "Beta", "due_date": "2026-11-01"},
+        {"title": "GA", "due_date": "2026-12-01"},
+    ],
+    "issues": [
+        {"title": "Token rotation", "iid": 1, "labels": ["Doing", "priority::3"]},
+        {
+            "title": "Board reader",
+            "iid": 2,
+            "labels": ["Doing", "priority::1"],
+            "milestone": "Beta",
+            "blocked_by": [1],
+        },
+        {
+            "title": '<script>alert("x")</script>',
+            "iid": 3,
+            "labels": ["Blocked"],
+            "milestone": "GA",
+            "blocked_by": [2, "infra/platform#4"],
+        },
+        {"title": "Docs", "iid": 4, "labels": ["Doing"], "milestone": "Beta"},
+        {"title": "New thing", "milestone": "GA", "blocked_by": ["Docs"]},
+    ],
+}
+
+
+def graph_spec(tmp_path, spec=GRAPH_SPEC):
+    return write_spec(tmp_path, "boards/g.yaml", spec=spec, base=False)
+
+
+@pytest.fixture
+def offline(monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    monkeypatch.setattr(
+        board_mod, "fetch_history", lambda *a, **k: pytest.fail("network")
+    )
+
+
+def test_graph_from_file_prints_tree(tmp_path, offline):
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path)])
+    assert r.exit_code == 0, r.output
+    assert "◆ Beta" in r.stdout and "◆ GA" in r.stdout
+    assert r.stdout.index("◆ Beta") < r.stdout.index("◆ GA")  # soonest first
+    assert "#1 Token rotation" in r.stdout and "infra/platform#4" in r.stdout
+    assert "(see #2 above)" in r.stdout  # #2 is under Beta and blocks #3 in GA
+    assert "⚑" in r.stdout  # #1 (P3) blocks #2 (P1): a priority inversion
+
+
+def test_graph_tree_marks_every_flag_kind(tmp_path, offline):
+    """⚑ is "the same flags stats lists": a Blocked card whose only blocker
+    is closed (blocked_stale) is marked, not just blocker/card pairs."""
+    spec = {
+        **GRAPH_SPEC,
+        "issues": [
+            {
+                "title": "Stale",
+                "iid": 5,
+                "labels": ["Blocked"],
+                "assignee": "ana",
+                "milestone": "Beta",
+                "blocked_by": [9],
+            }
+        ],
+    }
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path, spec)])
+    assert r.exit_code == 0, r.output
+    assert "#5 Stale  @ana ★  ⚑" in r.stdout
+
+
+def test_graph_milestone_narrows_the_tree(tmp_path, offline):
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path), "-M", "Beta"])
+    assert r.exit_code == 0, r.output
+    assert "◆ Beta" in r.stdout and "◆ GA" not in r.stdout
+
+
+def test_graph_mermaid_to_stdout(tmp_path, offline):
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path), "--mermaid"])
+    assert r.exit_code == 0, r.output
+    assert r.stdout.startswith("flowchart LR\n")
+    assert "  i1 --> i2" in r.stdout
+    assert "<script>" not in r.stdout  # the hostile title is escaped
+
+
+def test_graph_html_writes_file(tmp_path, offline):
+    r = runner.invoke(
+        app, ["graph", "--from", graph_spec(tmp_path), "--html", "g.html"]
+    )
+    assert r.exit_code == 0, r.output
+    assert r.stdout == ""  # the page goes to the file, the path to stderr
+    assert "wrote g.html" in r.output
+    page = (tmp_path / "g.html").read_text()
+    assert page.count("<svg") == 1 and "<script>alert" not in page
+    assert "node flag" in page  # the inversion is drawn
+
+
+def test_graph_unknown_milestone_errors(tmp_path, offline):
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path), "-M", "Nope"])
+    assert r.exit_code == 1
+    assert "no milestone 'Nope'" in r.output and "Beta, GA" in r.output
+
+
+def test_graph_empty_board_says_so(tmp_path, offline):
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path, SPEC)])
+    assert r.exit_code == 0, r.output
+    assert r.stdout == ""
+    assert "no blockers or milestones on this board" in r.output
+
+
+def test_graph_live_fetches_history(tmp_path, monkeypatch):
+    seen = {}
+
+    def fetch_history(proj, board, since):
+        seen["since"] = since
+        return graph_mod.cards_from_spec(GRAPH_SPEC, "http://gl"), ["Doing"]
+
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: fake_board())
+    monkeypatch.setattr(board_mod, "fetch_history", fetch_history)
+    r = runner.invoke(app, ["graph", "grp/proj", "--mermaid"])
+    assert r.exit_code == 0, r.output
+    assert "  i1 --> i2" in r.stdout
+    assert datetime.now(UTC) - seen["since"] > timedelta(days=29)
+
+
+def test_changes_table_puts_link_and_order_rows_first():
+    pending = [
+        ("changed", "issue", "a: labels [Doing] -> [Verify]"),
+        ("added", "note", "a: hi"),
+        ("changed", "order", "#3 after #1"),
+        ("changed", "issue", "b: blocked_by [#1] -> []"),
+        ("added", "label", "x"),
+        ("changed", "link", "c: removed #9"),
+        ("added", "note", "b: bye"),
+    ]
+    table = _changes_table(pending, "t")
+    assert [str(c) for c in table.columns[2].cells] == [
+        "a: hi",
+        "b: bye",
+        "#3 after #1",
+        "b: blocked_by [#1] -> []",
+        "c: removed #9",
+        "a: labels [Doing] -> [Verify]",
+        "x",
+    ]
+
+
+def test_changes_table_prints_bracketed_values_verbatim():
+    """`[#11]` is a rich colour tag; as markup the old blocked_by vanished."""
+    from rich.console import Console
+
+    from gitboard.log import THEME
+
+    console = Console(record=True, width=120, color_system=None, theme=THEME)
+    console.print(
+        _changes_table([("changed", "issue", "d: blocked_by [#11] -> []")], "t")
+    )
+    assert "d: blocked_by [#11] -> []" in console.export_text()
