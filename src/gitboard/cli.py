@@ -354,6 +354,28 @@ def _confirm_writes(pending, title, yes, ignore_drift):
     return writes
 
 
+def _staged(parsed, spec_path, offline=None, write=False):
+    """The TUI's plan: what apply would do, three-way against `<spec>.base`
+    like the CLI's plan/apply. Offline it is the diff against the .base
+    alone (None when there is none)."""
+    base = _base_of(spec_path)
+    if not offline:
+        return apply_mod.plan(client.gitlab(write=write), parsed, base=base)
+    if base is None:
+        return None
+    return apply_mod.diff(parsed, apply_mod.have_from_spec(base))
+
+
+def _drift_refusal(pending):
+    """The TUI has no --ignore-drift: a drift row means refuse, like the CLI."""
+    n = sum(1 for c in pending if c[0] == "drift")
+    if n:
+        return (
+            f"{n} field(s) changed on GitLab since the pull — re-pull, or "
+            "`gitboard apply --ignore-drift`"
+        )
+
+
 def _write_spec(parsed, base, yes, ignore_drift):
     """plan -> table -> y/n -> apply -> snapshot: the core of apply and land.
 
@@ -1397,14 +1419,7 @@ def tui(
                 )
 
         def staged(parsed, write=False):
-            """What apply would do: against GitLab, or offline against .base."""
-            if not offline:
-                return apply_mod.plan(client.gitlab(write=write), parsed)
-            if not Path(base).exists():
-                return None
-            return apply_mod.diff(
-                parsed, apply_mod.have_from_spec(apply_mod.load(base))
-            )
+            return _staged(parsed, st["spec"], offline, write)
 
         def keybar():
             if st["prompt"]:
@@ -1956,6 +1971,9 @@ def tui(
                     elif k == "p":
                         how = "the host applies" if offline else "a applies"
                         st["extra"] = _changes_table(pending, f"{spec} — {how}")
+                    elif refusal := _drift_refusal(pending):
+                        st["extra"] = _changes_table(pending, f"{spec} — refused")
+                        st["status"] = Text(refusal, "bold red")
                     else:
                         st["extra"] = _changes_table(pending, f"{spec} — will write")
                         st["prompt"] = f"apply {len(pending)} change(s)?  y / n"
@@ -1965,7 +1983,9 @@ def tui(
                             draw(busy="writing…")
                             with client.write_errors():
                                 gl = client.gitlab(write=True)
-                                changes = apply_mod.apply(gl, parsed)
+                                changes = apply_mod.apply(
+                                    gl, parsed, base=_base_of(spec)
+                                )
                             refetch()
                             st["extra"] = None
                             st["staged"] = []

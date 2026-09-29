@@ -897,3 +897,49 @@ def test_changes_table_prints_bracketed_values_verbatim():
         _changes_table([("changed", "issue", "d: blocked_by [#11] -> []")], "t")
     )
     assert "d: blocked_by [#11] -> []" in console.export_text()
+
+
+# --- tui: plan/apply carry the .base (gb-0yy) --------------------------------
+
+
+def _tui_files(tmp_path, base_iids, spec_iids):
+    from test_apply import order_spec
+
+    path = tmp_path / "b.yaml"
+    path.write_text(apply_mod.dump(order_spec(spec_iids)))
+    (tmp_path / "b.yaml.base").write_text(apply_mod.dump(order_spec(base_iids)))
+    return apply_mod.load(str(path)), str(path)
+
+
+def test_tui_plan_with_a_base_shows_the_order_change(monkeypatch, tmp_path):
+    from test_apply import ordered_project, use_project
+
+    parsed, path = _tui_files(tmp_path, [1, 2, 3, 4], [4, 1, 2, 3])
+    gl = use_project(monkeypatch, ordered_project([1, 2, 3, 4]))
+    monkeypatch.setattr(client, "gitlab", lambda write=False: gl)
+    pending = cli._staged(parsed, path)
+    assert pending == [("changed", "order", "#4 to the top")]
+    assert cli._drift_refusal(pending) is None
+
+
+def test_tui_refuses_on_order_drift(monkeypatch, tmp_path):
+    from test_apply import ordered_project, use_project
+
+    parsed, path = _tui_files(tmp_path, [1, 2, 3], [3, 1, 2])
+    gl = use_project(monkeypatch, ordered_project([2, 1, 3]))
+    monkeypatch.setattr(client, "gitlab", lambda write=False: gl)
+    pending = cli._staged(parsed, path)
+    assert [c[0] for c in pending] == ["drift"]
+    assert "1 field(s) changed on GitLab" in cli._drift_refusal(pending)
+
+
+def test_tui_apply_gets_the_same_base(monkeypatch, tmp_path):
+    """The write half of _staged's wiring: apply_mod.plan sees the .base."""
+    parsed, path = _tui_files(tmp_path, [1, 2], [2, 1])
+    seen = {}
+    monkeypatch.setattr(client, "gitlab", lambda write=False: object())
+    monkeypatch.setattr(
+        apply_mod, "plan", lambda _gl, spec, base=None: seen.update(base=base) or []
+    )
+    cli._staged(parsed, path, write=True)
+    assert seen["base"]["issues"][0]["iid"] == 1
