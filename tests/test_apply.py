@@ -1032,6 +1032,36 @@ def test_empty_blocked_by_removes_native_links(monkeypatch):
     assert apply.plan(gl, spec) == []
 
 
+FOOTER_SKIP = ("skipped", "link", "one: blocker #9 is a footer ref — edit the description")
+
+
+FOOTED = {"title": "one", "labels": ["Doing"], "description": "x\n\nBlocked by: #9"}
+
+
+def test_dropping_a_footer_only_blocker_is_one_skip_not_a_change(monkeypatch):
+    """gb-219: the ref cannot be removed, so plan must not call it a change
+    forever; it says skipped, once, in plan and again (once) in apply."""
+    issue = FakeIssue("one", labels=["Doing"], description="x\n\nBlocked by: #9")
+    spec = {**SPEC, "issues": [{**FOOTED, "blocked_by": []}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert apply.plan(gl, spec) == [FOOTER_SKIP]
+    assert apply.apply(gl, spec) == [FOOTER_SKIP]
+    assert issue.links.deleted == []
+
+
+def test_footer_skip_recorded_once_when_other_blockers_change(monkeypatch):
+    issue = FakeIssue("one", labels=["Doing"], description="x\n\nBlocked by: #9")
+    spec = {**SPEC, "issues": [{**FOOTED, "blocked_by": [11]}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    want = [
+        ("changed", "issue", "one: blocked_by [] -> [#11]"),
+        FOOTER_SKIP,
+    ]
+    assert sorted(apply.plan(gl, spec)) == sorted(want)
+    assert sorted(apply.apply(gl, spec)) == sorted(want)
+    assert [c["target_issue_iid"] for c in issue.links.created] == [11]
+
+
 def test_blocked_by_three_way_skipped_and_drift():
     def bb(*refs):
         return {"blocked_by": list(refs)}

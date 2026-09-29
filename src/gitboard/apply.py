@@ -737,6 +737,23 @@ def _titles(spec, have=None):
     return titles
 
 
+def _live_refs(title, found, want):
+    """(live refs, skip rows): `found` is links.read; a footer-only ref the
+    YAML omits cannot be removed here, so it is left out of the live side
+    (no phantom change on every plan) and named once as skipped."""
+    gone = {x["ref"] for x in found if x["source"] == "footer" and x["ref"] not in want}
+    skips = [
+        (
+            "skipped",
+            "link",
+            f"{title}: blocker {links._shown(r)} is a footer ref"
+            " — edit the description",
+        )
+        for r in sorted(gone, key=links.ref_key)
+    ]
+    return [x["ref"] for x in found if x["ref"] not in gone], skips
+
+
 def ensure_issues(
     project,
     spec,
@@ -780,9 +797,11 @@ def ensure_issues(
         if live_title != title:
             writes["title"] = title
             record("changed", "issue", f"{live_title}: title -> {title}")
-        refs = None
+        refs = footer_skips = None
         if "blocked_by" in want:
-            refs = [x["ref"] for x in links.read(issue, project)]
+            refs, footer_skips = _live_refs(
+                title, links.read(issue, project), want["blocked_by"]
+            )
         fields, records = issue_changes(
             title,
             want,
@@ -798,7 +817,7 @@ def ensure_issues(
         if "blocked_by" in fields:
             linking.append((issue, fields["blocked_by"]))
         writes.update(_payload(fields, users, milestones))
-        for change in records:
+        for change in [*records, *(footer_skips or [])]:
             record(*change)
         if writes:
             for k, v in writes.items():
@@ -813,7 +832,12 @@ def ensure_issues(
                     continue
                 ref = str(live[ref[4:]].iid)
             want.append(ref)
-        have_links = links.read(issue, project)
+        # footer-only refs the YAML omits were already skipped above
+        have_links = [
+            x
+            for x in links.read(issue, project)
+            if x["source"] == "native" or x["ref"] in want
+        ]
         for change in links.sync(issue, project, want, have_links, project_id_of):
             record(*change)
     return live
@@ -920,6 +944,8 @@ def plan(gl, spec, base=None):
         },
     }
     # only issues that stage notes or manage blocked_by cost a request
+    titles = _titles(spec, have)
+    skips = []
     for spec_i in spec["issues"]:
         title, _ = _find(spec_i, have)
         if not title:
@@ -929,11 +955,15 @@ def plan(gl, spec, base=None):
                 norm_text(n.body) for n in opened[title].notes.list(all=True)
             }
         if "blocked_by" in spec_i:
-            refs = [x["ref"] for x in links.read(opened[title], project)]
+            want = links.norm_refs(spec_i["blocked_by"], spec["project"], titles)
+            refs, skipped = _live_refs(
+                spec_i["title"], links.read(opened[title], project), want
+            )
             have["issues"][title] = current_issue(opened[title], refs)
+            skips += skipped
     if base:  # order is managed only with a base; without one, skip the read
         have["order"] = _live_order(project)[0]
-    return diff(spec, have, base)
+    return diff(spec, have, base) + skips
 
 
 def have_from_spec(base):
