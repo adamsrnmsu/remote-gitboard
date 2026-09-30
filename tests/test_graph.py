@@ -119,6 +119,9 @@ def test_no_milestone_flag():
         "#2 has no milestone"
     )
     assert graph.flags(cards[1:], ["Doing"])["no_milestone"] == []
+    # a milestone only a finished card carries plans nothing
+    old = [card(1, milestone="Beta", state="closed"), card(2)]
+    assert graph.flags(old, ["Doing"])["no_milestone"] == []
 
 
 def test_no_blocked_flags_without_a_blocked_column():

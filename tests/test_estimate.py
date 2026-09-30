@@ -165,6 +165,11 @@ def test_late_milestones_sum_the_critical_chain_against_the_due_date():
          "days_late": 2, "cards": 2, "unestimated": 0}
     ]  # fmt: skip
     assert estimate.late_milestones(HISTORY, COLUMNS, NOW, estimate.DEFAULTS) == []
+    # a card waiting in Verify has no work left: no days, and not in `cards`
+    parked = _ms(12, "Beta", after=[11])
+    parked["labels"] = ["Verify"]
+    [m] = estimate.late_milestones(history + [parked], COLUMNS, NOW, estimate.DEFAULTS)
+    assert (m["days_late"], m["cards"]) == (2, 2)
 
 
 def test_late_milestone_with_an_unestimated_card_is_a_lower_bound():

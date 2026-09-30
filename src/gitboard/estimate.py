@@ -164,10 +164,9 @@ def late_milestones(history, columns, now, cfg):
         if not due or due < today.isoformat():
             continue
         chain = [by_key.get(k) for k in path[:-1] if g["nodes"][k]["open"]]
+        chain = [i for i in chain if i is None or not SKIP & set(i["labels"])]
         days = unestimated = 0
         for i in chain:
-            if i is not None and SKIP & set(i["labels"]):
-                continue
             est = i and estimate(
                 i["assignee"], i["labels"], pool, cfg["method"], cfg["min_samples"]
             )

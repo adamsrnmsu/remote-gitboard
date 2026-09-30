@@ -325,7 +325,7 @@ def flags(cards, columns):
     def date(c):
         return c.get("due_date") or c.get("milestone_due")
 
-    planned = any(c.get("milestone") for c in cards)
+    planned = any(c.get("milestone") for c in cards if is_open(c))
     for c in cards:
         if not is_open(c):
             continue

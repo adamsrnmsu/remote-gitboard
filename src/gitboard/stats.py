@@ -367,7 +367,7 @@ def summarise(history, columns, start, end, now):
                 m, {"open": 0, "done": 0, "added": 0, "due": i.get("milestone_due")}
             )
     for i in opened:
-        if i.get("milestone"):
+        if i.get("milestone") and DONE not in i["labels"]:
             by_milestone[i["milestone"]]["open"] += 1
     for m, n in tally(done_issues, lambda i: i.get("milestone")).items():
         by_milestone[m]["done"] = n

@@ -788,6 +788,7 @@ def test_by_milestone_tally_and_old_row():
         {**issue(3, created=3, closed=14), **beta},
         {**issue(4, created=13), "milestone": "Alpha", "milestone_due": "2026-10-01"},
         issue(5),
+        {**issue(6, created=2, labels=["Done"]), **beta},  # in Done: not open
     ]
     s = stats.summarise(h, COLUMNS, START, END, NOW)
     assert s["by_milestone"] == {
