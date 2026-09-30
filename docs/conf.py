@@ -20,11 +20,16 @@ myst_heading_anchors = 2
 # superpowers holds specs and plans, not user docs
 exclude_patterns = ["_build", "_cli.md", "superpowers"]
 
-html_theme = "shibuya"
+html_theme = "furo"
+html_title = "gitboard"
+# The shared pi_suite terminal skin: see the header of _static/hacker.css.
+html_static_path = ["_static"]
+html_css_files = ["hacker.css"]
+pygments_style = pygments_dark_style = "native"
 html_theme_options = {
-    "github_url": "https://github.com/adamsrnmsu/remote-gitboard",
-    "accent_color": "blue",
-    "color_mode": "auto",
+    "source_repository": "https://github.com/adamsrnmsu/remote-gitboard",
+    "source_branch": "main",
+    "source_directory": "docs/",
 }
 
 
