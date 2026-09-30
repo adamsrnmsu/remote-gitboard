@@ -6,6 +6,7 @@ from test_stats import (
     BLOCKED_COLUMNS,
     COLUMNS,
     END,
+    LATE,
     NOW,
     START,
     TIGHT,
@@ -192,6 +193,16 @@ def test_tight_dates_show_on_team_and_on_the_owner_only():
     bob = mail._yours(stats.for_person(s, history(), "bob", NOW))
     assert "due 2026-09-17 · likely 2026-09-19" in bob and NO_BG.findall(bob) == []
     assert "likely" not in mail._yours(stats.for_person(s, history(), "alice", NOW))
+
+
+def test_late_milestones_show_on_team_only_when_present():
+    s = summary()
+    assert "forecast late" not in mail.render_team_html(s, series())
+    s["flow"]["late_milestones"] = [LATE]
+    team = mail.render_team_html(s, series())
+    assert "at least 2 days late, 1 without estimate · due 2026-09-20" in team
+    assert NO_BG.findall(team) == []
+    assert re.findall(r'<span style="(?![^"]*color:)', team) == []
 
 
 def test_mail_blockers_block_renders_and_is_outlook_safe():

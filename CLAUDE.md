@@ -145,6 +145,9 @@ PYTHONPATH away.**
   false` makes it print only. `tight` (due before the expected finish) is
   attached by `cli._summary` as `flow.tight` — `estimate` imports `stats`,
   so **`stats` must not import it back**; renderers read it with `.get`.
+  `late_milestones` (a milestone's critical chain, cards in sequence, summed
+  against its due date; a card without an estimate makes it a lower bound) is
+  attached the same way as `flow.late_milestones`.
   `_history` fetches back at least `HISTORY_DAYS` (90) so a weekly run has
   samples.
 - **`links.py`** — blocker refs: `"9"` (this project), `"grp/x#4"`

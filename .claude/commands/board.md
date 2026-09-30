@@ -36,7 +36,9 @@ that person's finished history and prints the basis per card. Run it after
 your own edits and before `plan`; quote the basis lines in your summary.
 Never hand-write a due date the tool declined to give — "no estimate" means
 not enough history. Never change a date a person set; if `stats` lists it
-under *Tight dates*, say so and let the lead decide. With
+under *Tight dates*, say so and let the lead decide. Likewise a *Late
+milestones* row (a lower bound when a card has no estimate): report it to
+the lead; never move a milestone's due date yourself. With
 `estimates: {suggest_due: false}` in the spec it only prints.
 
 **Blockers, milestones, priority, order.** `gitboard graph --from <spec>`

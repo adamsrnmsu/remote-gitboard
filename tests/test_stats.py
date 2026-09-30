@@ -483,6 +483,7 @@ ROW_KEYS = {
     "no_milestone",
     "weak",
     "tight",
+    "late_milestones",
     "ts",
     "project",
     "board",
@@ -646,6 +647,24 @@ def test_tight_dates_reach_person_row_and_markdown():
     assert "| 7 | slow one | bob | 2026-09-17 | 2026-09-19 |" in stats.render_team_md(s)
     mine = stats.render_person_md(bob, s, "bob").split("\n---\n")[0]
     assert "| 7 | slow one | 2026-09-17 | 2026-09-19 |" in mine
+
+
+LATE = {
+    "milestone": "Beta", "due": "2026-09-20", "expected": "2026-09-22",
+    "days_late": 2, "cards": 2, "unestimated": 1,
+}  # fmt: skip
+
+
+def test_late_milestones_reach_row_and_markdown_only_when_present():
+    s = stats.summarise(history(), COLUMNS, START, END, NOW)
+    assert stats.stat_row(s, "g/p", "b", "t")["late_milestones"] == 0
+    assert "Late milestones" not in stats.render_team_md(s)
+    s["flow"]["late_milestones"] = [LATE]
+    assert stats.stat_row(s, "g/p", "b", "t")["late_milestones"] == 1
+    assert (
+        "| Beta | 2026-09-20 | 2026-09-22 | at least 2 days late, 1 without estimate |"
+        in stats.render_team_md(s)
+    )
 
 
 # --- blocker flags ---------------------------------------------------------------

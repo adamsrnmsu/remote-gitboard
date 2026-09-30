@@ -280,6 +280,24 @@ def _tight(items, who=False):
     return sub("Tight dates, by each person's own history") + _rows(items, "tight", why)
 
 
+def _late(items):
+    """Late-milestone rows; nothing at all when there are none."""
+    if not items:
+        return ""
+    rows = "".join(
+        "<tr>"
+        + td(span("late", THEME["muted"], MONO, 11), width=64, style="padding:4px 0")
+        + td(span(m["milestone"]), style="padding:4px 8px")
+        + td(
+            span(f"{stats.lower_bound(m)} · due {m['due']}", THEME["muted"], MONO, 12),
+            align="right",
+        )
+        + "</tr>"
+        for m in items
+    )
+    return sub("Milestones forecast late") + table(rows)
+
+
 FLAG_TAGS = {
     "blocked_stale": "stale",
     "blocked_unmarked": "unmarked",
@@ -519,6 +537,7 @@ def _stuck(summary, person=None):
     if person is None:
         inner += sub("Stuck") + _rows(stuck, "stuck", _days)
         inner += _tight(f.get("tight", []), who=True)
+        inner += _late(f.get("late_milestones", []))
         inner += _blockers(stats.blocker_items(f), who=True)
     return section("Stuck / questions", inner)
 

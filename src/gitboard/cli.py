@@ -1030,6 +1030,9 @@ def _summary(history, columns, meta, days, log=STATS_LOG):
     spec_path = find_spec(meta["project"])
     cfg = estimate_mod.config(apply_mod.load(spec_path) if spec_path else {})
     summary["flow"]["tight"] = estimate_mod.tight(history, columns, now, cfg)
+    summary["flow"]["late_milestones"] = estimate_mod.late_milestones(
+        history, columns, now, cfg
+    )
     stats_mod.append_row(
         log,
         stats_mod.stat_row(summary, meta["project"], meta["board"], meta["fetched_at"]),

@@ -550,6 +550,7 @@ def stat_row(summary, project, board, ts):
         "coverage": v.get("coverage"),
         "weak": len(v.get("weak") or []),
         "tight": len(f.get("tight") or []),
+        "late_milestones": len(f.get("late_milestones") or []),
         "overdue": f.get("overdue", 0),
         "stuck": len(f.get("stuck") or []),
         **{k: len(f.get(k) or []) for k in FLAGS},
@@ -670,6 +671,28 @@ def _tight_table(tight, who=False):
         ],
         "iid", "title", *(("assignee",) if who else ()), "due", "expected", "basis",
     )  # fmt: skip
+
+
+def lower_bound(m):
+    """`3 days late`, prefixed `at least` when a card on the chain had no estimate."""
+    late = f"{m['days_late']} days late"
+    return (
+        f"at least {late}, {m['unestimated']} without estimate"
+        if m["unestimated"]
+        else late
+    )
+
+
+def _late_md(items):
+    """Milestones forecast past their due date; no section when none are."""
+    if not items:
+        return []
+    rows = [(m["milestone"], m["due"], m["expected"], lower_bound(m)) for m in items]
+    return [
+        "### Late milestones",
+        _table(rows, "milestone", "due", "expected", "forecast"),
+        "",
+    ]
 
 
 def blocker_items(d):
@@ -807,6 +830,7 @@ def render_team_md(summary, weekly=None):
         "### Tight dates",
         _tight_table(f.get("tight", []), who=True),
         "",
+        *_late_md(f.get("late_milestones", [])),
         *_blockers_md(f, "### Blockers"),
         "### WIP",
         _counts(f["wip"]),

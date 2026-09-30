@@ -37,6 +37,7 @@ gitboard land boards/x.yaml                 # plan, y/n, apply, snapshot, rotate
 
 gitboard estimate boards/x.yaml             # stage due dates from each person's finished history; local file only
 gitboard estimate boards/x.yaml --history h.json  # same from a `stats --dump` file, no network
+                                            # `stats`/`digest` list Tight dates and Late milestones (critical chain's estimates past the milestone due date)
 
 # numbers and digests (read_api token; --from FILE works with no network)
 gitboard stats group/project                # team markdown: open by column/epic/story/milestone, done, cycle, verify, stuck
