@@ -1,0 +1,220 @@
+/*
+ * hacker.css -- a dark-only, phosphor-green terminal skin over the furo theme.
+ *
+ * Shared by the Sphinx docs of the pi_suite repos (budgie, remote-gitboard).
+ * The file is copied verbatim into each repo's docs/_static/, so change it in
+ * one and copy it to the other. ponytail: two copies; extract a small theme
+ * package if a third repo picks it up.
+ *
+ * conf.py side, in each repo:
+ *   html_theme = "furo"
+ *   html_static_path = ["_static"]
+ *   html_css_files = ["hacker.css"]
+ *   pygments_style = pygments_dark_style = "native"
+ *
+ * Fonts are the system monospace stack, not a web font, so the docs render the
+ * same with no network access.
+ */
+
+/* Furo defines its palette on body, body[data-theme=dark] and a
+   prefers-color-scheme media rule. Matching body[data-theme] too, loaded after
+   furo.css, pins every mode to this one palette. */
+body,
+body[data-theme] {
+  --hk-bg: #080c08;
+  --hk-bg-raised: #0d140d;
+  --hk-bg-code: #0b110b;
+  --hk-border: #1d3a21;
+  --hk-fg: #b6f0b9;
+  --hk-fg-muted: #74b27c;
+  --hk-accent: #39ff6a;
+  --hk-accent-hot: #c6ff3d;
+  --hk-cyan: #3ee6ff;
+  --hk-amber: #ffb627;
+  --hk-red: #ff4d6d;
+
+  --font-stack: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
+    Menlo, Consolas, "Liberation Mono", monospace;
+  --font-stack--monospace: var(--font-stack);
+  --font-stack--headings: var(--font-stack);
+
+  --color-background-primary: var(--hk-bg);
+  --color-background-secondary: var(--hk-bg-raised);
+  --color-background-hover: #122012;
+  --color-background-hover--transparent: #12201200;
+  --color-background-border: var(--hk-border);
+  --color-background-item: var(--hk-border);
+
+  --color-foreground-primary: var(--hk-fg);
+  --color-foreground-secondary: var(--hk-fg-muted);
+  --color-foreground-muted: var(--hk-fg-muted);
+  --color-foreground-border: var(--hk-border);
+
+  --color-brand-primary: var(--hk-accent);
+  --color-brand-content: var(--hk-accent);
+  --color-brand-visited: var(--hk-accent);
+  --color-link: var(--hk-accent);
+  --color-link--hover: var(--hk-accent-hot);
+  --color-link--visited: var(--hk-accent);
+  --color-link-underline: #39ff6a55;
+  --color-link-underline--hover: var(--hk-accent-hot);
+  --color-link-underline--visited: #39ff6a55;
+
+  --color-sidebar-background: var(--hk-bg-raised);
+  --color-sidebar-background-border: var(--hk-border);
+  --color-sidebar-brand-text: var(--hk-accent);
+  --color-sidebar-caption-text: var(--hk-fg-muted);
+  --color-sidebar-link-text: var(--hk-fg);
+  --color-sidebar-link-text--top-level: var(--hk-accent);
+  --color-sidebar-item-background--current: #133a1a;
+  --color-sidebar-item-background--hover: #122012;
+  --color-sidebar-item-expander-background--hover: #122012;
+  --color-sidebar-search-background: var(--hk-bg);
+  --color-sidebar-search-background--focus: var(--hk-bg);
+  --color-sidebar-search-border: var(--hk-border);
+  --color-sidebar-search-icon: var(--hk-fg-muted);
+  --color-sidebar-search-text: var(--hk-fg);
+
+  --color-toc-title-text: var(--hk-fg-muted);
+  --color-toc-item-text: var(--hk-fg-muted);
+  --color-toc-item-text--hover: var(--hk-accent-hot);
+  --color-toc-item-text--active: var(--hk-accent);
+
+  --color-code-background: var(--hk-bg-code);
+  --color-code-foreground: var(--hk-fg);
+  --color-inline-code-background: #102310;
+  --color-highlighted-background: #1b3b1f;
+  --color-highlighted-text: var(--hk-accent-hot);
+  --color-highlight-on-target: #1b3b1f;
+
+  --color-table-header-background: var(--hk-bg-raised);
+  --color-table-border: var(--hk-border);
+  --color-guilabel-background: #102310;
+  --color-guilabel-border: var(--hk-border);
+  --color-guilabel-text: var(--hk-fg);
+
+  --color-admonition-background: var(--hk-bg-raised);
+  --color-admonition-title: var(--hk-cyan);
+  --color-admonition-title-background: #0d2226;
+  --color-admonition-title--note: var(--hk-cyan);
+  --color-admonition-title-background--note: #0d2226;
+  --color-admonition-title--tip: var(--hk-accent);
+  --color-admonition-title-background--tip: #0f2613;
+  --color-admonition-title--important: var(--hk-accent);
+  --color-admonition-title-background--important: #0f2613;
+  --color-admonition-title--warning: var(--hk-amber);
+  --color-admonition-title-background--warning: #2a1f08;
+  --color-admonition-title--caution: var(--hk-amber);
+  --color-admonition-title-background--caution: #2a1f08;
+  --color-admonition-title--danger: var(--hk-red);
+  --color-admonition-title-background--danger: #2c0d14;
+  --color-admonition-title--error: var(--hk-red);
+  --color-admonition-title-background--error: #2c0d14;
+
+  --color-api-background: var(--hk-bg-raised);
+  --color-api-background-hover: #122012;
+  --color-api-name: var(--hk-accent);
+  --color-api-pre-name: var(--hk-fg-muted);
+  --color-api-paren: var(--hk-fg-muted);
+  --color-api-keyword: var(--hk-cyan);
+  --color-api-overall: var(--hk-fg-muted);
+
+  --color-header-background: var(--hk-bg-raised);
+  --color-header-border: var(--hk-border);
+  --color-header-text: var(--hk-accent);
+  --color-announcement-background: #133a1a;
+  --color-announcement-text: var(--hk-accent-hot);
+}
+
+body {
+  line-height: 1.65;
+  color-scheme: dark;
+}
+
+/* One palette, so the light/dark/auto toggle has nothing to switch. */
+.theme-toggle-container {
+  display: none;
+}
+
+::selection {
+  background: var(--hk-accent);
+  color: var(--hk-bg);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--hk-accent);
+  letter-spacing: 0;
+  text-shadow: 0 0 6px #39ff6a44;
+}
+
+/* The page title reads as a shell prompt with a blinking block cursor. */
+article h1::before {
+  content: "$ ";
+  color: var(--hk-fg-muted);
+  text-shadow: none;
+}
+
+article h1::after {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  height: 0.9em;
+  margin-left: 0.2em;
+  vertical-align: -0.05em;
+  background: var(--hk-accent);
+  animation: hk-blink 1.1s steps(1) infinite;
+}
+
+@keyframes hk-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  article h1::after {
+    animation: none;
+  }
+}
+
+.sidebar-brand-text {
+  font-weight: 700;
+}
+
+.sidebar-brand-text::before {
+  content: "~/";
+  color: var(--hk-fg-muted);
+}
+
+/* Code blocks: a thin phosphor frame instead of furo's flat panel. */
+.highlight,
+div[class^="highlight-"] pre {
+  background: var(--hk-bg-code);
+}
+
+div[class^="highlight-"] {
+  border: 1px solid var(--hk-border);
+  border-radius: 2px;
+}
+
+article code.literal {
+  color: var(--hk-accent-hot);
+  border: 1px solid var(--hk-border);
+}
+
+/* The cursor sits where the permalink marker would, so drop the marker. */
+article h1 .headerlink {
+  display: none;
+}
+
+table.docutils th {
+  color: var(--hk-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--hk-accent-hot);
+  outline-offset: 2px;
+}
