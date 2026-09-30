@@ -1028,6 +1028,24 @@ def test_footer_skip_recorded_once_when_other_blockers_change(monkeypatch):
     assert [c["target_issue_iid"] for c in issue.links.created] == [11]
 
 
+def test_dropping_a_blocker_held_as_link_and_footer_settles_to_one_skip(monkeypatch):
+    """gb-2sj: link + footer, YAML drops it. Plan and apply show the change and
+    delete the link; once footer-only, the next plan is gb-219's single skip."""
+    issue = FakeIssue(
+        "one",
+        labels=["Doing"],
+        description="x\n\nBlocked by: #9",
+        links=[link(9, link_id=5)],
+    )
+    spec = {**SPEC, "issues": [{**FOOTED, "blocked_by": []}]}
+    gl = use_project(monkeypatch, writable_project(issue))
+    change = ("changed", "issue", "one: blocked_by [#9] -> []")
+    assert apply.plan(gl, spec) == [change]
+    assert sorted(apply.apply(gl, spec)) == sorted([change, FOOTER_SKIP])
+    assert issue.links.deleted == [5]
+    assert apply.plan(gl, spec) == [FOOTER_SKIP]
+
+
 def test_blocked_by_three_way_skipped_and_drift():
     def bb(*refs):
         return {"blocked_by": list(refs)}

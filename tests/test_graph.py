@@ -164,6 +164,18 @@ def test_subgraph_keeps_upstream_only():
     assert "8" not in g["nodes"] and "m:GA" not in g["nodes"] and "1" in g["nodes"]
 
 
+def test_blocker_cycle_from_gitlab_builds_and_renders():
+    loop = [
+        card(1, blocked_by=[("2", "opened")]),
+        card(2, blocked_by=[("1", "opened")], milestone="Beta"),
+    ]
+    g = graph.build(loop)
+    assert {"1", "2"} <= set(g["nodes"]) and len(g["edges"]) == 2, "one back-edge lost"
+    assert {"1", "2"} <= set(g["layers"])
+    mermaid = graph.render_mermaid(g)
+    assert "card 1" in mermaid and "card 2" in mermaid
+
+
 def _text(renderable):
     c = Console(width=120, record=True, color_system=None)
     c.print(renderable)
