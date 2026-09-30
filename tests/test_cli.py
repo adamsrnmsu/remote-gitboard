@@ -42,7 +42,8 @@ class FakeIssue:
 
 
 def fake_board(project="grp/proj", name="Dev Board"):
-    proj = types.SimpleNamespace(path_with_namespace=project)
+    milestones = types.SimpleNamespace(list=lambda **k: [])
+    proj = types.SimpleNamespace(path_with_namespace=project, milestones=milestones)
     return proj, types.SimpleNamespace(name=name)
 
 
@@ -547,7 +548,14 @@ def test_stats_dump_round_trips_through_from(gl, tmp_path, monkeypatch):
     r = runner.invoke(app, ["stats", "grp/proj", "--dump", "h2.json"])
     assert r.exit_code == 0, r.output
     dumped = json.loads((tmp_path / "h2.json").read_text())
-    assert set(dumped) == {"project", "board", "columns", "fetched_at", "history"}
+    assert set(dumped) == {
+        "project",
+        "board",
+        "columns",
+        "fetched_at",
+        "milestones",
+        "history",
+    }
     assert dumped["history"] == data["history"]
     again = runner.invoke(app, ["stats", "--from", "h2.json"])
     assert again.exit_code == 0, again.output
@@ -596,6 +604,21 @@ def test_digest_writes_md_for_everyone_and_eml_where_there_is_an_address(
     assert "To: a@x" in eml and "From: lead@x" in eml
     assert "Subject: [grp/proj] week of 2026-09-07 =?utf-8?b?4oCU?= alice" in eml
     assert "reports/2026-09-14/grp-proj/team.md" in r.output
+
+
+def test_digest_writes_graph_for_milestones_without_edges(tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    write_spec(tmp_path, spec=SPEC, base=False)
+    path, data = history_file(tmp_path)
+    for c in data["history"]:
+        c["milestone"] = None
+    data["milestones"] = [{"title": "Later", "due_date": None}]
+    with open(path, "w") as f:
+        json.dump(data, f)
+    r = runner.invoke(app, ["digest", "--from", path])
+    assert r.exit_code == 0, r.output
+    page = (tmp_path / "reports/2026-09-14/grp-proj/graph.html").read_text()
+    assert 'data-key="m:Later"' in page
 
 
 def test_digest_writes_html_previews_and_a_multipart_eml(tmp_path, monkeypatch):
@@ -847,6 +870,16 @@ def test_graph_empty_board_says_so(tmp_path, offline):
     assert r.exit_code == 0, r.output
     assert r.stdout == ""
     assert "no blockers or milestones on this board" in r.output
+
+
+def test_graph_only_empty_milestones_is_drawn(tmp_path, offline):
+    spec = {**SPEC, "milestones": [{"title": "Later"}]}
+    path = graph_spec(tmp_path, spec)
+    r = runner.invoke(app, ["graph", "--from", path])
+    assert r.exit_code == 0, r.output
+    assert "◆ Later" in r.stdout and "no cards yet" in r.stdout
+    r = runner.invoke(app, ["graph", "--from", path, "-M", "Later"])
+    assert r.exit_code == 0 and "◆ Later" in r.stdout
 
 
 def test_graph_live_fetches_history(tmp_path, monkeypatch):

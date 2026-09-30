@@ -165,7 +165,8 @@ PYTHONPATH away.**
   YAML never reshuffles the board. `moves` keeps the longest run already in
   order (patience LIS, `bisect`) and moves every other card once, since
   GitLab reorders one card per call.
-- **`graph.py`** — pure, stdlib (plus rich for the tree): `build(cards)`
+- **`graph.py`** — pure, stdlib (plus rich for the tree): `build(cards, milestones)`
+  (known milestones seed a card-less root, "no cards yet")
   over `fetch_history`'s card shape (or `cards_from_spec` from a YAML, where
   a same-project blocker missing from the pull counts as closed) gives
   nodes, edges (blocker -> card, card -> `m:<milestone>`), `downstream`

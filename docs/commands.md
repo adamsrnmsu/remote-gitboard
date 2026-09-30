@@ -131,7 +131,8 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 `graph`
 : Which card waits on which on the way to each milestone. The default is
   one tree per milestone, soonest due first: the root shows the due date,
-  days left and how many of its cards are done; under each card are its
+  days left and how many of its cards are done (or `no cards yet` for a
+  milestone planned but not tasked); under each card are its
   blockers, recursively, and a blocker already printed shows as
   `(see #9 above)`. Each line carries the assignee, `P1`..`P4`, the due
   date, `⇠ N waiting` (cards downstream of it), `★` for the longest chain

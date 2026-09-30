@@ -1008,6 +1008,7 @@ def _history(project, board_name, days, from_file=None, dump=None):
         "board": board.name,
         "columns": columns,
         "fetched_at": now.isoformat(timespec="seconds"),
+        "milestones": board_mod.active_milestones(proj),
         "history": history,
     }
     if dump:
@@ -1175,8 +1176,8 @@ def digest(
             entries.append(
                 {"name": who, "to": to or "", "subject": subject, "files": files}
             )
-        g = graph_mod.build(history)
-        if series is not None and g["edges"]:
+        g = graph_mod.build(history, meta.get("milestones", ()))
+        if series is not None and _drawable(g):
             title = f"{meta['project']} — blockers and milestones"
             write(
                 "graph.html",
@@ -1196,6 +1197,13 @@ def digest(
         one(path, board_name or get_config().board)
 
     _run(go)
+
+
+def _drawable(g):
+    """Worth drawing: a blocker link or a milestone, even one with no cards."""
+    return bool(g["edges"]) or any(
+        n["kind"] == "milestone" for n in g["nodes"].values()
+    )
 
 
 def _flagged(found):
@@ -1236,13 +1244,15 @@ def graph(
             cards = graph_mod.cards_from_spec(spec, get_config().url)
             columns = [c["name"] for c in spec["columns"]]
             name = spec["project"]
+            known = spec.get("milestones") or []
         else:
             path = _need(project, "project", "project")
             proj, board = board_mod.fetch(path, board_name or get_config().board)
             since = datetime.now(UTC) - timedelta(days=30)
             cards, columns = board_mod.fetch_history(proj, board, since=since)
             name = proj.path_with_namespace
-        g = graph_mod.build(cards)
+            known = board_mod.active_milestones(proj)
+        g = graph_mod.build(cards, known)
         if milestone:
             known = sorted(
                 n["title"] for n in g["nodes"].values() if n["kind"] == "milestone"
@@ -1252,7 +1262,7 @@ def graph(
                     f"no milestone {milestone!r}; have: {', '.join(known) or 'none'}"
                 )
             g = graph_mod.subgraph(g, milestone)
-        if not g["edges"]:
+        if not _drawable(g):
             err().print("[muted]no blockers or milestones on this board[/]")
             return
         flagged = _flagged(graph_mod.flags(cards, columns))

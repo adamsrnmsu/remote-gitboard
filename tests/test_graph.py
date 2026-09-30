@@ -237,3 +237,18 @@ def test_cards_from_spec_takes_an_empty_milestones_key():
     """`milestones:` with nothing under it is None in YAML; load() takes it."""
     spec = {**SPEC, "milestones": None, "issues": [{"title": "a", "iid": 1}]}
     assert graph.cards_from_spec(spec, "https://gl")[0]["milestone_due"] is None
+
+
+def test_empty_milestone_is_a_root_and_not_faded():
+    g = graph.build([card(1)], [{"title": "Later", "due_date": "2026-10-10"}])
+    assert g["nodes"]["m:Later"]["open"] is True
+    assert g["critical"]["m:Later"] == ["m:Later"]
+    text = _text(graph.render_tree(g, "2026-09-30"))
+    assert "◆ Later  due 2026-10-10 · 10 days left · no cards yet" in text
+    assert "no cards yet" in graph.render_mermaid(g)
+    assert list(graph.subgraph(g, "Later")["nodes"]) == ["m:Later"]
+
+
+def test_known_milestone_with_cards_keeps_its_count():
+    g = graph.build([card(1, milestone="Beta")], [{"title": "Beta"}])
+    assert "no cards yet" not in _text(graph.render_tree(g, "2026-09-30"))
