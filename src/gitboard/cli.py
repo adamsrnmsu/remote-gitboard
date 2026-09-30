@@ -1007,7 +1007,7 @@ def _history(project, board_name, days, from_file=None, dump=None):
         "project": proj.path_with_namespace,
         "board": board.name,
         "columns": columns,
-        "fetched_at": now.isoformat(timespec="seconds"),
+        "fetched_at": now.isoformat(),  # keep the fraction: `_in` is half-open
         "milestones": board_mod.active_milestones(proj),
         "history": history,
     }

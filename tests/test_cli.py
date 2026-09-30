@@ -558,6 +558,33 @@ def test_stats_dump_round_trips_through_from(gl, tmp_path, monkeypatch):
     assert again.stdout == r.stdout
 
 
+def test_stats_counts_a_verdict_in_the_fetchs_own_second(gl, tmp_path, monkeypatch):
+    """gb-6xo: fetched_at kept whole seconds, so 18:30:00.103 fell outside the
+    half-open window ending 18:30:00; the dump now keeps the fraction."""
+    _, data = history_file(tmp_path)
+    card = data["history"][0]
+    card.update(
+        tasks=[0, 3], verdicts=[["2026-09-14T18:30:00.103Z", "bob", "verified"]]
+    )
+    card["transitions"] = [["2026-09-14T00:00:00Z", "add", "Verify"]]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 14, 18, 30, 0, 250000, tzinfo=tz)
+
+    monkeypatch.setattr(cli, "datetime", Clock)
+    monkeypatch.setattr(
+        board_mod,
+        "fetch_history",
+        lambda p, b, since: (data["history"], data["columns"]),
+    )
+    r = runner.invoke(app, ["stats", "grp/proj", "--dump", "h3.json", "--json"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["verify"]["weak"], "verdict in the fetch's second"
+    assert "18:30:00.25" in json.loads((tmp_path / "h3.json").read_text())["fetched_at"]
+
+
 def test_stats_logs_one_row_per_board_week_and_weeks_reads_it_offline(
     tmp_path, monkeypatch
 ):
