@@ -106,6 +106,21 @@ def test_flags():
     assert f["unowned_blocker"][0]["detail"] == "#1 (unassigned) blocks #2 in Beta"
 
 
+def test_no_milestone_flag():
+    cards = [
+        card(1, milestone="Beta"),
+        card(2),
+        card(3, labels=["Done"]),
+        card(4, state="closed"),
+        card(5, labels=["Verify"]),
+    ]
+    assert [x["iid"] for x in graph.flags(cards, ["Doing"])["no_milestone"]] == [2]
+    assert graph.flags(cards, ["Doing"])["no_milestone"][0]["detail"] == (
+        "#2 has no milestone"
+    )
+    assert graph.flags(cards[1:], ["Doing"])["no_milestone"] == []
+
+
 def test_no_blocked_flags_without_a_blocked_column():
     f = graph.flags(
         [card(3, labels=["Doing"], blocked_by=[("9", "opened")])], ["Doing"]

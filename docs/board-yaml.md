@@ -125,7 +125,8 @@ Scoped labels
 : Optional. `apply` creates a missing milestone and fixes a due date or
   description that differs; it never closes or deletes one. A group
   milestone with the same title counts as existing. `pull` writes an entry
-  for every milestone a card carries.
+  for every milestone a card carries and every active (not closed) project
+  milestone.
 
 `issues[].milestone`
 : A title from `milestones:` (anything else is a load error). **No key

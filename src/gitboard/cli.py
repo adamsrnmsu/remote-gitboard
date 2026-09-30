@@ -1199,9 +1199,10 @@ def digest(
 
 
 def _flagged(found):
-    """Graph keys of both cards each flag names: what the page draws red."""
+    """Graph keys of both cards each flag names: what the page draws red.
+    `no_milestone` is left out: it would redden every unplanned card."""
     keys = set()
-    for item in (x for f in graph_mod.FLAGS for x in found[f]):
+    for item in (x for f in graph_mod.FLAGS if f != "no_milestone" for x in found[f]):
         keys.add(
             str(item["iid"]) if item["iid"] is not None else f"new:{item['title']}"
         )

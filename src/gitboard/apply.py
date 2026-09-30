@@ -225,7 +225,8 @@ def spec_from_board(project, board, columns, notes=False):
     not a column here; empty fields are dropped to keep the YAML editable.
     `notes=True` adds each issue's discussion (one more request per issue).
     Blocker links cost one request per issue; every milestone a card carries
-    gets a `milestones:` entry, so the pulled file passes load().
+    and every active project milestone gets a `milestones:` entry, so the
+    pulled file passes load() and a card-less one survives land's re-pull.
     """
     labels = {x.name: x for x in project.labels.list(all=True)}
     seen = {}
@@ -241,12 +242,13 @@ def spec_from_board(project, board, columns, notes=False):
             entry["discussion"] = talk
         spec_issues.append(entry)
         if ms := getattr(issue, "milestone", None):
-            m = {"title": ms["title"]}
-            if ms.get("due_date"):
-                m["due_date"] = ms["due_date"]
-            if desc := norm_text(ms.get("description")):
-                m["description"] = desc
-            milestones[m["title"]] = m
+            milestones[ms["title"]] = _milestone_entry(ms)
+    # card-less: project milestones only, not group ones (group update rights: gb-84c)
+    for m in project.milestones.list(all=True):
+        if getattr(m, "state", "active") != "closed" and m.title not in milestones:
+            milestones[m.title] = _milestone_entry(
+                {k: getattr(m, k, None) for k in ("title", "due_date", "description")}
+            )
 
     spec = {
         "project": project.path_with_namespace,
@@ -277,6 +279,15 @@ def spec_from_board(project, board, columns, notes=False):
             entry["description"] = desc
         spec.setdefault("labels", []).append(entry)
     return spec
+
+
+def _milestone_entry(ms):
+    m = {"title": ms["title"]}
+    if ms.get("due_date"):
+        m["due_date"] = ms["due_date"]
+    if desc := norm_text(ms.get("description")):
+        m["description"] = desc
+    return m
 
 
 def _board_key(issue):

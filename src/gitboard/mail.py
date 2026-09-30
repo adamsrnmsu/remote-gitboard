@@ -286,6 +286,7 @@ FLAG_TAGS = {
     "priority_inversion": "priority",
     "date_inversion": "date",
     "unowned_blocker": "unowned",
+    "no_milestone": "no ms",
 }
 
 
@@ -488,6 +489,15 @@ def _work(summary):
         _counts(o.get("by_column", {})), lambda c: column_color(c, columns)
     )
     inner += sub("Open by epic") + bars(_counts(o.get("by_epic", {})), THEME["accent"])
+    if ms := summary.get("by_milestone"):
+        rows = stats.milestone_lines(ms)
+        inner += sub("Milestones: open, (+added / done)") + bars(
+            [
+                (f"{m} (+{a}/{dn})" + (f" {d[5:]}" if d else ""), o)
+                for m, d, o, dn, a in rows
+            ],
+            THEME["accent"],
+        )
     inner += sub("WIP per person") + bars(_counts(f.get("wip", {})), THEME["accent"])
     return section("Where the work is", inner)
 

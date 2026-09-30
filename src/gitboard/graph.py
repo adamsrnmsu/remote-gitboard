@@ -24,6 +24,7 @@ FLAGS = (
     "priority_inversion",
     "date_inversion",
     "unowned_blocker",
+    "no_milestone",
 )
 
 
@@ -313,9 +314,16 @@ def flags(cards, columns):
     def date(c):
         return c.get("due_date") or c.get("milestone_due")
 
+    planned = any(c.get("milestone") for c in cards)
     for c in cards:
         if not is_open(c):
             continue
+        if (
+            planned
+            and not c.get("milestone")
+            and not {VERIFY, FAILED} & set(c["labels"])
+        ):
+            out["no_milestone"].append(item(c, None, f"{_name(c)} has no milestone"))
         refs = c.get("blocked_by", [])
         live = [
             b["ref"]
