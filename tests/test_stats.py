@@ -3,6 +3,8 @@
 from datetime import UTC, datetime, timedelta
 from email import message_from_string, policy
 
+import pytest
+
 from gitboard import report, stats
 
 COLUMNS = ["Doing", "Review", "Verify", "Done", "Failed"]
@@ -55,44 +57,56 @@ def test_scoped_takes_first_sorted_value():
     assert stats.scoped(labels, "type") is None
 
 
-def test_dwell_open_interval():
-    i = issue(1, labels=["Verify"], transitions=[(ts(3), "add", "Verify")])
-    assert stats.dwell(i, "Verify") == [(dt(3), None)]
-
-
-def test_dwell_closed_by_remove():
-    i = issue(1, transitions=[(ts(3), "add", "Verify"), (ts(5), "remove", "Verify")])
-    assert stats.dwell(i, "Verify") == [(dt(3), dt(5))]
-
-
-def test_dwell_closed_by_issue_close():
-    i = issue(1, closed=6, labels=["Verify"], transitions=[(ts(3), "add", "Verify")])
-    assert stats.dwell(i, "Verify") == [(dt(3), dt(6))]
-
-
-def test_dwell_reentered_is_two_intervals():
-    i = issue(
-        1,
-        labels=["Verify"],
-        transitions=[
-            (ts(3), "add", "Verify"),
-            (ts(4), "remove", "Verify"),
-            (ts(6), "add", "Verify"),
-        ],
-    )
-    assert stats.dwell(i, "Verify") == [(dt(3), dt(4)), (dt(6), None)]
-
-
-def test_dwell_fallback_without_events_starts_at_created():
-    assert stats.dwell(issue(1, created=2, labels=["Verify"]), "Verify") == [
-        (dt(2), None)
-    ]
-    assert stats.dwell(issue(1, labels=["Doing"]), "Verify") == []
-
-
-def test_dwell_remove_without_add_starts_at_created():
-    i = issue(1, created=2, transitions=[(ts(5), "remove", "Verify")])
-    assert stats.dwell(i, "Verify") == [(dt(2), dt(5))]
+@pytest.mark.parametrize(
+    ("i", "want"),
+    [
+        (
+            issue(1, labels=["Verify"], transitions=[(ts(3), "add", "Verify")]),
+            [(dt(3), None)],
+        ),
+        (
+            issue(
+                1, transitions=[(ts(3), "add", "Verify"), (ts(5), "remove", "Verify")]
+            ),
+            [(dt(3), dt(5))],
+        ),
+        (
+            issue(
+                1, closed=6, labels=["Verify"], transitions=[(ts(3), "add", "Verify")]
+            ),
+            [(dt(3), dt(6))],
+        ),
+        (
+            issue(
+                1,
+                labels=["Verify"],
+                transitions=[
+                    (ts(3), "add", "Verify"),
+                    (ts(4), "remove", "Verify"),
+                    (ts(6), "add", "Verify"),
+                ],
+            ),
+            [(dt(3), dt(4)), (dt(6), None)],
+        ),
+        (issue(1, created=2, labels=["Verify"]), [(dt(2), None)]),
+        (issue(1, labels=["Doing"]), []),
+        (
+            issue(1, created=2, transitions=[(ts(5), "remove", "Verify")]),
+            [(dt(2), dt(5))],
+        ),
+    ],
+    ids=[
+        "open",
+        "closed-by-remove",
+        "closed-by-issue-close",
+        "reentered",
+        "no-events-from-created",
+        "no-events-other-label",
+        "remove-without-add",
+    ],
+)
+def test_dwell(i, want):
+    assert stats.dwell(i, "Verify") == want
 
 
 def test_done_at_prefers_close_over_done_label():
@@ -232,6 +246,7 @@ def test_trend_uses_previous_period():
     assert tr["done"] == (1, 2)
     assert tr["cycle_median"] == (4.0, 8.0)
     assert tr["verify_median"] == (1.0, 2.0)
+    assert tr["verify_queue"] == (1, 1), "issue 1 was in Verify at start; 4 is now"
 
 
 def test_empty_history_is_none_not_zero():
@@ -306,6 +321,20 @@ def test_eml_headers_and_body():
     assert "From: me@x.dev" in stats.eml("a@x.dev", "s", "b", sender="me@x.dev")
 
 
+def test_eml_html_is_multipart_alternative():
+    raw = stats.eml("a@x.dev", "s", "plain\n", now=NOW, html="<p>hi</p>")
+    msg = message_from_string(raw, policy=policy.default)
+    assert msg.get_content_type() == "multipart/alternative"
+    assert [p.get_content_type() for p in msg.iter_parts()] == [
+        "text/plain",
+        "text/html",
+    ]
+    assert msg.get_body(("plain",)).get_content() == "plain\n"
+    assert "<p>hi</p>" in msg.get_body(("html",)).get_content()
+    plain = message_from_string(stats.eml("a@x.dev", "s", "b"), policy=policy.default)
+    assert not plain.is_multipart()
+
+
 def test_slug():
     assert stats.slug("grp/sub/proj") == "grp-sub-proj"
 
@@ -323,24 +352,18 @@ def series_by_date(h):
     return {r["date"]: r for r in stats.daily_series(h, COLUMNS, START, END)}
 
 
-def test_daily_series_one_row_per_day_inclusive():
+def test_daily_series_open_from_created_day_until_done_day():
     dates = [r["date"] for r in stats.daily_series([], COLUMNS, START, END)]
     assert dates[0] == "2026-09-09" and dates[-1] == "2026-09-16"
-    assert len(dates) == 8
-
-
-def test_daily_series_open_from_created_day_until_done_day():
+    assert len(dates) == 8, "one row per day, inclusive"
     i = issue(1, created=12, closed=14)
     i["closed_at"] = ts(14, 6)  # mid-day, as real timestamps are
     rows = stats.daily_series([i], COLUMNS, START, END)
     assert [r["open"] for r in rows] == [0, 0, 1, 1, 1, 0, 0, 0]
     assert [r["done_cum"] for r in rows] == [0, 0, 0, 0, 0, 1, 1, 1]
-
-
-def test_daily_series_missing_created_is_open_from_start():
     i = issue(1)
     i["created_at"] = None
-    assert series_by_date([i])["2026-09-09"]["open"] == 1
+    assert series_by_date([i])["2026-09-09"]["open"] == 1, "no created: from start"
 
 
 def test_daily_series_verify_from_interval_start():
@@ -370,26 +393,22 @@ def m(done, queue=None):
     return stats.momentum({"trend": tr})
 
 
-def test_momentum_done_sentence():
-    assert m((6, 9)) == "Done 9, up from 6."
-    assert m((9, 6)) == "Done 6, down from 9."
-    assert m((6, 6)) == "Done 6, flat."
-    assert m((None, 3)) == "Done 3."
-
-
-def test_momentum_queue_and_single_exclamation():
-    assert m((6, 9), (5, 3)) == "Done 9, up from 6. Verify queue 3 (was 5) — shrinking!"
-    assert m((6, 9), (3, 5)) == "Done 9, up from 6. Verify queue 5 (was 3) — growing."
-    assert (
-        m((9, 6), (5, 3)) == "Done 6, down from 9. Verify queue 3 (was 5) — shrinking."
-    )
-    assert m((6, 6), (3, 3)).endswith("Verify queue 3 (was 3) — flat.")
-    assert m((None, 3), (5, 3)).count("!") == 0
-
-
-def test_summarise_trend_has_verify_queue():
-    tr = stats.summarise(history(), COLUMNS, START, END, NOW)["trend"]
-    assert tr["verify_queue"] == (1, 1), "issue 1 was in Verify at start; 4 is now"
+@pytest.mark.parametrize(
+    ("done", "queue", "want"),
+    [
+        ((6, 9), None, "Done 9, up from 6."),
+        ((9, 6), None, "Done 6, down from 9."),
+        ((6, 6), None, "Done 6, flat."),
+        ((None, 3), None, "Done 3."),
+        ((6, 9), (5, 3), "Done 9, up from 6. Verify queue 3 (was 5) — shrinking!"),
+        ((6, 9), (3, 5), "Done 9, up from 6. Verify queue 5 (was 3) — growing."),
+        ((9, 6), (5, 3), "Done 6, down from 9. Verify queue 3 (was 5) — shrinking."),
+        ((6, 6), (3, 3), "Done 6, flat. Verify queue 3 (was 3) — flat."),
+        ((None, 3), (5, 3), "Done 3. Verify queue 3 (was 5) — shrinking."),  # no "!"
+    ],
+)
+def test_momentum(done, queue, want):
+    assert m(done, queue) == want
 
 
 # --- three_moves --------------------------------------------------------------
@@ -455,23 +474,6 @@ def test_items_carry_url():
         assert all(x["url"].startswith("http://x/") for x in p[key]), key
 
 
-# --- eml html -----------------------------------------------------------------
-
-
-def test_eml_html_is_multipart_alternative():
-    raw = stats.eml("a@x.dev", "s", "plain\n", now=NOW, html="<p>hi</p>")
-    msg = message_from_string(raw, policy=policy.default)
-    assert msg.get_content_type() == "multipart/alternative"
-    assert [p.get_content_type() for p in msg.iter_parts()] == [
-        "text/plain",
-        "text/html",
-    ]
-    assert msg.get_body(("plain",)).get_content() == "plain\n"
-    assert "<p>hi</p>" in msg.get_body(("html",)).get_content()
-    plain = message_from_string(stats.eml("a@x.dev", "s", "b"), policy=policy.default)
-    assert not plain.is_multipart()
-
-
 # --- over time ----------------------------------------------------------------
 
 ROW_KEYS = {
@@ -529,10 +531,6 @@ def test_stat_row_keys_and_values():
     assert set(empty) == ROW_KEYS and empty["open"] == 0 and empty["coverage"] is None
 
 
-def test_load_rows_missing_file_is_empty(tmp_path):
-    assert stats.load_rows(tmp_path / "nope.jsonl") == []
-
-
 def test_append_row_dedupes_per_week_and_later_wins(tmp_path):
     path = tmp_path / "reports" / "stats.jsonl"
     stats.append_row(path, row(done=1))
@@ -542,6 +540,7 @@ def test_append_row_dedupes_per_week_and_later_wins(tmp_path):
     rows = stats.load_rows(path)
     assert [r["done"] for r in rows] == [2, 3, 4]
     assert path.read_text().count("\n") == 3
+    assert stats.load_rows(tmp_path / "nope.jsonl") == [], "missing file"
 
 
 def test_weekly_sorts_caps_and_filters():
@@ -601,21 +600,15 @@ def test_weak_verdict_flags_unticked_steps_and_names_the_verifier():
     ]
 
 
-def test_weak_verdict_clean_when_all_ticked_or_no_checklist_or_old_dump():
+def test_weak_verdict_clean_cases_and_minutes_in_verify():
     history = [_verified(1, tasks=(3, 3)), _verified(2, tasks=(0, 0)), _verified(3)]
-    assert stats.weak_verdicts(history, START, END) == []
-
-
-def test_weak_verdict_flags_a_verdict_minutes_after_entering_verify():
-    i = _verified(1, entered="2026-09-12T00:00:00Z", at="2026-09-12T00:04:00Z")
-    assert stats.weak_verdicts([i], START, END)[0]["reasons"] == ["4 min in Verify"]
-
-
-def test_weak_verdict_ignores_failed_and_a_verified_later_overturned():
-    failed = _verified(1, tasks=(0, 3), word="failed")
-    overturned = _verified(2, tasks=(0, 3))
+    assert stats.weak_verdicts(history, START, END) == [], "ticked/no list/old dump"
+    failed = _verified(4, tasks=(0, 3), word="failed")
+    overturned = _verified(5, tasks=(0, 3))
     overturned["verdicts"].append([ts(13), "cat", "failed"])
-    assert stats.weak_verdicts([failed, overturned], START, END) == []
+    assert stats.weak_verdicts([failed, overturned], START, END) == [], "not verified"
+    i = _verified(6, entered="2026-09-12T00:00:00Z", at="2026-09-12T00:04:00Z")
+    assert stats.weak_verdicts([i], START, END)[0]["reasons"] == ["4 min in Verify"]
 
 
 def test_weak_verdicts_reach_summary_person_row_and_markdown():
@@ -713,6 +706,10 @@ def test_summarise_flags_blockers():
         "no_milestone": [1, 3],
     }
     assert f["priority_inversion"][0]["detail"] == "#2 (P1) waits on #1 (P3)"
+    s = stats.summarise(blockers(), BLOCKED_COLUMNS, START, END, NOW)
+    r = stats.stat_row(s, "g/p", "b", "t")
+    assert [r[k] for k in stats.FLAGS] == [1, 1, 1, 1, 1, 2], "row counts"
+    assert all(stats.stat_row({}, "g/p", "b", "t")[k] == 0 for k in stats.FLAGS)
 
 
 def test_old_dump_without_blocked_by_has_no_flags():
@@ -759,13 +756,6 @@ def test_three_moves_includes_unblock_after_overdue():
     assert stats.three_moves(person)[2]["age"] == "#6 (P1) waits on #7 (P3)"
 
 
-def test_stat_row_counts_flags():
-    s = stats.summarise(blockers(), BLOCKED_COLUMNS, START, END, NOW)
-    r = stats.stat_row(s, "g/p", "b", "t")
-    assert [r[k] for k in stats.FLAGS] == [1, 1, 1, 1, 1, 2]
-    assert all(stats.stat_row({}, "g/p", "b", "t")[k] == 0 for k in stats.FLAGS)
-
-
 def test_team_markdown_has_blockers_section_only_when_flagged():
     h = blockers()
     s = stats.summarise(h, BLOCKED_COLUMNS, START, END, NOW)
@@ -801,9 +791,6 @@ def test_by_milestone_tally_and_old_row():
     )
     assert stats.stat_row(s, "g/p", "dev", "t")["by_milestone"] == s["by_milestone"]
     assert stats.stat_row({}, "g/p", None, "t")["by_milestone"] == {}
-
-
-def test_no_milestones_renders_nothing():
-    s = stats.summarise(history(), COLUMNS, START, END, NOW)
-    assert s["by_milestone"] == {}
-    assert "By milestone" not in stats.render_team_md(s)
+    none = stats.summarise(history(), COLUMNS, START, END, NOW)
+    assert none["by_milestone"] == {}
+    assert "By milestone" not in stats.render_team_md(none), "absent when empty"

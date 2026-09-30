@@ -129,14 +129,10 @@ def cells(stdout):
 # --- the change table ------------------------------------------------------
 
 
-def test_sign_and_style_cover_every_kind():
+def test_sign_and_style_cover_every_kind_and_unknown_kind_survives():
     assert set(SIGN) == set(STYLE) == {"added", "changed", "skipped", "drift", "oneway"}
     assert SIGN["oneway"] == SIGN["drift"] == "!"  # both mean: look before you leap
-
-
-def test_unknown_kind_does_not_crash_the_table():
-    table = _changes_table([("weird", "issue", "x")], "t")
-    assert table.row_count == 1
+    assert _changes_table([("weird", "issue", "x")], "t").row_count == 1
 
 
 # --- pull ------------------------------------------------------------------
@@ -810,6 +806,10 @@ def test_graph_from_file_prints_tree(tmp_path, offline):
     assert "#1 Token rotation" in r.stdout and "infra/platform#4" in r.stdout
     assert "(see #2 above)" in r.stdout  # #2 is under Beta and blocks #3 in GA
     assert "⚑" in r.stdout  # #1 (P3) blocks #2 (P1): a priority inversion
+    # -M narrows the tree to one milestone
+    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path), "-M", "Beta"])
+    assert r.exit_code == 0, r.output
+    assert "◆ Beta" in r.stdout and "◆ GA" not in r.stdout
 
 
 def test_graph_tree_marks_every_flag_kind(tmp_path, offline):
@@ -831,12 +831,6 @@ def test_graph_tree_marks_every_flag_kind(tmp_path, offline):
     r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path, spec)])
     assert r.exit_code == 0, r.output
     assert "#5 Stale  @ana ★  ⚑" in r.stdout
-
-
-def test_graph_milestone_narrows_the_tree(tmp_path, offline):
-    r = runner.invoke(app, ["graph", "--from", graph_spec(tmp_path), "-M", "Beta"])
-    assert r.exit_code == 0, r.output
-    assert "◆ Beta" in r.stdout and "◆ GA" not in r.stdout
 
 
 def test_graph_mermaid_to_stdout(tmp_path, offline):

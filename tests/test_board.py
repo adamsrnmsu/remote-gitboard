@@ -7,6 +7,8 @@ error mapping in client.py, each with their own tests.
 import types
 from datetime import UTC, datetime
 
+import pytest
+
 from gitboard import board
 from gitboard.apply import MARKER
 
@@ -85,9 +87,11 @@ def test_lists_are_ordered_by_position_not_api_order():
     assert [n for n, _ in cols] == ["Backlog", "Doing", "Review"]
 
 
-def test_unlabelled_issue_lands_in_backlog():
-    cols = columns([FakeIssue(1, [])], [FakeList("Doing", 1)])
-    assert [i.iid for i in cols[0][1]] == [1]
+def test_issue_without_a_list_label_lands_in_backlog():
+    """No labels at all, or only labels that are not a list."""
+    cols = columns([FakeIssue(1, []), FakeIssue(2, ["bug"])], [FakeList("Doing", 1)])
+    assert [i.iid for i in cols[0][1]] == [2, 1]
+    assert cols[1][1] == []
 
 
 def test_issue_in_two_lists_appears_in_both():
@@ -98,12 +102,6 @@ def test_issue_in_two_lists_appears_in_both():
     )
     assert [i.iid for i in cols[1][1]] == [1]
     assert [i.iid for i in cols[2][1]] == [1]
-
-
-def test_issue_with_an_unrelated_label_still_counts_as_backlog():
-    cols = columns([FakeIssue(1, ["bug"])], [FakeList("Doing", 1)])
-    assert [i.iid for i in cols[0][1]] == [1]
-    assert cols[1][1] == []
 
 
 def test_lists_without_a_label_are_skipped():
@@ -121,20 +119,13 @@ def test_board_with_no_lists_puts_everything_in_backlog():
 # --- render ----------------------------------------------------------------
 
 
-def test_render_header_and_counts():
-    out = board.as_markdown(
-        FakeProject([FakeIssue(1, ["Doing"])]), FakeBoard([FakeList("Doing", 1)])
-    )
-    assert out.startswith("# grp/proj — Dev Board")
-    assert "## Backlog (0)" in out
-    assert "## Doing (1)" in out
-
-
-def test_render_unassigned_and_assignee():
-    issues = [FakeIssue(1, []), FakeIssue(2, [], assignee={"username": "ana"})]
-    out = board.as_markdown(FakeProject(issues), FakeBoard([]))
-    assert "#1 t — @unassigned" in out
-    assert "#2 t — @ana" in out
+def test_render_header_counts_assignee_and_url():
+    issues = [FakeIssue(1, []), FakeIssue(2, ["Doing"], assignee={"username": "ana"})]
+    out = board.as_markdown(FakeProject(issues), FakeBoard([FakeList("Doing", 1)]))
+    assert out.startswith("# grp/proj — Dev Board"), "header"
+    assert "## Backlog (1)" in out and "## Doing (1)" in out, "counts"
+    assert "#1 t — @unassigned" in out and "#2 t — @ana" in out, "assignee"
+    assert "http://gl/-/issues/2" in out, "url"
 
 
 def test_render_shows_due_date_and_extra_labels_but_not_the_column_label():
@@ -146,51 +137,22 @@ def test_render_shows_due_date_and_extra_labels_but_not_the_column_label():
     assert "`Doing`" not in line, "the column's own label is redundant in its column"
 
 
-def test_render_includes_the_issue_url():
-    out = board.as_markdown(FakeProject([FakeIssue(7, [])]), FakeBoard([]))
-    assert "http://gl/-/issues/7" in out
-
-
 # --- rendering -------------------------------------------------------------
-
-
-def test_issue_line_omits_the_column_its_own_label():
-    line = board.issue_line(FakeIssue(1, ["Doing", "urgent"], title="x"), "Doing")
-    text = line.plain
-    assert "urgent" in text and "Doing" not in text
 
 
 # --- urgency, totals, truncation -------------------------------------------
 
 
-def test_overdue_is_strictly_before_today():
-    assert board.is_overdue(FakeIssue(1, [], due_date="2026-01-01"), today="2026-06-01")
-    assert not board.is_overdue(
-        FakeIssue(1, [], due_date="2026-12-01"), today="2026-06-01"
+@pytest.mark.parametrize(
+    ("due", "overdue"),
+    [("2026-01-01", True), ("2026-12-01", False), ("2026-06-01", False), (None, False)],
+    ids=["past", "future", "today-not-overdue", "no-due-date"],
+)
+def test_overdue_is_strictly_before_today(due, overdue):
+    """Off-by-one on today would nag about everything due today."""
+    assert (
+        board.is_overdue(FakeIssue(1, [], due_date=due), today="2026-06-01") is overdue
     )
-
-
-def test_due_today_is_not_overdue():
-    """Off-by-one here would nag about everything due today."""
-    assert not board.is_overdue(
-        FakeIssue(1, [], due_date="2026-06-01"), today="2026-06-01"
-    )
-
-
-def test_no_due_date_is_never_overdue():
-    assert not board.is_overdue(FakeIssue(1, []))
-
-
-def test_columns_put_overdue_first():
-    """A truncated column must show what you would have gone looking for,
-    even when the board order puts it last."""
-    issues = [
-        FakeIssue(1, ["Doing"], rp=1),
-        FakeIssue(2, ["Doing"], due_date="2000-01-01", rp=9),
-        FakeIssue(3, ["Doing"], rp=2),
-    ]
-    cols = columns(issues, [FakeList("Doing", 1)])
-    assert [i.iid for i in cols[1][1]][0] == 2
 
 
 def test_columns_are_ordered_deterministically():
@@ -203,8 +165,10 @@ def test_columns_are_ordered_deterministically():
 
 
 def test_columns_follow_board_order_after_overdue():
-    """GitLab's manual order (the one the lead sets through the YAML), nulls
-    last; a due date no longer reorders anything but an overdue card."""
+    """A truncated column must show what you would have gone looking for, so
+    overdue is first even when the board order puts it last. Then GitLab's
+    manual order (the one the lead sets through the YAML), nulls last; a due
+    date no longer reorders anything but an overdue card."""
     issues = [
         FakeIssue(1, ["Doing"], rp=3),
         FakeIssue(2, ["Doing"], rp=1, due_date="2999-01-01"),
@@ -215,20 +179,15 @@ def test_columns_follow_board_order_after_overdue():
     assert [i.iid for i in cols[1][1]] == [4, 2, 1, 3]
 
 
-def test_summarise_does_not_double_count_multi_column_issues():
+def test_summarise_counts_unassigned_and_overdue_once_per_issue():
     """An issue in two columns is one issue, not two."""
-    issue = FakeIssue(1, ["Doing", "Blocked"])
-    cols = columns([issue], [FakeList("Doing", 1), FakeList("Blocked", 2)])
-    assert board.summarise(cols)["issues"] == 1
-
-
-def test_summarise_counts_unassigned_and_overdue():
     issues = [
         FakeIssue(1, [], assignee={"username": "ana"}),
         FakeIssue(2, []),
-        FakeIssue(3, [], due_date="2000-01-01"),
+        FakeIssue(3, ["Doing", "Blocked"], due_date="2000-01-01"),
     ]
-    totals = board.summarise(columns(issues, []))
+    lists = [FakeList("Doing", 1), FakeList("Blocked", 2)]
+    totals = board.summarise(columns(issues, lists))
     assert (totals["issues"], totals["unassigned"], totals["overdue"]) == (3, 2, 1)
 
 
@@ -238,24 +197,22 @@ def test_summarise_counts_unassigned_and_overdue():
 def test_snapshot_is_one_record_per_distinct_issue():
     """A two-column issue is one record with both columns, not two lines."""
     records = board.snapshot_records(
-        FakeProject([FakeIssue(1, ["Doing", "Blocked"])]),
+        FakeProject(
+            [
+                FakeIssue(1, ["Doing", "Blocked"]),
+                FakeIssue(2, [], assignee={"username": "alice"}),
+            ]
+        ),
         FakeBoard([FakeList("Doing", 1), FakeList("Blocked", 2)]),
         ts="2026-08-21T00:00:00+00:00",
     )
-    assert len(records) == 1
-    assert records[0]["columns"] == ["Doing", "Blocked"]
-    assert records[0]["iid"] == 1
-    assert records[0]["ts"] == "2026-08-21T00:00:00+00:00"
-
-
-def test_snapshot_records_assignee_and_backlog():
-    records = board.snapshot_records(
-        FakeProject([FakeIssue(1, [], assignee={"username": "alice"})]),
-        FakeBoard([FakeList("Doing", 1)]),
-        ts="t",
-    )
-    assert records[0]["assignee"] == "alice"
-    assert records[0]["columns"] == ["Backlog"]
+    assert len(records) == 2
+    two = next(r for r in records if r["iid"] == 1)
+    assert two["columns"] == ["Doing", "Blocked"]
+    assert two["ts"] == "2026-08-21T00:00:00+00:00"
+    loose = next(r for r in records if r["iid"] == 2)
+    assert loose["assignee"] == "alice", "assignee"
+    assert loose["columns"] == ["Backlog"], "backlog"
 
 
 # --- offline: columns from a pulled spec -----------------------------------
@@ -334,6 +291,8 @@ def test_markdown_appends_age_only_for_known_iids():
 
 
 def test_issue_line_and_board_view_show_age():
+    own = board.issue_line(FakeIssue(1, ["Doing", "urgent"]), "Doing").plain
+    assert "urgent" in own and "Doing" not in own, "column's own label omitted"
     line = board.issue_line(FakeIssue(1, ["Verify"]), "Verify", {1: ("Verify", 3)})
     assert line.plain.endswith("· Verify 3d")
     assert "·" not in board.issue_line(FakeIssue(1, ["Verify"]), "Verify").plain
@@ -386,13 +345,6 @@ def test_history_includes_closed_only_via_the_closed_list():
     assert history[1]["tasks"] == [0, 0]
 
 
-def test_history_reads_task_completion():
-    i = HistIssue(1, [])
-    i.task_completion_status = {"count": 4, "completed_count": 1}
-    history, _ = board.fetch_history(StateProject([i], []), FakeBoard([]), SINCE)
-    assert history[0]["tasks"] == [1, 4]
-
-
 def test_history_keeps_only_column_label_events_and_skips_null_labels():
     events = [
         FakeEvent("2026-09-03T00:00:00Z", "add", "Doing"),
@@ -434,7 +386,9 @@ def test_history_flattens_assignee_and_milestone():
     a.milestone = {"title": "M1"}
     b = HistIssue(2, [])
     b.milestone = None
+    a.task_completion_status = {"count": 4, "completed_count": 1}
     history, _ = board.fetch_history(StateProject([a, b], []), FakeBoard([]), SINCE)
+    assert (history[0]["tasks"], history[1]["tasks"]) == ([1, 4], [0, 0])
     assert (history[0]["assignee"], history[0]["milestone"]) == ("ana", "M1")
     assert (history[1]["assignee"], history[1]["milestone"]) == (None, None)
     assert set(history[0]) == {

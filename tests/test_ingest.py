@@ -139,13 +139,9 @@ def test_merge_adds_every_task_to_verify_as_a_task_list_with_footer():
     assert migration["notes"][0].startswith(
         "*feedback from @alice via proj-x/tasks.md:*"
     )
-
-
-def test_checked_without_a_verdict_stays_put_and_is_reported():
-    spec = fresh()
-    out = ingest.merge(spec, ingest.parse(SAMPLE), SRC, DAY)
+    # [x] without a verdict stays put and is reported
     assert out["unverified"] == ["Confirm the migration ran"]
-    assert spec["issues"][1]["labels"] == ["Verify", "type::verify"]
+    assert migration["labels"] == ["Verify", "type::verify"]
 
 
 def test_verdict_moves_regardless_of_the_checkbox():
@@ -195,7 +191,7 @@ def test_id_match_keeps_the_board_title_and_reports_the_rename():
     assert "stale" not in spec["issues"][0]["labels"]
 
 
-def test_near_duplicate_title_is_reported_not_added():
+def test_near_duplicate_reported_not_added_exact_match_ignores_case():
     spec = seeded()
     near = SAMPLE.replace(
         "- [x] Confirm the migration ran", "- [ ] Confirm the migration runs"
@@ -206,9 +202,7 @@ def test_near_duplicate_title_is_reported_not_added():
     assert (new, old) == ("Confirm the migration runs", "Confirm the migration ran")
     assert ratio >= 0.85
     assert "stale" not in spec["issues"][1].get("labels", [])
-
-
-def test_exact_title_match_ignores_case_and_whitespace():
+    # exact match ignores case and whitespace: matched, not "similar"
     spec = seeded()
     shouty = SAMPLE.replace("Review the API docs (id: T-docs)", "REVIEW  the api docs")
     out = ingest.merge(spec, ingest.parse(shouty), SRC, "2026-09-16")

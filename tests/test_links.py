@@ -58,24 +58,24 @@ def test_check_accepts_iids_titles_and_externals():
     )
 
 
-def test_check_rejects_unknown_title():
-    with pytest.raises(ValueError, match="'nope'"):
-        links.check(spec({"title": "a", "blocked_by": ["nope"]}))
-
-
-def test_check_rejects_self_block():
-    with pytest.raises(ValueError, match="blocks itself"):
-        links.check(spec({"title": "a", "iid": 1, "blocked_by": [1]}))
-
-
-def test_check_rejects_a_cycle_through_iids_and_titles():
-    with pytest.raises(ValueError, match="cycle"):
-        links.check(
-            spec(
+@pytest.mark.parametrize(
+    "issues, match",
+    [
+        ([{"title": "a", "blocked_by": ["nope"]}], "'nope'"),
+        ([{"title": "a", "iid": 1, "blocked_by": [1]}], "blocks itself"),
+        (  # a cycle through an iid and a title
+            [
                 {"title": "a", "iid": 1, "blocked_by": ["b"]},
                 {"title": "b", "iid": 2, "blocked_by": [1]},
-            )
-        )
+            ],
+            "cycle",
+        ),
+    ],
+    ids=["unknown-title", "self-block", "cycle"],
+)
+def test_check_rejects(issues, match):
+    with pytest.raises(ValueError, match=match):
+        links.check(spec(*issues))
 
 
 # --- read / sync on fakes ----------------------------------------------------
