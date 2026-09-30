@@ -98,14 +98,12 @@ def test_suggest_dates_only_assigned_undated_cards_outside_verify_done_failed():
     assert "due_date" not in spec["issues"][2] and "due_date" not in spec["issues"][3]
 
 
-def test_suggest_due_false_reports_but_writes_nothing():
+def test_suggest_due_false_reports_but_writes_nothing_and_needs_history():
     spec = _spec(suggest_due=False)
     out = estimate.suggest(spec, HISTORY, date(2026, 9, 20))
     assert not out["changed"] and out["rows"][0]["due"] == "2026-09-23"
     assert "due_date" not in spec["issues"][0]
-
-
-def test_suggest_without_enough_history_is_empty():
+    # too little history: no rows at all
     assert estimate.suggest(_spec(), HISTORY[:4], date(2026, 9, 20)) == {
         "rows": [],
         "changed": False,

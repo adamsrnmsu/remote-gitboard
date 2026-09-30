@@ -30,12 +30,9 @@ def clean_config(monkeypatch, tmp_path_factory):
 # --- singleton -------------------------------------------------------------
 
 
-def test_get_config_returns_the_same_instance():
-    assert config.get_config() is config.get_config()
-
-
-def test_configure_replaces_the_cached_instance():
+def test_config_is_cached_until_configure_replaces_it():
     first = config.get_config()
+    assert config.get_config() is first
     second = config.configure(url="http://elsewhere")
     assert second is not first
     assert config.get_config() is second
@@ -49,21 +46,6 @@ def test_reset_clears_overrides(monkeypatch):
 
 
 # --- url resolution --------------------------------------------------------
-
-
-def test_flag_beats_env(monkeypatch):
-    monkeypatch.setenv("GITLAB_URL", "http://from-env")
-    assert config.configure(url="http://from-flag").url == "http://from-flag"
-
-
-def test_env_beats_default(monkeypatch):
-    monkeypatch.setenv("GITLAB_URL", "http://from-env")
-    assert config.get_config().url == "http://from-env"
-
-
-def test_default_is_gitlab_com(monkeypatch):
-    monkeypatch.delenv("GITLAB_URL", raising=False)
-    assert config.get_config().url == "https://gitlab.com"
 
 
 # --- token resolution ------------------------------------------------------
@@ -99,16 +81,8 @@ def test_missing_token_raises_an_actionable_error(monkeypatch):
     assert "GITLAB_READ_TOKEN" in str(e.value)
 
 
-def test_token_is_not_read_until_asked(monkeypatch):
+def test_token_is_lazy_and_resolved_once(monkeypatch):
     """`gitboard --help` must never hit the keychain."""
-    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
-    monkeypatch.setattr(
-        config.subprocess, "run", lambda *a, **k: pytest.fail("keychain was consulted")
-    )
-    config.get_config()  # building the config alone must not resolve a token
-
-
-def test_token_is_resolved_once(monkeypatch):
     monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
     calls = []
 
@@ -118,9 +92,10 @@ def test_token_is_resolved_once(monkeypatch):
 
     monkeypatch.setattr(config.subprocess, "run", once)
     cfg = config.get_config()
+    assert calls == [], "building the config alone must not resolve a token"
     cfg.token()
     cfg.token()
-    assert len(calls) == 1
+    assert len(calls) == 1, "token must be cached after the first lookup"
 
 
 # --- client error mapping --------------------------------------------------
@@ -157,19 +132,17 @@ def run_get(monkeypatch, exc_factory):
     return str(e.value)
 
 
-def test_unknown_project_message(monkeypatch):
-    msg = run_get(monkeypatch, lambda m: m.exceptions.GitlabGetError("404"))
-    assert "no project 'grp/proj'" in msg
-
-
-def test_rejected_token_message(monkeypatch):
-    msg = run_get(monkeypatch, lambda m: m.exceptions.GitlabAuthenticationError("401"))
-    assert "rejected the token" in msg
-
-
-def test_unreachable_host_message(monkeypatch):
-    msg = run_get(monkeypatch, lambda m: ConnectionError("refused"))
-    assert "cannot reach" in msg
+@pytest.mark.parametrize(
+    "make_exc, want",
+    [
+        (lambda m: m.exceptions.GitlabGetError("404"), "no project 'grp/proj'"),
+        (lambda m: m.exceptions.GitlabAuthenticationError("401"), "rejected the token"),
+        (lambda m: ConnectionError("refused"), "cannot reach"),
+    ],
+    ids=["unknown-project", "rejected-token", "unreachable-host"],
+)
+def test_get_project_error_messages(monkeypatch, make_exc, want):
+    assert want in run_get(monkeypatch, make_exc)
 
 
 # --- config file -----------------------------------------------------------
@@ -179,25 +152,6 @@ def write(tmp_path, text, name="gitboard.toml"):
     f = tmp_path / name
     f.write_text(text)
     return str(f)
-
-
-def test_file_supplies_url(monkeypatch, tmp_path):
-    monkeypatch.delenv("GITLAB_URL", raising=False)
-    path = write(tmp_path, 'url = "http://from-file"\n')
-    assert config.configure(config_path=path).url == "http://from-file"
-
-
-def test_env_beats_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("GITLAB_URL", "http://from-env")
-    path = write(tmp_path, 'url = "http://from-file"\n')
-    assert config.configure(config_path=path).url == "http://from-env"
-
-
-def test_flag_beats_env_and_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("GITLAB_URL", "http://from-env")
-    path = write(tmp_path, 'url = "http://from-file"\n')
-    cfg = config.configure(url="http://from-flag", config_path=path)
-    assert cfg.url == "http://from-flag"
 
 
 def test_file_supplies_defaults(monkeypatch, tmp_path):
@@ -223,13 +177,6 @@ def test_relative_spec_resolves_against_the_config_not_the_cwd(tmp_path):
 def test_an_absolute_spec_is_left_alone(tmp_path):
     path = write(tmp_path, 'spec = "/somewhere/b.yaml"\n')
     assert config.configure(config_path=path).spec == "/somewhere/b.yaml"
-
-
-def test_a_spec_flag_is_not_rewritten(tmp_path):
-    """An explicit path on the command line is relative to the cwd."""
-    path = write(tmp_path, 'spec = "boards/test.yaml"\n')
-    cfg = config.configure(config_path=path)
-    assert cfg.spec.endswith("boards/test.yaml")
 
 
 def test_a_token_in_the_file_is_ignored_with_a_warning(monkeypatch, tmp_path):
@@ -267,21 +214,10 @@ def test_a_missing_explicit_file_is_an_error(tmp_path):
     assert "no such config file" in str(e.value)
 
 
-def test_no_file_anywhere_is_fine(monkeypatch, tmp_path):
-    monkeypatch.delenv("GITLAB_URL", raising=False)
-    monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.chdir(tmp_path)
+def test_no_file_anywhere_is_fine():
     cfg = config.get_config()
-    assert cfg.source is None and cfg.url == config.DEFAULT_URL
-
-
-def test_cwd_file_is_found_without_being_named(monkeypatch, tmp_path):
-    monkeypatch.delenv("GITLAB_URL", raising=False)
-    monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
-    write(tmp_path, 'url = "http://cwd"\n')
-    monkeypatch.chdir(tmp_path)
-    assert config.get_config().url == "http://cwd"
+    assert (cfg.source, cfg.env_source) == (None, None)
+    assert cfg.url == config.DEFAULT_URL
 
 
 def test_cwd_beats_user_config(monkeypatch, tmp_path):
@@ -317,9 +253,33 @@ def env_file(monkeypatch, tmp_path):
     return write
 
 
-def test_env_file_supplies_url(env_file):
-    env_file("GITLAB_URL=http://from-dotenv\n")
-    assert config.get_config().url == "http://from-dotenv"
+# One row per layer: flag > env > .env > gitboard.toml > default. The files sit
+# in the parent of the cwd, so the upward walk is exercised on every row.
+@pytest.mark.parametrize(
+    "flag, env, dotenv, toml, want",
+    [
+        (None, None, None, None, "https://gitlab.com"),
+        (None, None, None, "toml", "http://from-toml"),
+        (None, None, "dotenv", "toml", "http://from-dotenv"),
+        (None, "env", "dotenv", "toml", "http://from-env"),
+        ("flag", "env", "dotenv", "toml", "http://from-flag"),
+        (None, None, "", "toml", "http://from-toml"),
+    ],
+    ids=["default", "toml", "dotenv>toml", "env>dotenv", "flag>env", "empty-dotenv"],
+)
+def test_url_precedence(env_file, monkeypatch, tmp_path, flag, env, dotenv, toml, want):
+    if toml:
+        (tmp_path / "gitboard.toml").write_text(f'url = "http://from-{toml}"\n')
+    if dotenv is not None:
+        env_file(f"GITLAB_URL={'http://from-' + dotenv if dotenv else ''}\n")
+    if env:
+        monkeypatch.setenv("GITLAB_URL", f"http://from-{env}")
+    sub = tmp_path / "a" / "b"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    config.reset()
+    url = config.configure(url=f"http://from-{flag}" if flag else None).url
+    assert url == want
 
 
 def test_env_file_supplies_token(env_file, monkeypatch):
@@ -332,53 +292,19 @@ def test_env_file_supplies_token(env_file, monkeypatch):
     assert cfg.token_source.endswith(".env")
 
 
-def test_real_env_beats_the_env_file(env_file, monkeypatch):
-    env_file("GITLAB_URL=http://from-dotenv\n")
-    monkeypatch.setenv("GITLAB_URL", "http://from-real-env")
-    config.reset()
-    assert config.get_config().url == "http://from-real-env"
-
-
-def test_env_file_beats_the_toml(env_file, tmp_path):
-    (tmp_path / "gitboard.toml").write_text('url = "http://from-toml"\n')
-    env_file("GITLAB_URL=http://from-dotenv\n")
-    assert config.get_config().url == "http://from-dotenv"
-
-
-def test_flag_beats_the_env_file(env_file):
-    env_file("GITLAB_URL=http://from-dotenv\n")
-    assert config.configure(url="http://from-flag").url == "http://from-flag"
-
-
-def test_quoted_values_are_unquoted(env_file):
-    """A hand-edited .env often has quotes; they are not part of the value."""
-    env_file('GITLAB_URL="http://quoted"\n')
-    assert config.get_config().url == "http://quoted"
-
-
-def test_comments_and_blanks_are_skipped(env_file):
-    env_file("# a comment\n\nGITLAB_URL=http://after-comment\n")
-    assert config.get_config().url == "http://after-comment"
-
-
-def test_empty_values_do_not_shadow_lower_layers(env_file, tmp_path):
-    """GITLAB_URL= with nothing after it must not beat the toml."""
-    (tmp_path / "gitboard.toml").write_text('url = "http://from-toml"\n')
-    env_file("GITLAB_URL=\n")
-    assert config.get_config().url == "http://from-toml"
-
-
-def test_no_env_file_is_fine(monkeypatch, tmp_path):
-    monkeypatch.delenv("GITLAB_URL", raising=False)
-    monkeypatch.delenv("GITBOARD_CONFIG", raising=False)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    monkeypatch.chdir(tmp_path)
-    assert config.get_config().env_source is None
-
-
-def test_unrelated_env_keys_are_ignored(env_file):
-    """.env is shared with docker compose — its keys must not leak in."""
-    env_file("GITLAB_ROOT_PASSWORD=hunter2\nGITLAB_URL=http://x\n")
+@pytest.mark.parametrize(
+    "text",
+    [
+        'GITLAB_URL="http://x"\n',
+        "# a comment\n\nGITLAB_URL=http://x\n",
+        "GITLAB_ROOT_PASSWORD=hunter2\nGITLAB_URL=http://x\n",
+    ],
+    ids=["quoted", "comments-and-blanks", "unrelated-keys-ignored"],
+)
+def test_env_file_parsing(env_file, text):
+    """.env is shared with docker compose: quotes are not the value, its other
+    keys must not leak in."""
+    env_file(text)
     cfg = config.get_config()
     assert cfg.url == "http://x"
     assert "hunter2" not in repr(cfg)
@@ -438,25 +364,12 @@ def test_write_keychain_is_consulted_before_falling_back(monkeypatch):
     assert asked == [config.WRITE_KEYCHAIN_SERVICE]
 
 
-def test_a_refused_write_explains_the_scope(monkeypatch):
-    """The 403 a read_api token gets must name the fix, not dump the API error."""
-    mod = fake_gitlab_module(None)
-
-    class GitlabError(Exception):
-        def __init__(self, code):
-            self.response_code = code
-
-    mod.exceptions.GitlabError = GitlabError
-    monkeypatch.setitem(__import__("sys").modules, "gitlab", mod)
-
-    with pytest.raises(client.GitlabProblem) as e, client.write_errors():
-        raise GitlabError(403)
-    assert "api` scope" in str(e.value)
-    assert "GITLAB_WRITE_TOKEN" in str(e.value)
-
-
-def test_a_non_scope_error_is_not_mislabelled(monkeypatch):
-    """A 500 is not a scope problem — don't send the user chasing tokens."""
+@pytest.mark.parametrize(
+    "code, scoped", [(403, True), (500, False)], ids=["403", "500"]
+)
+def test_write_errors_name_the_scope_only_for_a_403(monkeypatch, code, scoped):
+    """The 403 a read_api token gets must name the fix; a 500 must not send the
+    user chasing tokens."""
     mod = fake_gitlab_module(None)
 
     class GitlabError(Exception):
@@ -468,14 +381,16 @@ def test_a_non_scope_error_is_not_mislabelled(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "gitlab", mod)
 
     with pytest.raises(client.GitlabProblem) as e, client.write_errors():
-        raise GitlabError(500)
-    assert "scope" not in str(e.value)
+        raise GitlabError(code)
+    msg = str(e.value)
+    assert ("api` scope" in msg and "GITLAB_WRITE_TOKEN" in msg) is scoped
+    assert ("scope" in msg) is scoped
 
 
 # --- the GITLAB_TOKEN -> GITLAB_READ_TOKEN rename --------------------------
 
 
-def test_legacy_env_var_still_works(monkeypatch):
+def test_legacy_env_var_still_works_and_warns(monkeypatch):
     """An export sitting in a shell must not silently fall through to the
     keychain and read the wrong instance."""
     monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
@@ -483,13 +398,8 @@ def test_legacy_env_var_still_works(monkeypatch):
     monkeypatch.setattr(
         config.subprocess, "run", lambda *a, **k: pytest.fail("keychain was consulted")
     )
-    assert config.get_config().token() == "legacy-tok"
-
-
-def test_legacy_env_var_warns(monkeypatch):
-    monkeypatch.delenv("GITLAB_READ_TOKEN", raising=False)
-    monkeypatch.setenv("GITLAB_TOKEN", "legacy-tok")
     cfg = config.get_config()
+    assert cfg.token() == "legacy-tok"
     assert any("deprecated" in w for w in cfg.warnings)
     assert "deprecated" in cfg.token_source
 

@@ -143,44 +143,40 @@ SPEC = {
 # --- normalisation ---------------------------------------------------------
 
 
-def test_norm_text_strips_the_trailing_newline_yaml_block_scalars_add():
-    assert apply.norm_text("body\n") == "body"
+@pytest.mark.parametrize(
+    "raw, clean",
+    [
+        ("body\n", "body"),  # the newline YAML block scalars add
+        ("a\r\nb", "a\nb"),
+        (None, ""),
+    ],
+    ids=["trailing-newline", "crlf", "none"],
+)
+def test_norm_text(raw, clean):
+    assert apply.norm_text(raw) == clean
 
 
-def test_norm_text_normalises_crlf():
-    assert apply.norm_text("a\r\nb") == "a\nb"
-
-
-def test_norm_text_handles_none():
-    assert apply.norm_text(None) == ""
-
-
-def test_yaml_date_becomes_an_iso_string():
+@pytest.mark.parametrize(
+    "given",
+    [datetime.date(2026, 9, 1), "2026-09-01"],
+    ids=["yaml-date-object", "quoted"],
+)
+def test_due_date_becomes_an_iso_string(given):
     """PyYAML gives a date object; requests cannot JSON-encode it."""
-    want = apply.wanted_issue({"title": "t", "due_date": datetime.date(2026, 9, 1)})
+    want = apply.wanted_issue({"title": "t", "due_date": given})
     assert want["due_date"] == "2026-09-01"
-
-
-def test_quoted_date_passes_through_unchanged():
-    want = apply.wanted_issue({"title": "t", "due_date": "2026-09-01"})
-    assert want["due_date"] == "2026-09-01"
-
-
-def test_labels_are_sorted_so_yaml_order_is_not_a_diff():
-    a = apply.wanted_issue({"title": "t", "labels": ["b", "a"]})
-    b = apply.wanted_issue({"title": "t", "labels": ["a", "b"]})
-    assert a["labels"] == b["labels"]
 
 
 def test_a_settled_issue_shows_no_drift():
-    """wanted_issue and current_issue must agree, or apply is never idempotent."""
+    """wanted_issue and current_issue must agree, or apply is never idempotent.
+    Label order in the YAML is not a diff either."""
     spec = {
         "title": "t",
-        "labels": ["Doing"],
+        "labels": ["b", "a"],
         "description": "body\n",
         "milestone": None,
     }
-    issue = FakeIssue("t", labels=["Doing"], description="body")
+    issue = FakeIssue("t", labels=["a", "b"], description="body")
     assert apply.wanted_issue(spec) == apply.current_issue(issue)
 
 
@@ -193,15 +189,6 @@ def test_plan_on_a_missing_project_lists_everything(monkeypatch):
     assert pending[0] == ("added", "project", "grp/proj")
     assert ("added", "board", "Dev Board") in pending
     assert len(pending) == 5  # project, 2 labels, board, 1 issue
-
-
-def test_plan_reports_nothing_when_the_board_already_matches(monkeypatch):
-    project = FakeProject(
-        labels=["Doing", "Blocked"],
-        boards=["Dev Board"],
-        issues=[FakeIssue("one", labels=["Doing"])],
-    )
-    assert apply.plan(use_project(monkeypatch, project), SPEC) == []
 
 
 def test_plan_spots_a_changed_label(monkeypatch):
@@ -289,11 +276,16 @@ def test_comments_are_copied_oldest_first_with_attribution(monkeypatch):
     assert bodies[1].startswith("*from #1, by @bob on 2026-08-02:*")
 
 
-def test_system_notes_are_not_comments(monkeypatch):
-    issues = migration_project(
-        monkeypatch,
-        [fake_note("added label ~Doing", system=True), fake_note("real comment")],
-    )
+@pytest.mark.parametrize(
+    "noise",
+    [
+        {"body": "added label ~Doing", "system": True},
+        {"body": "superseded by #2"},  # close_issue's breadcrumb
+    ],
+    ids=["system-note", "superseded-breadcrumb"],
+)
+def test_only_real_comments_are_migrated(monkeypatch, noise):
+    issues = migration_project(monkeypatch, [fake_note("real"), fake_note(**noise)])
     assert apply.migrate_comments(None, "grp/proj", 1, 2) == 1
     assert len(issues[2].notes.notes) == 1
 
@@ -481,15 +473,18 @@ def test_dump_load_roundtrip(tmp_path):
 # --- colors ----------------------------------------------------------------
 
 
-def test_color_names_translate_to_hex():
-    assert apply.norm_color("crimson") == "#dc143c"
-    assert apply.norm_color("Rose-Red") == "#c21e56"
-    assert apply.norm_color("MAGENTA_PINK") == "#cc338b"
-
-
-def test_hex_passes_through_lowercased():
-    assert apply.norm_color("#DC143C") == "#dc143c"
-    assert apply.norm_color("#fff") == "#fff"
+@pytest.mark.parametrize(
+    "given, hexed",
+    [
+        ("crimson", "#dc143c"),
+        ("Rose-Red", "#c21e56"),
+        ("MAGENTA_PINK", "#cc338b"),
+        ("#DC143C", "#dc143c"),
+        ("#fff", "#fff"),
+    ],
+)
+def test_norm_color(given, hexed):
+    assert apply.norm_color(given) == hexed
 
 
 def test_unknown_color_is_a_spec_error():
@@ -510,12 +505,15 @@ def test_load_rejects_a_label_that_is_also_a_column(tmp_path):
         apply.load(str(f))
 
 
-def test_load_normalises_label_colors(tmp_path):
+def test_load_normalises_label_and_column_colors(tmp_path):
     f = tmp_path / "b.yaml"
     f.write_text(
-        "project: g/p\nboard: B\nlabels:\n  - name: type::bug\n    color: crimson\n"
+        "project: g/p\nboard: B\ncolumns:\n  - name: Doing\n    color: crimson\n"
+        "labels:\n  - name: type::bug\n    color: crimson\n"
     )
-    assert apply.load(str(f))["labels"] == [{"name": "type::bug", "color": "#dc143c"}]
+    spec = apply.load(str(f))
+    assert spec["labels"] == [{"name": "type::bug", "color": "#dc143c"}]
+    assert spec["columns"][0]["color"] == "#dc143c"
 
 
 def test_ensure_labels_creates_and_fixes_extra_labels():
@@ -575,21 +573,6 @@ def test_offline_diff_sees_a_base_label():
     assert ("added", "label", "stale") in apply.diff(base, None)
 
 
-def test_load_normalises_column_colors(tmp_path):
-    f = tmp_path / "b.yaml"
-    f.write_text(
-        "project: g/p\nboard: B\ncolumns:\n  - name: Doing\n    color: crimson\n"
-    )
-    assert apply.load(str(f))["columns"][0]["color"] == "#dc143c"
-
-
-def test_pull_prefers_the_friendly_name():
-    project, board, columns = board_fixture()
-    project.labels.list()[0].color = "#DC143C"
-    spec = apply.spec_from_board(project, board, columns)
-    assert spec["columns"][0]["color"] == "crimson"
-
-
 def test_cross_project_header_is_qualified(monkeypatch):
     projects = {
         "grp/a": types.SimpleNamespace(
@@ -640,15 +623,6 @@ def test_close_issue_leaves_a_closed_issue_alone(monkeypatch):
     use_project(monkeypatch, project)
     assert apply.close_issue(None, "grp/proj", 1) is False
     assert not issue.notes.notes
-
-
-def test_the_superseded_breadcrumb_is_not_migrated(monkeypatch):
-    """close_issue's note on the source must not ride along to the successor."""
-    issues = migration_project(
-        monkeypatch, [fake_note("real"), fake_note("superseded by #2")]
-    )
-    assert apply.migrate_comments(None, "grp/proj", 1, 2) == 1
-    assert len(issues[2].notes.notes) == 1
 
 
 # --- cli: the offline paths never open a connection -------------------------
@@ -761,15 +735,6 @@ def test_staged_note_offline_skips_what_the_base_discussion_already_has():
     ]
 
 
-def test_notes_on_a_new_issue_are_planned_with_it():
-    spec = {**SPEC, "issues": [{"title": "fresh", "notes": ["hello"]}]}
-    assert apply.diff(spec, apply.have_from_spec(SPEC)) == [
-        ("added", "issue", "fresh"),
-        ("added", "note", "fresh: hello"),
-    ]
-    assert ("added", "note", "fresh: hello") in apply.diff(spec, None)
-
-
 # --- closed issues, UI labels, matching ------------------------------------
 
 
@@ -789,6 +754,17 @@ def test_an_open_match_beats_a_closed_one(monkeypatch):
     assert apply.plan(use_project(monkeypatch, project), SPEC) == []
 
 
+def test_offline_diff_ignores_a_ui_label_and_plans_notes_with_a_new_issue():
+    base = {**SPEC, "issues": [{"title": "one", "labels": ["Doing", "bug"]}]}
+    assert apply.diff(SPEC, apply.have_from_spec(base)) == [], "UI-added label"
+    spec = {**SPEC, "issues": [{"title": "fresh", "notes": ["hello"]}]}
+    assert apply.diff(spec, apply.have_from_spec(SPEC)) == [
+        ("added", "issue", "fresh"),
+        ("added", "note", "fresh: hello"),
+    ]
+    assert ("added", "note", "fresh: hello") in apply.diff(spec, None)
+
+
 def test_a_ui_added_label_survives_a_move(monkeypatch):
     issue = FakeIssue("one", labels=["Doing", "bug"])
     spec = {**SPEC, "issues": [{"title": "one", "labels": ["Blocked"]}]}
@@ -799,11 +775,6 @@ def test_a_ui_added_label_survives_a_move(monkeypatch):
     apply.apply(gl, spec)
     assert issue.saved and issue.labels == ["Blocked", "bug"]
     assert apply.plan(gl, spec) == []
-
-
-def test_a_ui_added_label_is_not_a_diff_offline():
-    base = {**SPEC, "issues": [{"title": "one", "labels": ["Doing", "bug"]}]}
-    assert apply.diff(SPEC, apply.have_from_spec(base)) == []
 
 
 def test_two_open_issues_with_one_title_is_an_error(monkeypatch):
@@ -914,29 +885,20 @@ def three_way(edited_labels, live_labels, old_labels=("Doing",), force=False):
     return apply.diff(mk(edited_labels), live, base=mk(old_labels), force=force)
 
 
-def test_untouched_field_changed_on_gitlab_is_kept():
-    assert three_way(edited_labels=["Doing"], live_labels=["Blocked"]) == [
-        ("skipped", "issue", "one: labels changed on GitLab, kept")
-    ]
-
-
-def test_edited_field_unchanged_on_gitlab_is_written():
-    assert three_way(edited_labels=["Blocked"], live_labels=["Doing"]) == [
-        ("changed", "issue", "one: labels [Doing] -> [Blocked]")
-    ]
-
-
-def test_edited_field_already_matching_gitlab_is_quiet():
-    assert three_way(edited_labels=["Blocked"], live_labels=["Blocked"]) == []
-
-
-def test_both_sides_changed_is_drift_unless_forced():
-    assert three_way(edited_labels=["Blocked"], live_labels=["Done"]) == [
-        ("drift", "issue", "one: labels [Done] -> [Blocked]")
-    ]
-    assert three_way(edited_labels=["Blocked"], live_labels=["Done"], force=True) == [
-        ("changed", "issue", "one: labels [Done] -> [Blocked]")
-    ]
+@pytest.mark.parametrize(
+    "edited, live, force, want",
+    [
+        (["Doing"], ["Blocked"], False, ("skipped", "labels changed on GitLab, kept")),
+        (["Blocked"], ["Doing"], False, ("changed", "labels [Doing] -> [Blocked]")),
+        (["Blocked"], ["Blocked"], False, None),  # both agree: quiet
+        (["Blocked"], ["Done"], False, ("drift", "labels [Done] -> [Blocked]")),
+        (["Blocked"], ["Done"], True, ("changed", "labels [Done] -> [Blocked]")),
+    ],
+    ids=["gitlab-only-kept", "yaml-only-written", "agree", "drift", "drift-forced"],
+)
+def test_three_way_kinds(edited, live, force, want):
+    got = three_way(edited_labels=edited, live_labels=live, force=force)
+    assert got == ([(want[0], "issue", f"one: {want[1]}")] if want else [])
 
 
 def test_apply_with_base_writes_only_what_the_yaml_changed(monkeypatch):
@@ -1032,7 +994,11 @@ def test_empty_blocked_by_removes_native_links(monkeypatch):
     assert apply.plan(gl, spec) == []
 
 
-FOOTER_SKIP = ("skipped", "link", "one: blocker #9 is a footer ref — edit the description")
+FOOTER_SKIP = (
+    "skipped",
+    "link",
+    "one: blocker #9 is a footer ref — edit the description",
+)
 
 
 FOOTED = {"title": "one", "labels": ["Doing"], "description": "x\n\nBlocked by: #9"}

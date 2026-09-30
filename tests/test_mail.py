@@ -50,17 +50,14 @@ def test_bar_row_widths_and_zero():
     assert zero.count("<td") == 2  # label + value, no bar cell
 
 
-def test_column_chart_all_zero_has_no_filled_cells():
+def test_column_chart_zero_and_peak_scaling():
     s = [{"date": f"2026-09-{d:02d}", "open": 0} for d in range(10, 17)]
     html = mail.column_chart(s, "open", "#3987e5")
-    assert "#3987e5" not in html
+    assert "#3987e5" not in html  # all zero: no filled cells
     assert "Th" in html  # weekday labels still render
-
-
-def test_column_chart_scales_to_the_peak():
     s = [{"date": "2026-09-14", "open": 2}, {"date": "2026-09-15", "open": 4}]
     html = mail.column_chart(s, "open", "#3987e5", height=80)
-    assert 'height="40"' in html and 'height="80"' in html
+    assert 'height="40"' in html and 'height="80"' in html  # scales to the peak
 
 
 def test_sparkline_row_pads_left_without_labels():
@@ -118,39 +115,26 @@ def test_headers_panel_shows_in_preview():
     assert "a@x" in html and "Subject" in html
 
 
-def test_person_page_leads_with_moves_and_links_cards():
+def test_person_page_layout():
     s = summary()
     person = stats.for_person(s, history(), "alice", NOW)
     html = mail.render_person_html(person, s, "alice", series())
+    # leads with moves, links cards
     assert html.index("Your 3 moves") < html.index("Team burndown")
     assert 'href="http://x/4"' in html
-
-
-def test_zones_you_before_team_and_team_only_on_team_page():
-    s = summary()
-    person = stats.for_person(s, history(), "alice", NOW)
-    html = mail.render_person_html(person, s, "alice", series())
+    # YOU zone before TEAM; TEAM only on the team page
     assert html.index(">YOU<") < html.index(">TEAM<")
     team = mail.render_team_html(s, series())
     assert ">YOU<" not in team and ">TEAM<" in team
     assert 'href="team.html"' in html
-
-
-def test_rule_count_grows_with_the_trend():
-    s = summary()
-    person = stats.for_person(s, history(), "alice", NOW)
-    without = mail.render_person_html(person, s, "alice", series())
+    # rule count grows with the trend
     with_ = mail.render_person_html(person, s, "alice", series(), weekly=[WEEK, WEEK])
-    assert without.count(mail.rule()) == 4
+    assert html.count(mail.rule()) == 4
     assert with_.count(mail.rule()) == 5
-
-
-def test_glance_chips_and_person_shorter_than_team():
-    s = summary()
-    person = stats.for_person(s, history(), "alice", NOW)
-    html = mail.render_person_html(person, s, "alice", series(), weekly=[WEEK])
-    assert "moves</span>" in html and "open, team</span>" in html
-    assert len(html) < len(mail.render_team_html(s, series(), weekly=[WEEK]))
+    # glance chips; person page shorter than team
+    week1 = mail.render_person_html(person, s, "alice", series(), weekly=[WEEK])
+    assert "moves</span>" in week1 and "open, team</span>" in week1
+    assert len(week1) < len(mail.render_team_html(s, series(), weekly=[WEEK]))
 
 
 def test_index_lists_every_file():

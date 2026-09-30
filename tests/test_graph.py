@@ -50,27 +50,18 @@ CARDS = [
 ]
 
 
-def test_build_edges_and_external_nodes():
+def test_build_model():
     g = graph.build(CARDS)
-    assert ("1", "2") in g["edges"] and ("4", "m:Beta") in g["edges"]
+    assert ("1", "2") in g["edges"] and ("4", "m:Beta") in g["edges"], "edges"
     assert g["nodes"]["x/y#7"]["kind"] == "external"
     assert g["nodes"]["m:Beta"]["kind"] == "milestone"
-
-
-def test_downstream_counts_cards_not_milestones():
-    g = graph.build(CARDS)
-    assert g["downstream"]["1"] == 2  # 2 and 4
-    assert g["downstream"]["3"] == 1
-    assert g["downstream"]["4"] == 0
-
-
-def test_critical_chain_is_longest_with_lowest_key_tiebreak():
-    g = graph.build(CARDS)
-    assert g["critical"]["m:Beta"] == ["1", "2", "4", "m:Beta"]
-
-
-def test_layers_put_milestones_last():
-    g = graph.build(CARDS)
+    # downstream counts cards, not milestones
+    assert (g["downstream"]["1"], g["downstream"]["3"], g["downstream"]["4"]) == (
+        2,
+        1,
+        0,
+    )
+    assert g["critical"]["m:Beta"] == ["1", "2", "4", "m:Beta"], "longest, lowest key"
     layers = {k: v[0] for k, v in g["layers"].items()}
     assert layers["1"] == 0 and layers["2"] == 1 and layers["4"] == 2
     assert layers["m:Beta"] == max(layers.values())
@@ -124,15 +115,12 @@ def test_no_milestone_flag():
     assert graph.flags(old, ["Doing"])["no_milestone"] == []
 
 
-def test_no_blocked_flags_without_a_blocked_column():
+def test_flags_stay_quiet():
     f = graph.flags(
         [card(3, labels=["Doing"], blocked_by=[("9", "opened")])], ["Doing"]
-    )
+    )  # no Blocked column
     assert f["blocked_stale"] == [] and f["blocked_unmarked"] == []
-
-
-def test_closed_blocker_raises_no_inversion():
-    cards = [
+    cards = [  # a closed blocker raises no inversion
         card(1, priority=4, state="closed"),
         card(2, priority=1, blocked_by=[("1", "closed")]),
     ]
@@ -250,8 +238,6 @@ def test_empty_milestone_is_a_root_and_not_faded():
     assert "◆ Later  due 2026-10-10 · 10 days left · no cards yet" in text
     assert "no cards yet" in graph.render_mermaid(g)
     assert list(graph.subgraph(g, "Later")["nodes"]) == ["m:Later"]
-
-
-def test_known_milestone_with_cards_keeps_its_count():
+    # a known milestone that has cards keeps its count
     g = graph.build([card(1, milestone="Beta")], [{"title": "Beta"}])
     assert "no cards yet" not in _text(graph.render_tree(g, "2026-09-30"))

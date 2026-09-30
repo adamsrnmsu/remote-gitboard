@@ -27,16 +27,13 @@ def refused(fn, *args, match):
         fn(*args)
 
 
-def test_move_swaps_only_the_column_label_and_reports_it():
+def test_move_swaps_only_the_column_label_and_reports_it_or_backlogs():
     s = spec()
     assert edit.move(s, 1, "Review") == "#1 Doing → Review"
     assert s["issues"][0]["labels"] == ["Review", "type::bug"]
     assert edit.move(s, 3, "Verify") == "#3 Backlog → Verify"  # into Verify is fine
-
-
-def test_move_to_backlog_drops_the_column_label():
-    s = spec()
-    assert edit.move(s, 1, edit.BACKLOG) == "#1 Doing → Backlog"
+    # to Backlog drops the column label
+    assert edit.move(s, 1, edit.BACKLOG) == "#1 Review → Backlog"
     assert s["issues"][0]["labels"] == ["type::bug"]
 
 

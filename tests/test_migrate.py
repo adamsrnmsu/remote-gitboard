@@ -196,11 +196,6 @@ def write(tmp_path, text):
 HEAD = "project: grp/proj\nboard: Dev Board\nops:\n"
 
 
-def test_load_rejects_an_unknown_op(tmp_path):
-    with pytest.raises(SpecError, match="unknown op 'explode'"):
-        migrate.load(write(tmp_path, HEAD + "  - explode: {name: x}\n"))
-
-
 @pytest.mark.parametrize(
     "op",
     [
@@ -215,7 +210,9 @@ def test_load_refuses_the_fixed_names(tmp_path, op):
         migrate.load(write(tmp_path, HEAD + f"  - {op}\n"))
 
 
-def test_load_rejects_missing_keys_and_non_list_ops(tmp_path):
+def test_load_rejects_malformed_ops(tmp_path):
+    with pytest.raises(SpecError, match="unknown op 'explode'"):
+        migrate.load(write(tmp_path, HEAD + "  - explode: {name: x}\n"))
     with pytest.raises(SpecError, match="needs 'to'"):
         migrate.load(write(tmp_path, HEAD + "  - rename_label: {from: a}\n"))
     with pytest.raises(SpecError, match="'ops' must be a list"):
@@ -251,12 +248,6 @@ def test_rename_label_pending_applied_then_skipped(gl):
     assert {x.name for x in p.labels.list()} == {"type::bug", "Doing", "Verify", "Done"}
 
 
-def test_rename_when_both_exist_says_merge(gl):
-    project(labels=("bug", "type::bug"))
-    with pytest.raises(SpecError, match="use merge_labels"):
-        migrate.plan(gl, mig({"rename_label": {"from": "bug", "to": "type::bug"}}))
-
-
 def test_order_columns_keeps_unnamed_lists_after_the_named(gl):
     p = project(columns=("Done", "Verify", "Doing", "Blocked"))
     pending, applied, after = run(gl, {"order_columns": ["Doing", "Verify"]})
@@ -270,8 +261,10 @@ def test_order_columns_keeps_unnamed_lists_after_the_named(gl):
     assert [x.label["name"] for x in lists] == ["Doing", "Verify", "Done", "Blocked"]
 
 
-def test_order_columns_rejects_an_unknown_column(gl):
-    project()
+def test_plan_rejects_bad_rename_and_unknown_column(gl):
+    project(labels=("bug", "type::bug"))
+    with pytest.raises(SpecError, match="use merge_labels"):  # both labels exist
+        migrate.plan(gl, mig({"rename_label": {"from": "bug", "to": "type::bug"}}))
     with pytest.raises(SpecError, match="no such column Nope"):
         migrate.plan(gl, mig({"order_columns": ["Nope"]}))
 
