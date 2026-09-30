@@ -24,6 +24,7 @@ FLAGS = (
     "priority_inversion",
     "date_inversion",
     "unowned_blocker",
+    "no_milestone",
 )
 
 
@@ -110,9 +111,10 @@ def _node(key, kind, *, title, open, iid=None, due_date=None, **rest):
     }
 
 
-def build(cards):
+def build(cards, milestones=()):
     """Nodes and edges (blocker -> card, card -> milestone), then the
-    derived counts, chains and layout."""
+    derived counts, chains and layout. `milestones` ({title, due_date}) adds
+    a root for each known one no card carries."""
     nodes, edges = {}, []
     for c in cards:
         nodes[_key(c)] = _node(
@@ -150,6 +152,16 @@ def build(cards):
                 )
             nodes[mk]["open"] |= is_open(c)
             edges.append((_key(c), mk))
+    for m in milestones:
+        mk = f"m:{m['title']}"
+        if mk not in nodes:
+            nodes[mk] = _node(
+                mk,
+                "milestone",
+                title=m["title"],
+                open=True,
+                due_date=_iso(m.get("due_date")),
+            )
     return _derive(nodes, edges)
 
 
@@ -313,9 +325,16 @@ def flags(cards, columns):
     def date(c):
         return c.get("due_date") or c.get("milestone_due")
 
+    planned = any(c.get("milestone") for c in cards if is_open(c))
     for c in cards:
         if not is_open(c):
             continue
+        if (
+            planned
+            and not c.get("milestone")
+            and not {VERIFY, FAILED} & set(c["labels"])
+        ):
+            out["no_milestone"].append(item(c, None, f"{_name(c)} has no milestone"))
         refs = c.get("blocked_by", [])
         live = [
             b["ref"]
@@ -430,6 +449,8 @@ def _root(m, mine, nodes, today):
     if mine:
         done = sum(not nodes[k]["open"] for k in mine)
         parts.append(f"{done}/{len(mine)} done")
+    else:
+        parts.append("no cards yet")
     return parts[0] + ("  " + " · ".join(parts[1:]) if parts[1:] else "")
 
 
@@ -471,6 +492,8 @@ def render_mermaid(g):
         n = nodes[k]
         if n["kind"] == "milestone":
             label = n["title"] + (f" · due {n['due_date']}" if n["due_date"] else "")
+            if not any(b == k for _, b in g["edges"]):
+                label += " · no cards yet"
             lines.append(f'  {ids[k]}(["{_esc(label)}"])')
         else:
             lines.append(f'  {ids[k]}["{_esc(_head(n))}"]')

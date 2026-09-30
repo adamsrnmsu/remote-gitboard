@@ -37,9 +37,10 @@ gitboard land boards/x.yaml                 # plan, y/n, apply, snapshot, rotate
 
 gitboard estimate boards/x.yaml             # stage due dates from each person's finished history; local file only
 gitboard estimate boards/x.yaml --history h.json  # same from a `stats --dump` file, no network
+                                            # `stats`/`digest` list Tight dates and Late milestones (critical chain's estimates past the milestone due date)
 
 # numbers and digests (read_api token; --from FILE works with no network)
-gitboard stats group/project                # team markdown: open by column/epic/story, done, cycle, verify, stuck
+gitboard stats group/project                # team markdown: open by column/epic/story/milestone, done, cycle, verify, stuck
 gitboard stats group/project --dump h.json  # ...and keep the fetched history for offline reruns
 gitboard stats --from h.json [--json]       # same, from the dump; --json prints the summary dict
 gitboard stats group/project --weeks 8      # the trend table from reports/stats.jsonl; no network
@@ -131,12 +132,14 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 `graph`
 : Which card waits on which on the way to each milestone. The default is
   one tree per milestone, soonest due first: the root shows the due date,
-  days left and how many of its cards are done; under each card are its
+  days left and how many of its cards are done (or `no cards yet` for a
+  milestone planned but not tasked); under each card are its
   blockers, recursively, and a blocker already printed shows as
   `(see #9 above)`. Each line carries the assignee, `P1`..`P4`, the due
   date, `⇠ N waiting` (cards downstream of it), `★` for the longest chain
   into the milestone, and `⚑` where the board contradicts itself (the
-  same flags `stats` lists). Cards with blockers but no milestone go under
+  same flags `stats` lists, bar `no_milestone`, which would mark every
+  unplanned card). Cards with blockers but no milestone go under
   a final `No milestone` root. `-M/--milestone` keeps one milestone and
   everything upstream of it; an unknown one is an error listing the known
   ones. `--html PATH` writes one self-contained page (inline SVG, no CDN,

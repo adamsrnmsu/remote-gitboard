@@ -83,7 +83,9 @@ issues:                        # list order = GitLab board order (with a .base)
   cards of the same `type::`, widening to the person, the team's `type::`,
   then the team until a bucket is big enough; none is big enough, no
   estimate. `stats` and the digests list **Tight dates** — due dates earlier
-  than that — whatever `suggest_due` says. Not sent to GitLab.
+  than that — whatever `suggest_due` says — and **Late milestones**: the
+  estimates along a milestone's longest blocker chain, summed, run past its
+  due date. Not sent to GitLab.
 
 Scoped labels
 : `epic::<name>`, `story::<name>`, `type::<bug|task|chore|verify>` are
@@ -125,7 +127,8 @@ Scoped labels
 : Optional. `apply` creates a missing milestone and fixes a due date or
   description that differs; it never closes or deletes one. A group
   milestone with the same title counts as existing. `pull` writes an entry
-  for every milestone a card carries.
+  for every milestone a card carries and every active (not closed) project
+  milestone.
 
 `issues[].milestone`
 : A title from `milestones:` (anything else is a load error). **No key

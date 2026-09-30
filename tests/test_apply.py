@@ -1227,6 +1227,22 @@ def test_pull_then_plan_is_empty_with_links_milestones_priority(monkeypatch, tmp
     assert apply.diff(spec, apply.have_from_spec(spec)) == []
 
 
+def test_pull_keeps_cardless_active_milestone_not_closed(monkeypatch, tmp_path):
+    project, board, columns = board_fixture()
+    old = milestone("Old", "2026-01-01", id=52)
+    old.state = "closed"
+    project.milestones.list().extend(
+        [milestone("Later", "2026-12-01", "horizon\n", id=51), old]
+    )
+    spec = apply.spec_from_board(project, board, columns)
+    assert spec["milestones"] == [
+        {"title": "Later", "due_date": "2026-12-01", "description": "horizon"}
+    ]
+    spec = reload(spec, tmp_path, "b.yaml")
+    assert apply.plan(use_project(monkeypatch, project), spec) == []
+    assert apply.diff(spec, apply.have_from_spec(spec)) == []
+
+
 def test_blocker_not_found_is_skipped_and_rest_applies(monkeypatch):
     issue = FakeIssue("one", labels=["Doing"])
     project = writable_project(issue)

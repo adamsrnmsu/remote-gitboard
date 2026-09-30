@@ -154,3 +154,9 @@ def test_only_http_links_are_emitted():
     s = Scan()
     s.feed(graph_html.render_html(graph.build(cards), "t"))
     assert s.anchors == ["https://gitlab.example/g/p/-/issues/1"]
+
+
+def test_milestone_only_graph_renders():
+    g = graph.build([], [{"title": "Later"}])
+    page = graph_html.render_html(g, "t")
+    assert 'data-key="m:Later"' in page and "closed" not in page.split("<svg")[1]

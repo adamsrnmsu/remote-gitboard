@@ -138,3 +138,48 @@ def test_tight_flags_a_due_date_before_the_expected_finish():
         (13, "2026-09-18", "2026-09-19"),
     ]
     assert rows[0]["basis"] == "p85 of 5 cards: ana" and rows[0]["assignee"] == "ana"
+
+
+def _ms(iid, milestone, due="2026-09-20", after=(), **kw):
+    i = _open(iid, None, **kw)
+    i.update(
+        milestone=milestone,
+        milestone_due=due,
+        blocked_by=[{"ref": str(r), "state": "opened", "since": None} for r in after],
+    )
+    return i
+
+
+def test_late_milestones_sum_the_critical_chain_against_the_due_date():
+    # NOW is 2026-09-16; ana's cards take 3 days, one after another: 3 + 3 -> 09-22
+    history = HISTORY + [
+        _ms(10, "Beta"),
+        _ms(11, "Beta", after=[10]),
+        _ms(20, "Fits", due="2026-09-22"),  # 09-19 <= 09-22
+        _ms(30, "Started", entered=15),  # 15 + 3 = 09-18 <= 09-20
+        _ms(40, "Undated", due=None),
+        _ms(50, "Overdue", due="2026-09-01"),  # overdue's business
+    ]
+    assert estimate.late_milestones(history, COLUMNS, NOW, estimate.DEFAULTS) == [
+        {"milestone": "Beta", "due": "2026-09-20", "expected": "2026-09-22",
+         "days_late": 2, "cards": 2, "unestimated": 0}
+    ]  # fmt: skip
+    assert estimate.late_milestones(HISTORY, COLUMNS, NOW, estimate.DEFAULTS) == []
+    # a card waiting in Verify has no work left: no days, and not in `cards`
+    parked = _ms(12, "Beta", after=[11])
+    parked["labels"] = ["Verify"]
+    [m] = estimate.late_milestones(history + [parked], COLUMNS, NOW, estimate.DEFAULTS)
+    assert (m["days_late"], m["cards"]) == (2, 2)
+
+
+def test_late_milestone_with_an_unestimated_card_is_a_lower_bound():
+    # the other project's open card has no history: it adds nothing, and is counted
+    history = HISTORY + [
+        _ms(10, "Beta", after=["grp/x#4"]),
+        _ms(11, "Beta", after=[10]),
+    ]
+    [m] = estimate.late_milestones(history, COLUMNS, NOW, estimate.DEFAULTS)
+    assert (m["days_late"], m["cards"], m["unestimated"]) == (2, 3, 1)
+    # nothing on the chain estimable: no forecast at all, not "on time"
+    cfg = {**estimate.DEFAULTS, "min_samples": 9}
+    assert estimate.late_milestones(history, COLUMNS, NOW, cfg) == []

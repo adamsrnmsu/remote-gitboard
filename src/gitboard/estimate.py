@@ -3,14 +3,15 @@
 A sample is a finished card's active days; an estimate is a percentile of
 the narrowest bucket — person + type, person, team + type, team — that holds
 enough samples. `suggest` stages due dates into a spec; `tight` lists the
-due dates the history contradicts. Imports `stats`; `stats` must not import
-this back.
+due dates the history contradicts; `late_milestones` runs a milestone's
+critical chain against its due date. Imports `stats`; `stats` must not
+import this back.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 from math import ceil
 
-from gitboard import stats
+from gitboard import graph, stats
 from gitboard.apply import SpecError
 
 METHODS = {"median": 0.5, "p85": 0.85}
@@ -108,11 +109,19 @@ def suggest(spec, history, today):
     return {"rows": rows, "changed": cfg["suggest_due"] and bool(rows)}
 
 
+def _expected(issue, est, columns, today):
+    """A card on the board finishes `started + days` (never earlier than
+    today); a Backlog card `today + days`."""
+    span = timedelta(days=est["days"])
+    if any(c in issue["labels"] for c in columns):
+        return max((started(issue) + span).date(), today)
+    return today + span
+
+
 def tight(history, columns, now, cfg):
     """Open cards whose due date falls before the finish the history expects.
 
-    Past due dates are `overdue`'s business. A card on the board is expected
-    `started + days` (never earlier than today); a Backlog card `today + days`.
+    Past due dates are `overdue`'s business; the finish is `_expected`.
     """
     pool = samples(history)
     today = now.date()
@@ -126,9 +135,7 @@ def tight(history, columns, now, cfg):
         est = estimate(who, i["labels"], pool, cfg["method"], cfg["min_samples"])
         if est is None:
             continue
-        span = timedelta(days=est["days"])
-        on_board = any(c in i["labels"] for c in columns)
-        expected = max((started(i) + span).date(), today) if on_board else today + span
+        expected = _expected(i, est, columns, today)
         if expected.isoformat() > due:
             out.append(
                 {"iid": i["iid"], "title": i["title"], "assignee": who, "due": due,
@@ -136,3 +143,45 @@ def tight(history, columns, now, cfg):
                  "url": i["web_url"]}
             )  # fmt: skip
     return sorted(out, key=lambda t: (t["due"], t["iid"]))
+
+
+def late_milestones(history, columns, now, cfg):
+    """Milestones due today or later whose critical chain is forecast past it.
+
+    Forecast = today + the remaining days (`_expected`) of the chain's open
+    cards, one after another. A card with no estimate adds nothing, so the
+    figure is a lower bound and `unestimated` counts those cards. Cards in
+    Verify, Done or Failed have no work left. Past-due milestones are
+    `overdue`'s business.
+    """
+    pool = samples(history)
+    today = now.date()
+    g = graph.build(history)
+    by_key = {graph._key(c): c for c in history}
+    out = []
+    for mk, path in g["critical"].items():
+        title, due = g["nodes"][mk]["title"], g["nodes"][mk]["due_date"]
+        if not due or due < today.isoformat():
+            continue
+        chain = [by_key.get(k) for k in path[:-1] if g["nodes"][k]["open"]]
+        chain = [i for i in chain if i is None or not SKIP & set(i["labels"])]
+        days = unestimated = 0
+        for i in chain:
+            est = i and estimate(
+                i["assignee"], i["labels"], pool, cfg["method"], cfg["min_samples"]
+            )
+            if est:
+                days += (_expected(i, est, columns, today) - today).days
+            else:
+                unestimated += 1
+        # ponytail: the chain is one card after another, so parallel work on
+        # the milestone is ignored, a ceiling; forecast from the whole
+        # milestone's open work and its owners if that proves too gloomy.
+        expected = today + timedelta(days=days)
+        if expected.isoformat() > due:
+            out.append(
+                {"milestone": title, "due": due, "expected": expected.isoformat(),
+                 "days_late": (expected - date.fromisoformat(due)).days,
+                 "cards": len(chain), "unestimated": unestimated}
+            )  # fmt: skip
+    return sorted(out, key=lambda m: (m["due"], m["milestone"]))

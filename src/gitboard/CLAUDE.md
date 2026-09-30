@@ -34,7 +34,9 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
 - **`stats.py`** — pure, stdlib: `summarise(history, ...)` over the dicts
   `board.fetch_history` returns (issues incl. recently closed, label
   transitions from `resource_label_events`, verdict and question notes);
-  `for_person`, markdown renderers, `eml`. "Done" is the Done column or a
+  `for_person`, markdown renderers, `eml`. `by_milestone` (open/done/added per
+  milestone by `created_at`, due date) is top-level in the summary and a
+  `stats.jsonl` field. "Done" is the Done column or a
   close (`done_at`). Scoped labels `epic::`/`story::`/`type::` are the
   grouping vocabulary; they stay plain labels in the YAML.
   `weak_verdicts` flags a latest `verified` whose task list
@@ -61,6 +63,9 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   false` makes it print only. `tight` (due before the expected finish) is
   attached by `cli._summary` as `flow.tight` — `estimate` imports `stats`,
   so **`stats` must not import it back**; renderers read it with `.get`.
+  `late_milestones` (a milestone's critical chain, cards in sequence, summed
+  against its due date; a card without an estimate makes it a lower bound) is
+  attached the same way as `flow.late_milestones`.
   `_history` fetches back at least `HISTORY_DAYS` (90) so a weekly run has
   samples.
 - **`links.py`** — blocker refs: `"9"` (this project), `"grp/x#4"`
@@ -81,14 +86,17 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   YAML never reshuffles the board. `moves` keeps the longest run already in
   order (patience LIS, `bisect`) and moves every other card once, since
   GitLab reorders one card per call.
-- **`graph.py`** — pure, stdlib (plus rich for the tree): `build(cards)`
+- **`graph.py`** — pure, stdlib (plus rich for the tree): `build(cards, milestones)`
+  (known milestones seed a card-less root, "no cards yet")
   over `fetch_history`'s card shape (or `cards_from_spec` from a YAML, where
   a same-project blocker missing from the pull counts as closed) gives
   nodes, edges (blocker -> card, card -> `m:<milestone>`), `downstream`
   counts, the `critical` longest chain per milestone (ties: lowest ref) and
   Sugiyama-lite `layers`. `subgraph` keeps one milestone and its upstream.
-  `flags(cards, columns)` is the five contradiction lists stats and digest
-  carry — flags, never moves; the `blocked_*` two need a Blocked column.
+  `flags(cards, columns)` is the six contradiction lists stats and digest
+  carry — flags, never moves; the `blocked_*` two need a Blocked column;
+  `no_milestone` fires only once some open card has a milestone (Verify,
+  Failed and Done cards excluded) and the graph's ⚑ skips it.
   `render_tree` (one rich tree per milestone, a shared blocker printed once,
   then `(see #9 above)`) and `render_mermaid` (escaped labels, `i12` /
   `m_<slug>` ids). Must not import `stats`, `apply`, `board` or `cli`.
@@ -226,7 +234,8 @@ is one more three-way field (`order_changes` over `order.merge`), so
 plan and apply still share one decision point. `ensure_milestones`
 creates and updates, never closes; titles resolve to ids before any
 write, like users. `pull` writes issues in board order and a
-`milestones:` entry for every milestone a card carries, so
+`milestones:` entry for every milestone a card carries plus every active
+project milestone (card-less group ones stay out, gb-84c), so
 pull-then-plan stays empty. The plan table lists notes, then link and
 order rows and `blocked_by` changes, then the rest (`cli._review_first`). Closing exists but only as an explicit act —
 `migrate-comments --close-source` / `close_issue()` — never as a side effect

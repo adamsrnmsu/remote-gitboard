@@ -106,6 +106,24 @@ def test_flags():
     assert f["unowned_blocker"][0]["detail"] == "#1 (unassigned) blocks #2 in Beta"
 
 
+def test_no_milestone_flag():
+    cards = [
+        card(1, milestone="Beta"),
+        card(2),
+        card(3, labels=["Done"]),
+        card(4, state="closed"),
+        card(5, labels=["Verify"]),
+    ]
+    assert [x["iid"] for x in graph.flags(cards, ["Doing"])["no_milestone"]] == [2]
+    assert graph.flags(cards, ["Doing"])["no_milestone"][0]["detail"] == (
+        "#2 has no milestone"
+    )
+    assert graph.flags(cards[1:], ["Doing"])["no_milestone"] == []
+    # a milestone only a finished card carries plans nothing
+    old = [card(1, milestone="Beta", state="closed"), card(2)]
+    assert graph.flags(old, ["Doing"])["no_milestone"] == []
+
+
 def test_no_blocked_flags_without_a_blocked_column():
     f = graph.flags(
         [card(3, labels=["Doing"], blocked_by=[("9", "opened")])], ["Doing"]
@@ -222,3 +240,18 @@ def test_cards_from_spec_takes_an_empty_milestones_key():
     """`milestones:` with nothing under it is None in YAML; load() takes it."""
     spec = {**SPEC, "milestones": None, "issues": [{"title": "a", "iid": 1}]}
     assert graph.cards_from_spec(spec, "https://gl")[0]["milestone_due"] is None
+
+
+def test_empty_milestone_is_a_root_and_not_faded():
+    g = graph.build([card(1)], [{"title": "Later", "due_date": "2026-10-10"}])
+    assert g["nodes"]["m:Later"]["open"] is True
+    assert g["critical"]["m:Later"] == ["m:Later"]
+    text = _text(graph.render_tree(g, "2026-09-30"))
+    assert "◆ Later  due 2026-10-10 · 10 days left · no cards yet" in text
+    assert "no cards yet" in graph.render_mermaid(g)
+    assert list(graph.subgraph(g, "Later")["nodes"]) == ["m:Later"]
+
+
+def test_known_milestone_with_cards_keeps_its_count():
+    g = graph.build([card(1, milestone="Beta")], [{"title": "Beta"}])
+    assert "no cards yet" not in _text(graph.render_tree(g, "2026-09-30"))

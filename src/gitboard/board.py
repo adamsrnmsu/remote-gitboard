@@ -129,6 +129,15 @@ def _ts(row):
     return row[0]
 
 
+def active_milestones(project):
+    """Title and due date of each active project milestone, for the graph."""
+    return [
+        {"title": m.title, "due_date": getattr(m, "due_date", None)}
+        for m in project.milestones.list(all=True)
+        if getattr(m, "state", "active") != "closed"
+    ]
+
+
 def fetch_history(project, board, since):
     """(history, columns): every open issue plus those closed since `since`
     (aware datetime), with label events and notes flattened for stats.py.

@@ -280,12 +280,31 @@ def _tight(items, who=False):
     return sub("Tight dates, by each person's own history") + _rows(items, "tight", why)
 
 
+def _late(items):
+    """Late-milestone rows; nothing at all when there are none."""
+    if not items:
+        return ""
+    rows = "".join(
+        "<tr>"
+        + td(span("late", THEME["muted"], MONO, 11), width=64, style="padding:4px 0")
+        + td(span(m["milestone"]), style="padding:4px 8px")
+        + td(
+            span(f"{stats.lower_bound(m)} · due {m['due']}", THEME["muted"], MONO, 12),
+            align="right",
+        )
+        + "</tr>"
+        for m in items
+    )
+    return sub("Milestones forecast late") + table(rows)
+
+
 FLAG_TAGS = {
     "blocked_stale": "stale",
     "blocked_unmarked": "unmarked",
     "priority_inversion": "priority",
     "date_inversion": "date",
     "unowned_blocker": "unowned",
+    "no_milestone": "no ms",
 }
 
 
@@ -488,6 +507,15 @@ def _work(summary):
         _counts(o.get("by_column", {})), lambda c: column_color(c, columns)
     )
     inner += sub("Open by epic") + bars(_counts(o.get("by_epic", {})), THEME["accent"])
+    if ms := summary.get("by_milestone"):
+        rows = stats.milestone_lines(ms)
+        inner += sub("Milestones: open, (+added / done)") + bars(
+            [
+                (f"{m} (+{a}/{dn})" + (f" {d[5:]}" if d else ""), o)
+                for m, d, o, dn, a in rows
+            ],
+            THEME["accent"],
+        )
     inner += sub("WIP per person") + bars(_counts(f.get("wip", {})), THEME["accent"])
     return section("Where the work is", inner)
 
@@ -509,6 +537,7 @@ def _stuck(summary, person=None):
     if person is None:
         inner += sub("Stuck") + _rows(stuck, "stuck", _days)
         inner += _tight(f.get("tight", []), who=True)
+        inner += _late(f.get("late_milestones", []))
         inner += _blockers(stats.blocker_items(f), who=True)
     return section("Stuck / questions", inner)
 

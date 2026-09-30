@@ -360,6 +360,22 @@ def summarise(history, columns, start, end, now):
         for i in opened
         for q in _questions(i)
     ]
+    by_milestone = {}
+    for i in history:
+        if m := i.get("milestone"):
+            by_milestone.setdefault(
+                m, {"open": 0, "done": 0, "added": 0, "due": i.get("milestone_due")}
+            )
+    for i in opened:
+        if i.get("milestone") and DONE not in i["labels"]:
+            by_milestone[i["milestone"]]["open"] += 1
+    for m, n in tally(done_issues, lambda i: i.get("milestone")).items():
+        by_milestone[m]["done"] = n
+    # ponytail: counts by created_at, so a card assigned later still counts as
+    # added when created; exact needs milestone events fetched
+    added = [i for i in history if _in(parse_ts(i["created_at"]), start, end)]
+    for m, n in tally(added, lambda i: i.get("milestone")).items():
+        by_milestone[m]["added"] = n
     prev = _period(history, start - (end - start), start)
     cur = _period(history, start, end)
     weak = weak_verdicts(history, start, end)
@@ -370,6 +386,7 @@ def summarise(history, columns, start, end, now):
             "days": (end - start).days,
         },
         "columns": list(columns),
+        "by_milestone": by_milestone,
         "open": {
             "total": len(opened),
             "by_column": tally(opened, col),
@@ -533,10 +550,12 @@ def stat_row(summary, project, board, ts):
         "coverage": v.get("coverage"),
         "weak": len(v.get("weak") or []),
         "tight": len(f.get("tight") or []),
+        "late_milestones": len(f.get("late_milestones") or []),
         "overdue": f.get("overdue", 0),
         "stuck": len(f.get("stuck") or []),
         **{k: len(f.get(k) or []) for k in FLAGS},
         "by_epic": o.get("by_epic") or {},
+        "by_milestone": g("by_milestone") or {},
         "by_assignee": o.get("by_assignee") or {},
     }
 
@@ -600,6 +619,24 @@ def _counts(d):
     return _table(sorted(d.items(), key=lambda kv: (-kv[1], str(kv[0]))), "name", "n")
 
 
+def milestone_lines(by_ms):
+    """Soonest due first, undated last: [(title, due, open, done, added)]."""
+    return sorted(
+        ((m, v.get("due"), v["open"], v["done"], v["added"]) for m, v in by_ms.items()),
+        key=lambda r: (r[1] is None, r[1] or "", r[0]),
+    )
+
+
+def _milestones(by_ms):
+    if not by_ms:
+        return []
+    lines = [
+        f"- {m}{f' (due {d})' if d else ''}: {o} open, {dn} done, +{a} added"
+        for m, d, o, dn, a in milestone_lines(by_ms)
+    ]
+    return ["", "### By milestone", *lines]
+
+
 def _stat_row(label, s):
     return (label, s["median"], s["mean"], s["n"])
 
@@ -636,6 +673,28 @@ def _tight_table(tight, who=False):
     )  # fmt: skip
 
 
+def lower_bound(m):
+    """`3 days late`, prefixed `at least` when a card on the chain had no estimate."""
+    late = f"{m['days_late']} days late"
+    return (
+        f"at least {late}, {m['unestimated']} without estimate"
+        if m["unestimated"]
+        else late
+    )
+
+
+def _late_md(items):
+    """Milestones forecast past their due date; no section when none are."""
+    if not items:
+        return []
+    rows = [(m["milestone"], m["due"], m["expected"], lower_bound(m)) for m in items]
+    return [
+        "### Late milestones",
+        _table(rows, "milestone", "due", "expected", "forecast"),
+        "",
+    ]
+
+
 def blocker_items(d):
     """Every flag in `d` (a flow or person dict) as one list, `kind` added."""
     return [{"kind": k, **x} for k in FLAGS for x in d.get(k, [])]
@@ -647,6 +706,10 @@ def _blockers_md(d, heading):
     if not items:
         return []
     rows = [(x["kind"], f"#{x['iid']} {x['title']}", x["detail"]) for x in items]
+    if (n := sum(x["kind"] == "no_milestone" for x in items)) > 5:
+        keep = [r for r in rows if r[0] != "no_milestone"]
+        rows = keep + [r for r in rows if r[0] == "no_milestone"][:5]
+        rows.append(("no_milestone", f"+{n - 5} more", ""))
     return [heading, _table(rows, "kind", "card", "detail"), ""]
 
 
@@ -701,6 +764,7 @@ def render_team_md(summary, weekly=None):
         "",
         "### By story",
         _counts(o["by_story"]),
+        *_milestones(summary.get("by_milestone")),
         "",
         "### By type",
         _counts(o["by_type"]),
@@ -766,6 +830,7 @@ def render_team_md(summary, weekly=None):
         "### Tight dates",
         _tight_table(f.get("tight", []), who=True),
         "",
+        *_late_md(f.get("late_milestones", [])),
         *_blockers_md(f, "### Blockers"),
         "### WIP",
         _counts(f["wip"]),

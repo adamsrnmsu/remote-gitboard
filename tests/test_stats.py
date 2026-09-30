@@ -480,8 +480,10 @@ ROW_KEYS = {
     "priority_inversion",
     "date_inversion",
     "unowned_blocker",
+    "no_milestone",
     "weak",
     "tight",
+    "late_milestones",
     "ts",
     "project",
     "board",
@@ -499,6 +501,7 @@ ROW_KEYS = {
     "overdue",
     "stuck",
     "by_epic",
+    "by_milestone",
     "by_assignee",
 }
 
@@ -646,6 +649,24 @@ def test_tight_dates_reach_person_row_and_markdown():
     assert "| 7 | slow one | 2026-09-17 | 2026-09-19 |" in mine
 
 
+LATE = {
+    "milestone": "Beta", "due": "2026-09-20", "expected": "2026-09-22",
+    "days_late": 2, "cards": 2, "unestimated": 1,
+}  # fmt: skip
+
+
+def test_late_milestones_reach_row_and_markdown_only_when_present():
+    s = stats.summarise(history(), COLUMNS, START, END, NOW)
+    assert stats.stat_row(s, "g/p", "b", "t")["late_milestones"] == 0
+    assert "Late milestones" not in stats.render_team_md(s)
+    s["flow"]["late_milestones"] = [LATE]
+    assert stats.stat_row(s, "g/p", "b", "t")["late_milestones"] == 1
+    assert (
+        "| Beta | 2026-09-20 | 2026-09-22 | at least 2 days late, 1 without estimate |"
+        in stats.render_team_md(s)
+    )
+
+
 # --- blocker flags ---------------------------------------------------------------
 
 BLOCKED_COLUMNS = ["Doing", "Blocked", "Review", "Verify", "Done", "Failed"]
@@ -689,6 +710,7 @@ def test_summarise_flags_blockers():
         "priority_inversion": [2],
         "date_inversion": [2],
         "unowned_blocker": [1],
+        "no_milestone": [1, 3],
     }
     assert f["priority_inversion"][0]["detail"] == "#2 (P1) waits on #1 (P3)"
 
@@ -711,6 +733,7 @@ def test_for_person_filters_flags():
         "priority_inversion": [2],
         "date_inversion": [2],
         "unowned_blocker": [1],
+        "no_milestone": [],
     }
     bob = flagged(stats.for_person(s, h, "bob", NOW))
     assert bob["blocked_stale"] == [3] and bob["unowned_blocker"] == []
@@ -739,7 +762,7 @@ def test_three_moves_includes_unblock_after_overdue():
 def test_stat_row_counts_flags():
     s = stats.summarise(blockers(), BLOCKED_COLUMNS, START, END, NOW)
     r = stats.stat_row(s, "g/p", "b", "t")
-    assert [r[k] for k in stats.FLAGS] == [1, 1, 1, 1, 1]
+    assert [r[k] for k in stats.FLAGS] == [1, 1, 1, 1, 1, 2]
     assert all(stats.stat_row({}, "g/p", "b", "t")[k] == 0 for k in stats.FLAGS)
 
 
@@ -755,3 +778,32 @@ def test_team_markdown_has_blockers_section_only_when_flagged():
     assert "Blockers" not in stats.render_team_md(clean)
     alice = stats.for_person(clean, history(), "alice", NOW)
     assert "blockers" not in stats.render_person_md(alice, clean, "alice")
+
+
+def test_by_milestone_tally_and_old_row():
+    beta = {"milestone": "Beta", "milestone_due": "2026-11-01"}
+    h = [
+        {**issue(1, created=12), **beta},
+        {**issue(2, created=2), **beta},
+        {**issue(3, created=3, closed=14), **beta},
+        {**issue(4, created=13), "milestone": "Alpha", "milestone_due": "2026-10-01"},
+        issue(5),
+        {**issue(6, created=2, labels=["Done"]), **beta},  # in Done: not open
+    ]
+    s = stats.summarise(h, COLUMNS, START, END, NOW)
+    assert s["by_milestone"] == {
+        "Beta": {"open": 2, "done": 1, "added": 1, "due": "2026-11-01"},
+        "Alpha": {"open": 1, "done": 0, "added": 1, "due": "2026-10-01"},
+    }
+    md = stats.render_team_md(s)
+    assert md.index("Alpha (due 2026-10-01): 1 open, 0 done, +1 added") < md.index(
+        "Beta (due 2026-11-01): 2 open, 1 done, +1 added"
+    )
+    assert stats.stat_row(s, "g/p", "dev", "t")["by_milestone"] == s["by_milestone"]
+    assert stats.stat_row({}, "g/p", None, "t")["by_milestone"] == {}
+
+
+def test_no_milestones_renders_nothing():
+    s = stats.summarise(history(), COLUMNS, START, END, NOW)
+    assert s["by_milestone"] == {}
+    assert "By milestone" not in stats.render_team_md(s)
