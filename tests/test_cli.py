@@ -661,6 +661,7 @@ def test_digest_writes_html_previews_and_a_multipart_eml(tmp_path, monkeypatch):
         "alice.md",
         "bob.html",
         "bob.md",
+        "gantt.html",
         "graph.html",  # #2 carries milestone M1, so there is a graph
         "index.html",
         "team.html",
@@ -676,11 +677,13 @@ def test_digest_writes_html_previews_and_a_multipart_eml(tmp_path, monkeypatch):
     ]
     html = msg.get_body(("html",)).get_content()
     assert "<svg" not in html and "Your 3 moves" in html
+    assert "$ gantt --who alice" in html  # the mail itself, not only the preview
     preview = (folder / "alice.html").read_text()
     assert "<svg" in preview and "a@x" in preview  # browser copy: chart + headers
     index = (folder / "index.html").read_text()
     assert 'href="alice.eml"' in index and 'href="bob.html"' in index
-    assert 'href="graph.html"' in index
+    assert 'href="graph.html"' in index and 'href="gantt.html"' in index
+    assert "$ gantt --project" in (folder / "team.html").read_text()
     assert (folder / "graph.html").read_text().count("<svg") == 1
     assert "index.html" in r.output
 

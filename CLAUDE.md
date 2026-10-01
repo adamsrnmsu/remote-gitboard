@@ -34,7 +34,8 @@ overdue); `land SPEC` (plan, y/n, apply, snapshot, rotate `.base`);
 queue/times/coverage, stuck, questions, blocker flags; `--dump`/`--from`
 for offline) and `digest` (writes `reports/<date>/<board>/{team,<user>}.md`
 + `.eml` for users named under `emails:`, and `graph.html` when the board
-has blockers or milestones; `--all`; Monday 07:00 in `make cron`);
+has blockers or milestones, and `gantt.html` (each mail also carries its
+Gantt charts: own, current milestone, project); `--all`; Monday 07:00 in `make cron`);
 `graph [PROJECT] [--from FILE] [-M MILESTONE] [--html PATH] [--mermaid]`
 (which card waits on which, one tree per milestone). Every
 `stats`/`digest` run appends one row per board to `reports/stats.jsonl`

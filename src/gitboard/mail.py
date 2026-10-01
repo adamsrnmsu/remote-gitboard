@@ -637,8 +637,10 @@ def render_person_html(
     headers=None,
     weekly=None,
     team_url="team.html",
+    gantt=(),
 ):
-    """Glance, then the YOU zone, then a brief TEAM zone."""
+    """Glance, then the YOU zone, a brief TEAM zone, then the TIMELINE
+    (`gantt.person_blocks`) when there is one."""
     moves = stats.three_moves(person)
     mine = sum(person.get("open_by_column", {}).values())
     team = [
@@ -680,12 +682,21 @@ def render_person_html(
             THEME["muted"],
             team,
         ),
+        *_timeline(gantt),
         _footer(summary),
     ]
     return page(username, blocks, headers)
 
 
-def render_team_html(summary, series, svg=False, headers=None, weekly=None):
+def _timeline(gantt):
+    """The Gantt zone, or nothing: `gantt` is `gantt.*_blocks` output."""
+    if not gantt:
+        return []
+    note = "Gantt: when each card started and when it should land."
+    return [zone("TIMELINE", note, "#21a650", list(gantt))]
+
+
+def render_team_html(summary, series, svg=False, headers=None, weekly=None, gantt=()):
     team = [
         _burndown(series, svg),
         _verification(summary, series),
@@ -697,6 +708,7 @@ def render_team_html(summary, series, svg=False, headers=None, weekly=None):
     blocks = [
         _masthead("Team", summary),
         zone("TEAM", "The whole board, this week.", THEME["muted"], team),
+        *_timeline(gantt),
         _footer(summary),
     ]
     return page("Team", blocks, headers)

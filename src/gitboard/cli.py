@@ -30,6 +30,7 @@ from gitboard import board as board_mod
 from gitboard import client, graph_html
 from gitboard import edit as edit_mod
 from gitboard import estimate as estimate_mod
+from gitboard import gantt as gantt_mod
 from gitboard import graph as graph_mod
 from gitboard import guide as guide_mod
 from gitboard import ingest as ingest_mod
@@ -1132,6 +1133,9 @@ def digest(
         )
         week = summary["period"]["start"][:10]
         weekly = _weekly(meta["project"], meta["board"])
+        cfg = estimate_mod.config(apply_mod.load(spec_path) if spec_path else {})
+        plan = gantt_mod.bars(history, columns, now, cfg)
+        ms, today = meta.get("milestones", ()), now.date()
 
         def write(name, text):
             (folder / name).write_text(text)
@@ -1142,7 +1146,13 @@ def digest(
         if series is not None:
             write(
                 "team.html",
-                mail_mod.render_team_html(summary, series, svg=True, weekly=weekly),
+                mail_mod.render_team_html(
+                    summary,
+                    series,
+                    svg=True,
+                    weekly=weekly,
+                    gantt=gantt_mod.team_blocks(plan, ms, today, people),
+                ),
             )
             entries.append(
                 {"name": "team", "files": {"md": "team.md", "html": "team.html"}}
@@ -1156,6 +1166,7 @@ def digest(
             files = {"md": f"{who}.md"}
             html = None
             if series is not None:
+                mine = gantt_mod.person_blocks(plan, ms, today, who)
                 heads = {"To": to or "(no email in emails:)", "Subject": subject}
                 write(
                     f"{who}.html",
@@ -1167,10 +1178,11 @@ def digest(
                         svg=True,
                         headers=heads,
                         weekly=weekly,
+                        gantt=mine,
                     ),
                 )
                 html = mail_mod.render_person_html(
-                    person, summary, who, series, weekly=weekly
+                    person, summary, who, series, weekly=weekly, gantt=mine
                 )
                 files["html"] = f"{who}.html"
             if to:
@@ -1187,6 +1199,12 @@ def digest(
                 graph_html.render_html(g, title, _flagged(summary["flow"])),
             )
             entries.append({"name": "graph", "files": {"html": "graph.html"}})
+        if series is not None and plan:
+            every = gantt_mod.team_blocks(plan, ms, today, people, cap=None)
+            write(
+                "gantt.html", gantt_mod.render_page(f"{meta['project']} — gantt", every)
+            )
+            entries.append({"name": "gantt", "files": {"html": "gantt.html"}})
         if series is not None:
             write("index.html", mail_mod.render_index_html(entries))
         for w in written:
