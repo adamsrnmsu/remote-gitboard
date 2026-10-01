@@ -361,6 +361,18 @@ def test_history_keeps_only_column_label_events_and_skips_null_labels():
     ]
 
 
+def test_history_exports_unanswered_questions():
+    asked = [FakeNote("2026-09-03T00:00:00Z", "Q: which env?", "ana")]
+    answered = asked + [FakeNote("2026-09-04T00:00:00Z", "prod", "bob")]
+    proj = StateProject([HistIssue(1, [], notes=asked), HistIssue(2, [], notes=answered)], [])
+    history, _ = board.fetch_history(proj, FakeBoard([]), SINCE)
+    by = {h["iid"]: h["questions"] for h in history}
+    assert by[1] == [
+        {"ts": "2026-09-03T00:00:00Z", "author": "ana", "text": "Q: which env?"}
+    ]
+    assert by[2] == []
+
+
 def test_history_parses_verdicts_after_the_marker_and_skips_system_notes():
     notes = [
         FakeNote("2026-09-05T00:00:00Z", f"{MARKER}\n\nVerified: works\nmore", "bob"),
@@ -395,7 +407,7 @@ def test_history_flattens_assignee_and_milestone():
         "iid", "title", "state", "created_at", "closed_at", "updated_at",
         "assignee", "labels", "milestone", "milestone_due", "priority",
         "due_date", "web_url", "tasks", "blocked_by", "transitions",
-        "verdicts", "notes",
+        "verdicts", "notes", "questions",
     }  # fmt: skip
 
 

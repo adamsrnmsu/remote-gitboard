@@ -43,6 +43,7 @@ gitboard estimate boards/x.yaml --history h.json  # same from a `stats --dump` f
 gitboard stats group/project                # team markdown: open by column/epic/story/milestone, done, cycle, verify, stuck
 gitboard stats group/project --dump h.json  # ...and keep the fetched history for offline reruns
 gitboard stats --from h.json [--json]       # same, from the dump; --json prints the summary dict
+                                            # dump: history[] per issue; `questions` = [{ts, author, text}] of `Q:` notes nobody else answered since ([] = none; absent in older dumps)
 gitboard stats group/project --weeks 8      # the trend table from reports/stats.jsonl; no network
 gitboard digest group/project               # reports/<date>/<board>/: team + <user> as .md and .html, <user>.eml, graph.html, index.html
 gitboard digest --all                       # every local board (what `make cron` runs Monday 07:00)

@@ -134,7 +134,7 @@ def _period(history, start, end):
     }
 
 
-def _questions(issue):
+def open_questions(issue):
     """Waiting questions: a `Q:` note nobody else has answered since."""
     notes = sorted(issue["notes"])
     out = []
@@ -358,7 +358,7 @@ def summarise(history, columns, start, end, now):
             "url": i["web_url"],
         }
         for i in opened
-        for q in _questions(i)
+        for q in open_questions(i)
     ]
     by_milestone = {}
     for i in history:

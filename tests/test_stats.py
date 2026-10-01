@@ -260,9 +260,9 @@ def test_empty_history_is_none_not_zero():
 
 def test_questions_clear_on_reply_by_another_author_only():
     asked = issue(1, notes=[(ts(1), "root", "Q: why?"), (ts(2), "root", "still?")])
-    assert [q["text"] for q in stats._questions(asked)] == ["Q: why?"]
+    assert [q["text"] for q in stats.open_questions(asked)] == ["Q: why?"]
     answered = issue(1, notes=[(ts(1), "root", "Q: why?"), (ts(2), "bob", "because")])
-    assert stats._questions(answered) == []
+    assert stats.open_questions(answered) == []
 
 
 # --- for_person ---------------------------------------------------------------

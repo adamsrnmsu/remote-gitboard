@@ -13,7 +13,7 @@ from rich.console import Group
 from rich.text import Text
 from rich.tree import Tree
 
-from gitboard import client, links
+from gitboard import client, links, stats
 from gitboard.apply import MARKER
 from gitboard.ingest import VERDICT
 from gitboard.log import out
@@ -200,6 +200,7 @@ def fetch_history(project, board, since):
             }
             for x in links.read(issue, project)
         ]
+        sorted_notes = sorted(notes, key=_ts)
         history.append(
             {
                 "iid": issue.iid,
@@ -219,7 +220,9 @@ def fetch_history(project, board, since):
                 "tasks": [ticks.get("completed_count", 0), ticks.get("count", 0)],
                 "transitions": sorted(transitions, key=_ts),
                 "verdicts": sorted(verdicts, key=_ts),
-                "notes": sorted(notes, key=_ts),
+                "notes": sorted_notes,
+                # waiting `Q:` notes, from the notes already fetched; [] = none
+                "questions": stats.open_questions({"notes": sorted_notes}),
             }
         )
     return history, columns
