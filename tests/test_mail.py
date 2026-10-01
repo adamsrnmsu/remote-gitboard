@@ -213,3 +213,15 @@ def test_milestone_bars_only_with_milestones():
     html = mail.render_team_html(s, series())
     assert "Beta (+1/0) 11-01" in html and NO_BG.findall(html) == []
     assert "Milestones" not in mail.render_team_html(summary(), series())
+
+
+def test_burndown_wording_and_svg_values():
+    def line(*opens):
+        s = [{"date": f"d{n}", "open": v} for n, v in enumerate(opens)]
+        return mail._burndown(s, False)
+
+    assert "down from 5" in line(5, 3) and mail.THEME["good"] in line(5, 3)
+    assert "flat from 4" in line(4, 4) and mail.THEME["good"] not in line(4, 4)
+    assert "up from 3" in line(3, 5)
+    svg = mail.svg_burndown([{"open": 2}, {"open": 7}, {"open": None}])
+    assert ">7</text>" in svg and ">0</text>" in svg

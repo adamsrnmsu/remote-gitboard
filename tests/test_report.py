@@ -1,5 +1,7 @@
 """Tests for report.py — pure diffing over synthetic snapshot batches."""
 
+import pytest
+
 from gitboard import report
 
 
@@ -121,3 +123,15 @@ def test_since_keeps_batches_at_or_after_ts():
     kept = report.since(batches, T[2])
     assert [next(iter(b.values()))["ts"] for b in kept] == [T[2], T[4]]
     assert report.since(batches, "2099-01-01") == []
+
+
+def test_commit_counts_names_the_repo_when_git_log_fails_silently(monkeypatch):
+    import subprocess
+    import types
+
+    def fail(*a, **k):
+        return types.SimpleNamespace(returncode=128, stderr="", stdout="")
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(OSError, match="git log failed in /r"):
+        report.commit_counts("/r", 7)

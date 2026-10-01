@@ -502,3 +502,11 @@ def test_board_view_marks_only_the_selected_card():
     assert "▶" not in render()
     marked = [x for x in render(selected=("Doing", 1)).splitlines() if "▶" in x]
     assert len(marked) == 1 and ("one" in marked[0]) != ("two" in marked[0])
+
+
+def test_board_view_limit_zero_shows_everything_and_limit_n_truncates():
+    issues = [FakeIssue(n, ["Doing"]) for n in range(1, 4)]
+    project, lists = FakeProject(issues), FakeBoard([FakeList("Doing", 1)])
+    _, hidden = board.board_view(project, lists, limit=0)
+    assert hidden == 0
+    assert board.board_view(project, lists, limit=1)[1] == 2

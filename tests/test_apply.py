@@ -1417,3 +1417,18 @@ def test_offline_diff_shows_a_yaml_reorder():
         ("changed", "order", "#3 to the top")
     ]
     assert apply.diff(base, apply.have_from_spec(base)) == []
+
+
+def test_pull_lists_only_columns_with_a_label_and_sorts_undated_milestones_last():
+    project, board, columns = board_fixture()
+    project.labels.list().append(types.SimpleNamespace(name="Backlog", color="#000000"))
+    project.milestones.list().extend(
+        [
+            milestone("Z", None),
+            milestone("B", "2026-12-01"),
+            milestone("A", "2026-11-01"),
+        ]
+    )
+    spec = apply.spec_from_board(project, board, [*columns, ("Ghost", [])])
+    assert [c["name"] for c in spec["columns"]] == ["Doing"]
+    assert [m["title"] for m in spec["milestones"]] == ["A", "B", "Z"]

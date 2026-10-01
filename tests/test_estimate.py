@@ -181,3 +181,9 @@ def test_late_milestone_with_an_unestimated_card_is_a_lower_bound():
     # nothing on the chain estimable: no forecast at all, not "on time"
     cfg = {**estimate.DEFAULTS, "min_samples": 9}
     assert estimate.late_milestones(history, COLUMNS, NOW, cfg) == []
+
+
+def test_a_forecast_landing_on_the_due_date_is_not_late():
+    # one 3-day card from NOW (09-16) lands on 09-19 exactly (gb-oan)
+    history = HISTORY + [_ms(20, "Exact", due="2026-09-19")]
+    assert estimate.late_milestones(history, COLUMNS, NOW, estimate.DEFAULTS) == []
