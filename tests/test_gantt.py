@@ -91,3 +91,49 @@ def test_charts_are_outlook_safe_escaped_and_empty_without_rows():
     assert "+8 more" in gantt.chart("x", many, TODAY)
     assert "more" not in gantt.chart("x", many, TODAY, cap=None)
     assert gantt.LABEL_W + gantt.TRACK_W + gantt.TAG_W == 600
+
+
+def test_a_card_done_exactly_at_the_lookback_edge_is_kept():
+    edge = TODAY - gantt.LOOKBACK
+    done = issue(1, labels=["Done"], assignee="a",
+                 transitions=[(ts(10), "add", "Doing")])  # fmt: skip
+    done["closed_at"] = f"{edge.isoformat()}T00:00:00Z"
+    assert 1 in by_iid(gantt.bars([done], COLUMNS, NOW, CFG))
+
+
+def test_paint_keeps_a_marker_on_the_last_day_inside_the_track():
+    lo, hi = (
+        date(2026, 9, 1),
+        date(2028, 8, 1),
+    )  # 700 days: the last day rounds to px 330
+    row = {"start": lo, "end": lo, "status": "due"}
+    runs = gantt.paint(row, lo, hi, [date(2028, 7, 31)])
+    assert sum(n for _, n in runs) == gantt.TRACK_W
+    assert runs[-1] == (gantt.HACK["marker"], 2)
+
+
+def test_dues_prefers_the_listed_milestone_date_over_a_card_copy():
+    ms = [{"title": "A", "due_date": "2026-09-01"}, {"title": "B", "due_date": None}]
+    rows = [
+        {"milestone": "A", "milestone_due": "2026-10-01"},
+        {"milestone": "B", "milestone_due": "2026-10-02"},
+    ]
+    assert gantt._dues(rows, ms) == {"A": "2026-09-01", "B": "2026-10-02"}
+
+
+def test_group_is_late_on_either_past_due_or_a_card_ending_after_the_due_date():
+    def card(end, ms, status="due"):
+        return {"milestone": ms, "epic": None, "status": status, "end": end,
+                "start": date(2026, 9, 1), "milestone_due": None}  # fmt: skip
+
+    ms = [{"title": "Past", "due_date": "2026-09-10"},
+          {"title": "Future", "due_date": "2026-09-30"}]  # fmt: skip
+    rows = [
+        card(date(2026, 9, 5), "Past"),  # open, due date passed (TODAY 09-16)
+        card(date(2026, 10, 5), "Future"),  # open, ends after its due date
+        card(date(2026, 9, 20), "Future", "done"),
+    ]
+    got = {g["title"]: g["status"] for g in gantt.groups(rows, ms, TODAY)}
+    assert got == {"Past": "late", "Future": "late"}
+    rows = [card(date(2026, 9, 5), "Future"), card(date(2026, 9, 6), "Future")]
+    assert gantt.groups(rows, ms, TODAY)[0]["status"] == "due", "neither"

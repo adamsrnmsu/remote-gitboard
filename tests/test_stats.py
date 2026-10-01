@@ -794,3 +794,13 @@ def test_by_milestone_tally_and_old_row():
     none = stats.summarise(history(), COLUMNS, START, END, NOW)
     assert none["by_milestone"] == {}
     assert "By milestone" not in stats.render_team_md(none), "absent when empty"
+
+
+def test_blockers_md_collapses_no_milestone_only_past_five():
+    def md(n):
+        d = {"no_milestone": [{"iid": k, "title": "t", "detail": ""} for k in range(n)]}
+        return stats._blockers_md(d, "H")[1]
+
+    assert "more" not in md(5), "five fit"
+    six = md(6)
+    assert "+1 more" in six and "#5 t" not in six
