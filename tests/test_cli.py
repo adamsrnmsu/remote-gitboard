@@ -6,10 +6,14 @@ config singleton reset, like tests/test_config.py's fixture, so the repo's
 own .env and boards/ never leak in.
 """
 
+import io
 import json
 import re
+import shutil
+import subprocess
 import types
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from rich.console import Console
@@ -38,7 +42,7 @@ SPEC = {
 class FakeIssue:
     def __init__(self, iid, title, labels):
         self.iid, self.title, self.labels = iid, title, labels
-        self.assignee = self.due_date = None
+        self.assignee = self.due_date = self.web_url = None
 
 
 def fake_board(project="grp/proj", name="Dev Board"):
@@ -1003,3 +1007,1067 @@ def test_tui_apply_gets_the_same_base(monkeypatch, tmp_path):
     )
     cli._staged(parsed, path, write=True)
     assert seen["base"]["issues"][0]["iid"] == 1
+
+
+# --- gb-yl3: command branches the happy-path tests skip ----------------------
+
+
+def test_main_callback_reports_a_bad_config_file_and_exits_1(tmp_path):
+    r = runner.invoke(app, ["--config", str(tmp_path / "nope.toml"), "config"])
+    assert r.exit_code == 1
+    assert "error" in r.output
+
+
+def test_commands_without_a_project_say_how_to_supply_one(gl):
+    for argv in (["show"], ["snapshot"], ["pull"], ["report"], ["graph"]):
+        r = runner.invoke(app, argv)
+        assert r.exit_code == 1, argv
+        assert "no project given" in r.output, argv
+        assert "gitboard show group/project" in r.output
+
+
+def test_commands_without_a_spec_say_how_to_supply_one(gl):
+    for argv in (["plan"], ["apply"], ["land"], ["estimate"]):
+        r = runner.invoke(app, argv)
+        assert r.exit_code == 1, argv
+        assert "no spec file given" in r.output, argv
+
+
+def test_config_default_spec_stands_in_for_the_argument(gl, tmp_path):
+    path = write_spec(tmp_path)
+    (tmp_path / "gitboard.toml").write_text(f'spec = "{path}"\n')
+    r = runner.invoke(app, ["plan"])
+    assert r.exit_code == 0, r.output
+    assert gl["plan"] == [{"base": SPEC}]
+
+
+# --- show --------------------------------------------------------------------
+
+
+def test_show_live_markdown_and_rich(gl, tmp_path):
+    md = runner.invoke(app, ["show", "grp/proj", "-m"])
+    assert md.exit_code == 0, md.output
+    assert gl["fetch"] == ["grp/proj"]
+    assert "Doing" in md.stdout and "one" in md.stdout
+    write_spec(tmp_path, base=False)
+    rich = runner.invoke(app, ["show", "grp/proj", "-n", "1"])
+    assert rich.exit_code == 0, rich.output
+    assert "Verify (1)" in rich.output
+    assert "boards/x.yaml" in rich.output  # the where-to-edit footer
+
+
+def test_show_from_file_never_fetches(gl, tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path = write_spec(tmp_path, base=False)
+    r = runner.invoke(app, ["show", "--from", path, "-m"])
+    assert r.exit_code == 0, r.output
+    assert "one" in r.stdout and "two" in r.stdout
+
+
+def test_show_reports_a_gitlab_problem_as_one_line(monkeypatch):
+    def boom(*a):
+        raise client.GitlabProblem("no such project: grp/gone")
+
+    monkeypatch.setattr(board_mod, "fetch", boom)
+    r = runner.invoke(app, ["show", "grp/gone"])
+    assert r.exit_code == 1
+    assert "no such project: grp/gone" in r.output
+
+
+# --- plan --------------------------------------------------------------------
+
+
+def test_plan_against_diffs_two_files_without_the_network(gl, tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "gitlab", lambda write=False: pytest.fail("network"))
+    path = write_spec(tmp_path, spec=edited(), base=False)
+    other = write_spec(tmp_path, "boards/o.yaml", base=False)
+    r = runner.invoke(app, ["plan", path, "--against", other])
+    assert r.exit_code == 0, r.output
+    assert f"pending against {other}" in r.output
+    assert "labels" in r.output
+
+
+def test_plan_names_the_base_in_the_title_and_passes_it(gl, tmp_path):
+    path = write_spec(tmp_path, spec=edited())
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    r = runner.invoke(app, ["plan", path])
+    assert r.exit_code == 0, r.output
+    assert f"driftiswhatmovedsince{path}.base" in "".join(r.output.split())
+    assert gl["plan"] == [{"base": SPEC}]
+
+
+def test_plan_missing_file_is_a_clean_error(gl):
+    r = runner.invoke(app, ["plan", "boards/none.yaml"])
+    assert r.exit_code == 1
+    assert "no such board file: boards/none.yaml" in r.output
+    assert r.exception is None or isinstance(r.exception, SystemExit)
+
+
+# --- apply / land: the refusals other than drift ------------------------------
+
+
+def test_apply_declined_prompt_aborts_and_writes_nothing(gl, tmp_path):
+    path = write_spec(tmp_path, spec=edited())
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    r = runner.invoke(app, ["apply", path], input="n\n")
+    assert r.exit_code != 0
+    assert "apply 1 change(s)?" in r.output
+    assert gl["apply"] == []
+    assert not (tmp_path / "snapshots.jsonl").exists()
+
+
+def test_apply_confirmed_prompt_writes(gl, tmp_path):
+    path = write_spec(tmp_path, spec=edited())
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    r = runner.invoke(app, ["apply", path], input="y\n")
+    assert r.exit_code == 0, r.output
+    assert len(gl["apply"]) == 1
+    assert "1 change(s) written" in r.output
+
+
+def test_apply_missing_file_exits_1_before_any_connection(monkeypatch):
+    monkeypatch.setattr(client, "gitlab", lambda write=False: pytest.fail("network"))
+    r = runner.invoke(app, ["apply", "boards/none.yaml", "--yes"])
+    assert r.exit_code == 1
+    assert "no such board file" in r.output
+
+
+def test_apply_gitlab_problem_while_planning_is_one_line(gl, tmp_path, monkeypatch):
+    path = write_spec(tmp_path)
+
+    def boom(_gl, spec, base=None):
+        raise client.GitlabProblem("cannot reach gitlab")
+
+    monkeypatch.setattr(apply_mod, "plan", boom)
+    r = runner.invoke(app, ["apply", path, "--yes"])
+    assert r.exit_code == 1
+    assert "cannot reach gitlab" in r.output
+    assert gl["apply"] == []
+
+
+def test_apply_a_refused_write_explains_the_token_scope(gl, tmp_path, monkeypatch):
+    import gitlab as gitlab_pkg
+
+    path = write_spec(tmp_path, spec=edited())
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+
+    def forbidden(*a, **k):
+        raise gitlab_pkg.exceptions.GitlabAuthenticationError("403", response_code=403)
+
+    monkeypatch.setattr(apply_mod, "apply", forbidden)
+    r = runner.invoke(app, ["apply", path, "--yes"])
+    assert r.exit_code == 1
+    assert "needs `api` scope" in r.output
+
+
+def test_apply_with_nothing_pending_prints_nothing_to_write_only_for_skips(
+    gl, tmp_path
+):
+    path = write_spec(tmp_path)
+    r = runner.invoke(app, ["apply", path, "--yes"])  # an empty plan
+    assert r.exit_code == 0, r.output
+    assert gl["apply"] == []
+    assert "nothing to write" not in r.output
+
+
+def test_land_declined_prompt_aborts_before_touching_the_files(gl, tmp_path):
+    path = write_spec(tmp_path, spec=edited())
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    r = runner.invoke(app, ["land", path], input="n\n")
+    assert r.exit_code != 0
+    assert gl["apply"] == []
+    assert apply_mod.load(path)["issues"][0]["labels"] == ["Verify"]  # edit kept
+    assert not (tmp_path / "boards/x.yaml.base.old").exists()
+
+
+def test_land_with_nothing_to_write_still_refreshes_from_the_live_board(gl, tmp_path):
+    path = write_spec(tmp_path, spec=edited())  # plan is empty: fetched here
+    r = runner.invoke(app, ["land", path, "--yes"])
+    assert r.exit_code == 0, r.output
+    assert gl["apply"] == []
+    assert gl["fetch"] == ["grp/proj"]
+    assert apply_mod.load(path) == SPEC
+    assert "refreshed boards/x.yaml and its .base" in r.output
+    assert "bd import" not in r.output  # no issues.jsonl beside it
+
+
+def test_land_keeps_discussion_when_the_spec_carried_notes(gl, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        apply_mod,
+        "spec_from_board",
+        lambda p, b, c, notes=False: seen.append(notes) or dict(SPEC),
+    )
+    spec = json.loads(json.dumps(SPEC))
+    spec["issues"][0]["discussion"] = ["bob: hi"]
+    path = write_spec(tmp_path, spec=spec, base=False)
+    Path(path + ".base").write_text(apply_mod.dump(spec))
+    r = runner.invoke(app, ["land", path, "--yes"])
+    assert r.exit_code == 0, r.output
+    assert seen == [True, True]
+
+
+def test_land_missing_file_and_gitlab_problem_exit_1(gl, tmp_path, monkeypatch):
+    r = runner.invoke(app, ["land", "boards/none.yaml", "--yes"])
+    assert r.exit_code == 1 and "no such board file" in r.output
+    path = write_spec(tmp_path)
+
+    def boom(*a):
+        raise client.GitlabProblem("board vanished")
+
+    monkeypatch.setattr(board_mod, "fetch", boom)
+    r = runner.invoke(app, ["land", path, "--yes"])
+    assert r.exit_code == 1 and "board vanished" in r.output
+
+
+# --- migrate: the handlers other than the prompt -------------------------------
+
+
+def test_migrate_missing_file_and_gitlab_problem_exit_1(migrate, monkeypatch):
+    def missing(path):
+        raise apply_mod.SpecError(f"no such migration: {path}")
+
+    monkeypatch.setattr(cli.migrate_mod, "load", missing)
+    r = runner.invoke(app, ["migrate", "boards/none.migration.yaml", "--yes"])
+    assert r.exit_code == 1 and "no such migration" in r.output
+
+    def boom(_gl, mig):
+        raise client.GitlabProblem("rate limited")
+
+    monkeypatch.setattr(cli.migrate_mod, "load", lambda p: dict(MIG))
+    monkeypatch.setattr(cli.migrate_mod, "plan", boom)
+    r = runner.invoke(app, ["migrate", "x.yaml", "--yes"])
+    assert r.exit_code == 1 and "rate limited" in r.output
+    assert migrate["apply"] == []
+
+
+def test_migrate_confirmed_prompt_runs(migrate, tmp_path):
+    migrate["pending"]["plan"] = ONEWAY
+    r = runner.invoke(app, ["migrate", "x.yaml"], input="y\n")
+    assert r.exit_code == 0, r.output
+    assert len(migrate["apply"]) == 1
+    assert "2 op(s) run" in r.output
+
+
+# --- migrate-comments ----------------------------------------------------------
+
+
+@pytest.fixture
+def mc(gl, monkeypatch):
+    calls = {"copy": [], "close": []}
+    copied = {"n": 2, "closed": True}
+
+    def copy(_gl, path, src, dst, dst_path=None):
+        calls["copy"].append((path, src, dst, dst_path))
+        return copied["n"]
+
+    def close(_gl, path, iid, superseded_by=()):
+        calls["close"].append((path, iid, list(superseded_by)))
+        return copied["closed"]
+
+    monkeypatch.setattr(apply_mod, "migrate_comments", copy)
+    monkeypatch.setattr(apply_mod, "close_issue", close)
+    return calls, copied
+
+
+def test_migrate_comments_copies_to_iids_and_other_projects(mc):
+    calls, _ = mc
+    r = runner.invoke(
+        app, ["migrate-comments", "1", "2", "grp/other#7", "-p", "grp/proj"]
+    )
+    assert r.exit_code == 0, r.output
+    assert calls["copy"] == [
+        ("grp/proj", 1, 2, "grp/proj"),
+        ("grp/proj", 1, 7, "grp/other"),
+    ]
+    assert "2 comment(s) copied #1 -> #2" in r.output
+    assert "#1 -> grp/other#7" in r.output
+    assert calls["close"] == []
+
+
+def test_migrate_comments_nothing_to_copy_and_close_source(mc):
+    calls, copied = mc
+    copied["n"] = 0
+    r = runner.invoke(
+        app, ["migrate-comments", "1", "2", "-p", "grp/proj", "--close-source"]
+    )
+    assert r.exit_code == 0, r.output
+    assert "nothing to copy to #2" in r.output
+    assert calls["close"] == [("grp/proj", 1, ["#2"])]
+    assert "closed #1" in r.output
+    copied["closed"] = False
+    r = runner.invoke(
+        app, ["migrate-comments", "1", "2", "-p", "grp/proj", "--close-source"]
+    )
+    assert "#1 was already closed" in r.output
+
+
+def test_migrate_comments_bad_destination_is_an_error_before_any_write(mc):
+    calls, _ = mc
+    r = runner.invoke(app, ["migrate-comments", "1", "grp/x#abc", "-p", "grp/proj"])
+    assert r.exit_code == 1
+    assert "bad destination 'grp/x#abc'" in r.output
+    assert calls["copy"] == []
+
+
+# --- snapshot ------------------------------------------------------------------
+
+
+def test_snapshot_single_board_appends_to_the_chosen_log(gl, tmp_path):
+    r = runner.invoke(app, ["snapshot", "grp/proj", "-o", "log.jsonl"])
+    assert r.exit_code == 0, r.output
+    assert "appended to log.jsonl" in r.output
+    rows = snapshot_lines(tmp_path / "log.jsonl")
+    assert {row["iid"] for row in rows} == {1, 2}
+    runner.invoke(app, ["snapshot", "grp/proj", "-o", "log.jsonl"])
+    assert len(snapshot_lines(tmp_path / "log.jsonl")) == 4  # appends, never rewrites
+
+
+def test_snapshot_all_reports_a_failing_board_and_still_does_the_rest(
+    gl, tmp_path, monkeypatch
+):
+    write_spec(tmp_path, "boards/a.yaml", {**SPEC, "project": "grp/a"}, base=False)
+    write_spec(tmp_path, "boards/b.yaml", {**SPEC, "project": "grp/b"}, base=False)
+    real = board_mod.fetch
+
+    def flaky(path, name=None):
+        if path == "grp/a":
+            raise client.GitlabProblem("grp/a is gone")
+        return real(path, name)
+
+    monkeypatch.setattr(board_mod, "fetch", flaky)
+    r = runner.invoke(app, ["snapshot", "--all"])
+    assert r.exit_code == 1
+    assert "grp/a is gone" in r.output
+    assert "of grp/b appended" in r.output
+
+
+# --- pull: live-fetch branches --------------------------------------------------
+
+
+def test_pull_defaults_to_boards_named_for_the_project(gl, tmp_path):
+    r = runner.invoke(app, ["pull", "grp/proj", "--no-snapshot"])
+    assert r.exit_code == 0, r.output
+    assert apply_mod.load(str(tmp_path / "boards/proj.yaml")) == SPEC
+    assert "wrote boards/proj.yaml" in r.output
+    assert "--against" not in r.output
+    assert not (tmp_path / "snapshots.jsonl").exists()
+
+
+def test_pull_refuses_to_clobber_without_force(gl, tmp_path):
+    path = write_spec(tmp_path, base=False)
+    r = runner.invoke(app, ["pull", "grp/proj", "-o", path])
+    assert r.exit_code == 1
+    assert "already exists" in r.output and "--force" in r.output
+
+
+def test_pull_force_over_an_unreadable_file_is_allowed(gl, tmp_path):
+    bad = tmp_path / "boards/x.yaml"
+    bad.parent.mkdir()
+    bad.write_text("project: [unclosed")
+    r = runner.invoke(app, ["pull", "grp/proj", "-o", "boards/x.yaml", "--force"])
+    assert r.exit_code == 0, r.output
+    assert apply_mod.load("boards/x.yaml") == SPEC
+
+
+def test_pull_base_notes_and_force_refresh_a_clean_file(gl, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        apply_mod,
+        "spec_from_board",
+        lambda p, b, c, notes=False: seen.append(notes) or dict(SPEC),
+    )
+    path = write_spec(tmp_path)  # file == base: nothing staged, force is fine
+    r = runner.invoke(
+        app, ["pull", "grp/proj", "-o", path, "--force", "--base", "--notes"]
+    )
+    assert r.exit_code == 0, r.output
+    assert seen == [True, True]
+    assert (tmp_path / "boards/x.yaml.base.old").exists()
+    flat = "".join(r.output.split())  # the line wraps
+    assert f"gitboardplan{path}`--against{path}.base" in flat
+
+
+def test_pull_unknown_board_name_is_a_gitlab_problem(monkeypatch):
+    def boom(path, name=None):
+        raise client.GitlabProblem(f"no board named {name!r}; have: ['Dev Board']")
+
+    monkeypatch.setattr(board_mod, "fetch", boom)
+    r = runner.invoke(app, ["pull", "grp/proj", "Nope"])
+    assert r.exit_code == 1
+    assert "no board named 'Nope'" in r.output
+
+
+# --- report: the non-history paths -----------------------------------------------
+
+
+def log_snapshots(tmp_path, rows):
+    (tmp_path / "snapshots.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows)
+    )
+
+
+def snap(iid, columns, ts, assignee="alice", title=None):
+    return {
+        "project": "grp/proj",
+        "board": "Dev Board",
+        "iid": iid,
+        "title": title or f"t{iid}",
+        "ts": ts.isoformat(timespec="seconds"),
+        "columns": columns,
+        "assignee": assignee,
+    }
+
+
+def test_report_with_no_log_says_to_run_snapshot(gl):
+    r = runner.invoke(app, ["report", "grp/proj"])
+    assert r.exit_code == 0, r.output
+    assert "no snapshot of grp/proj within 7 day(s)" in r.output
+
+
+def test_report_with_one_snapshot_asks_for_a_second(gl, tmp_path):
+    now = datetime.now(UTC)
+    log_snapshots(tmp_path, [snap(1, ["Doing"], now)])
+    r = runner.invoke(app, ["report", "grp/proj"])
+    assert r.exit_code == 0, r.output
+    assert "need two snapshots of grp/proj" in r.output
+
+
+def test_report_lists_moved_new_closed_and_the_tally(gl, tmp_path):
+    now = datetime.now(UTC)
+    before = now - timedelta(days=1)
+    log_snapshots(
+        tmp_path,
+        [
+            snap(1, ["Doing"], before),
+            snap(2, ["Doing"], before, "bob"),
+            snap(4, ["Doing"], before, "bob"),
+            snap(1, ["Verify"], now),
+            snap(2, ["Doing"], now, "bob"),
+            snap(3, ["Backlog"], now, "carol"),
+        ],
+    )
+    r = runner.invoke(app, ["report", "grp/proj"])
+    assert r.exit_code == 0, r.output
+    assert "2 snapshots within 7 day(s)" in r.output
+    assert "Doing -> Verify" in r.output
+    assert "#3" in r.output and "new in Backlog" in r.output
+    assert "#4" in r.output and "closed" in r.output
+    assert "1 issue(s) did not move" in r.output
+    assert re.search(r"alice\s+1", r.output)
+
+
+def test_report_with_no_movement_says_so(gl, tmp_path):
+    now = datetime.now(UTC)
+    log_snapshots(
+        tmp_path, [snap(1, ["Doing"], now - timedelta(days=1)), snap(1, ["Doing"], now)]
+    )
+    r = runner.invoke(app, ["report", "grp/proj"])
+    assert "no movement in the window" in r.output
+
+
+def test_report_flags_a_card_stuck_past_its_columns_threshold(gl, tmp_path):
+    now = datetime.now(UTC)
+    days = [now - timedelta(days=d) for d in (60, 30, 0)]
+    log_snapshots(tmp_path, [snap(1, ["Verify"], ts) for ts in days])
+    r = runner.invoke(app, ["report", "grp/proj", "-d", "90"])
+    assert r.exit_code == 0, r.output
+    assert "stuck" in r.output
+    assert "#1" in r.output and "Verify for" in r.output
+
+
+def test_report_since_without_a_base_is_an_error(gl, tmp_path):
+    path = write_spec(tmp_path, base=False)
+    r = runner.invoke(app, ["report", "--since", path])
+    assert r.exit_code == 1
+    assert f"no {path}.base" in r.output and "pull --base" in r.output
+
+
+def test_report_since_the_pull_reads_the_window_from_the_base(gl, tmp_path):
+    path = write_spec(tmp_path)  # project comes from the spec
+    now = datetime.now(UTC)
+    log_snapshots(
+        tmp_path,
+        [
+            snap(1, ["Doing"], now + timedelta(hours=1)),
+            snap(1, ["Verify"], now + timedelta(hours=2)),
+        ],
+    )
+    r = runner.invoke(app, ["report", "--since", path])
+    assert r.exit_code == 0, r.output
+    assert "since the pull at" in r.output
+    assert "Doing -> Verify" in r.output
+
+
+def test_report_repo_matches_authors_and_lists_the_rest(gl, tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    log_snapshots(
+        tmp_path,
+        [snap(1, ["Doing"], now - timedelta(days=1)), snap(1, ["Verify"], now)],
+    )
+    monkeypatch.setattr(
+        cli.report_mod,
+        "commit_counts",
+        lambda repo, days: {("Alice A", "a@x"): 3, ("Zed", "z@x"): 2},
+    )
+    monkeypatch.setattr(
+        cli.report_mod,
+        "match_author",
+        lambda name, authors: next((k for k in authors if name in k[0].lower()), None),
+    )
+    r = runner.invoke(app, ["report", "grp/proj", "--repo", "."])
+    assert r.exit_code == 0, r.output
+    assert "commits" in r.output
+    assert re.search(r"alice\s+1\s+3", r.output)
+    assert "2 commit(s) by Zed <z@x> matched no assignee" in r.output
+
+
+# --- config --------------------------------------------------------------------
+
+
+def test_config_lists_every_source_and_exits_0_with_tokens(tmp_path):
+    (tmp_path / "gitboard.toml").write_text(
+        'url = "https://gl.example"\nproject = "g/p"\nboard = "B"\nspec = "s.yaml"\n'
+    )
+    r = runner.invoke(app, ["config"])
+    assert r.exit_code == 0, r.output
+    flat = "".join(r.output.split())  # a long tmp path wraps
+    assert "configfile/" in flat  # a path, not "none"
+    for text in ("https://gl.example", "g/p"):
+        assert text in flat
+    assert "unset" not in flat  # board and spec are set too
+    assert "found" in r.output
+    assert "not found" not in r.output
+    assert "unset — apply reuses" not in r.output  # a write token is set
+
+
+def test_config_without_a_write_token_says_apply_reuses_the_read_one(monkeypatch):
+    monkeypatch.delenv("GITLAB_WRITE_TOKEN", raising=False)
+    monkeypatch.setattr(
+        config.subprocess,
+        "run",
+        lambda *a, **k: types.SimpleNamespace(returncode=1, stdout=""),
+    )
+    r = runner.invoke(app, ["config"])
+    assert r.exit_code == 0, r.output
+    assert "unset — apply reuses the read token" in r.output
+    assert r.output.count("unset") == 4  # project, board, spec, write token
+
+
+# --- estimate / stats: the live and empty branches --------------------------------
+
+
+def test_estimate_with_no_history_says_nothing_to_estimate(tmp_path, monkeypatch):
+    spec, dump = _estimate_setup(tmp_path, monkeypatch)
+    data = json.loads(dump.read_text())
+    data["history"] = []
+    dump.write_text(json.dumps(data))
+    before = spec.read_text()
+    r = runner.invoke(app, ["estimate", str(spec), "--history", str(dump)])
+    assert r.exit_code == 0, r.output
+    assert "nothing to estimate" in r.output
+    assert spec.read_text() == before
+
+
+def test_estimate_live_fetches_history(tmp_path, monkeypatch):
+    spec, dump = _estimate_setup(tmp_path, monkeypatch)
+    data = json.loads(dump.read_text())
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: fake_board("g/p", "dev"))
+    monkeypatch.setattr(
+        board_mod, "fetch_history", lambda *a, **k: (data["history"], ["Doing"])
+    )
+    monkeypatch.setattr(board_mod, "active_milestones", lambda p: [])
+    r = runner.invoke(app, ["estimate", str(spec)])
+    assert r.exit_code == 0, r.output
+    assert "due date(s) staged" in r.output
+
+
+def live_history(monkeypatch, tmp_path):
+    path, data = history_file(tmp_path)
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: fake_board())
+    monkeypatch.setattr(
+        board_mod, "fetch_history", lambda *a, **k: (data["history"], data["columns"])
+    )
+    monkeypatch.setattr(board_mod, "active_milestones", lambda p: [])
+    return path
+
+
+def test_stats_live_dump_and_json(gl, tmp_path, monkeypatch):
+    live_history(monkeypatch, tmp_path)
+    r = runner.invoke(app, ["stats", "grp/proj", "--dump", "d.json", "--json"])
+    assert r.exit_code == 0, r.output
+    assert "wrote d.json" in r.output
+    assert json.loads((tmp_path / "d.json").read_text())["project"] == "grp/proj"
+    assert (tmp_path / "reports/stats.jsonl").exists()
+
+
+def test_stats_weeks_without_history_still_renders_a_heading(gl, tmp_path):
+    r = runner.invoke(app, ["stats", "grp/proj", "--weeks", "4"])
+    assert r.exit_code == 0, r.output
+    assert "grp/proj — last 4 weeks" in r.stdout
+
+
+# --- tui: the interactive loop, driven by scripted keys -----------------------
+#
+# `_key` is the only input and `rich.live.Live` the only output, so both are
+# faked: keys come from a list, and every redraw is rendered to text and kept.
+# Each script ends with "q"; running out of keys fails the test loudly.
+
+
+class FakeLive:
+    frames: list = []
+
+    def __init__(self, console=None, **kw):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    def update(self, renderable, refresh=False):
+        c = Console(width=120, file=io.StringIO(), theme=THEME)
+        c.print(renderable)
+        FakeLive.frames.append(c.file.getvalue())
+
+    def stop(self):
+        pass
+
+    def start(self, refresh=False):
+        pass
+
+
+class Tui:
+    """`run(keys, *argv)` -> the CliRunner result; `.frames` are the redraws."""
+
+    def __init__(self, monkeypatch):
+        import signal
+
+        import rich.live
+
+        self.mp = monkeypatch
+        FakeLive.frames = []
+        self.keys = []
+        monkeypatch.setattr(rich.live, "Live", FakeLive)
+        monkeypatch.setattr(signal, "signal", lambda *a: None)
+        monkeypatch.setattr(
+            cli,
+            "sys",
+            types.SimpleNamespace(stdin=types.SimpleNamespace(isatty=lambda: True)),
+        )
+        self.errbuf = io.StringIO()
+        monkeypatch.setattr(
+            cli,
+            "err",
+            lambda: Console(file=self.errbuf, width=120, height=50, theme=THEME),
+        )
+        monkeypatch.setattr(cli, "_key", self._key)
+        monkeypatch.setattr(subprocess, "call", lambda argv: self.edits.append(argv))
+        self.edits = []
+        self.on_edit = None
+
+    def _key(self):
+        assert self.keys, "script ran out of keys (no q?)"
+        return self.keys.pop(0)
+
+    def run(self, keys, *argv):
+        self.keys = list(keys)
+        r = runner.invoke(app, ["tui", *argv])
+        assert r.exit_code == 0, (r.output, r.exception)
+        assert not self.keys, f"unused keys {self.keys}"
+        return r
+
+    @property
+    def last(self):
+        return FakeLive.frames[-1]
+
+    @property
+    def text(self):
+        return "\n".join(FakeLive.frames)
+
+
+@pytest.fixture
+def tui(monkeypatch):
+    return Tui(monkeypatch)
+
+
+def typed(s):
+    return list(s) + ["\r"]
+
+
+def test_tui_refuses_without_a_terminal(gl):
+    r = runner.invoke(app, ["tui", "grp/proj"])
+    assert r.exit_code == 1
+    assert "tui needs a terminal" in r.output
+
+
+def test_tui_offline_arrows_select_wrap_and_esc_drops(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["down", "q"], "--from", path, "--no-guide")
+    assert "▶ " in tui.last and "one" in tui.last.split("▶ ")[1].splitlines()[0]
+    tui.run(["down", "down", "q"], "--from", path, "--no-guide")  # one -> two
+    assert "two" in tui.last.split("▶ ")[1].splitlines()[0]
+    tui.run(["down", "down", "down", "q"], "--from", path, "--no-guide")  # wraps
+    assert "one" in tui.last.split("▶ ")[1].splitlines()[0]
+    tui.run(["j", "l", "h", "k", "q"], "--from", path, "--no-guide")
+    assert "▶ " in tui.last
+    tui.run(["down", "\x1b", "q"], "--from", path, "--no-guide")
+    assert "▶ " not in tui.last
+
+
+def test_tui_offline_move_stages_into_the_yaml_and_refetches(tui, tmp_path):
+    path = write_spec(tmp_path)
+    # card one (Doing) -> pick 1 = Backlog
+    tui.run(["down", "v", "1", "q"], "--from", path, "--no-guide")
+    spec = apply_mod.load(path)
+    assert "labels" not in spec["issues"][0]
+    assert "staged: #1 Doing → Backlog · p shows, the host applies" in tui.last
+    assert "staged this session (1)" in tui.last
+    assert "Backlog (1)" in tui.last  # the reload moved the card
+
+
+def test_tui_move_out_of_verify_is_refused_with_the_reason(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["down", "down", "v", "1", "q"], "--from", path, "--no-guide")  # card two
+    assert "it leaves on a `verified:` or `failed:` comment" in tui.last
+    assert apply_mod.load(path)["issues"][1]["labels"] == ["Verify"]
+
+
+def test_tui_move_cancelled_by_a_key_that_is_not_a_choice(tui, tmp_path):
+    path = write_spec(tmp_path)
+    before = (tmp_path / path).read_text()
+    tui.run(["down", "v", "x", "q"], "--from", path, "--no-guide")
+    assert "cancelled" in tui.last
+    assert (tmp_path / path).read_text() == before
+
+
+def test_tui_card_key_without_selection_asks_for_a_number(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["v", *typed("9"), "q"], "--from", path, "--no-guide")
+    assert "#9 is not on this board" in tui.last
+    # a typed number that exists works like a selection; backspace edits it
+    tui.run(
+        ["c", "5", "\x7f", "1", "\r", *typed("ship it"), "q"],
+        "--from",
+        path,
+        "--no-guide",
+    )
+    assert apply_mod.load(path)["issues"][0]["notes"] == ["ship it"]
+    # esc at the number prompt cancels, and so does an empty enter
+    tui.run(["v", "\x1b", "q"], "--from", path, "--no-guide")
+    assert "cancelled" in tui.last
+    tui.run(["u", "\r", "q"], "--from", path, "--no-guide")
+    assert "cancelled" in tui.last
+
+
+def test_tui_assign_types_a_username_or_picks_from_people(tui, tmp_path):
+    spec = {**SPEC, "people": {"Al": "alice"}}
+    path = write_spec(tmp_path, spec=spec)
+    tui.run(["down", "u", "t", *typed("@bob"), "q"], "--from", path, "--no-guide")
+    assert apply_mod.load(path)["issues"][0]["assignee"] == "bob"
+    assert "assignee none → bob" in tui.last
+    # now bob is on the board, so he is the numbered choice with alice
+    tui.run(["down", "u", "2", "q"], "--from", path, "--no-guide")
+    assert apply_mod.load(path)["issues"][0]["assignee"] == "bob"
+    tui.run(["down", "u", "1", "q"], "--from", path, "--no-guide")
+    assert apply_mod.load(path)["issues"][0]["assignee"] == "alice"
+    tui.run(["down", "u", "t", "\x1b", "q"], "--from", path, "--no-guide")
+    assert "cancelled" in tui.last
+
+
+def test_tui_due_date_plus_n_bad_text_and_offline_estimate(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["down", "d", *typed("+3"), "q"], "--from", path, "--no-guide")
+    want = (datetime.now(UTC).date() + timedelta(days=3)).isoformat()
+    assert apply_mod.load(path)["issues"][0]["due_date"] == want
+    tui.run(["down", "d", *typed("soon"), "q"], "--from", path, "--no-guide")
+    assert "a date is YYYY-MM-DD" in tui.last
+    tui.run(["down", "d", "e", "q"], "--from", path, "--no-guide")
+    assert "offline — no history here; type a date" in tui.last
+    tui.run(["down", "d", "\x1b", "q"], "--from", path, "--no-guide")
+    assert "cancelled" in tui.last
+
+
+def test_tui_comment_stages_once_and_refuses_the_duplicate(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["down", "c", *typed("lgtm"), "q"], "--from", path, "--no-guide")
+    assert apply_mod.load(path)["issues"][0]["notes"] == ["lgtm"]
+    tui.run(["down", "c", *typed("lgtm"), "q"], "--from", path, "--no-guide")
+    assert "already stages that comment" in tui.last
+    tui.run(["down", "c", "\r", "q"], "--from", path, "--no-guide")
+    assert "cancelled" in tui.last
+
+
+def test_tui_new_card_lands_in_the_picked_column_and_blank_title_cancels(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["n", *typed("fresh"), "2", "q"], "--from", path, "--no-guide")
+    issues = apply_mod.load(path)["issues"]
+    assert issues[-1] == {"title": "fresh", "labels": ["Doing"]}
+    assert "(new) fresh → Doing" in tui.last
+    tui.run(["n", "\x1b", "q"], "--from", path, "--no-guide")
+    assert "cancelled" in tui.last
+    tui.run(["n", *typed("fresh"), "2", "q"], "--from", path, "--no-guide")
+    assert "already here" in tui.last
+    # a card with no number is named by its title
+    tui.run(["down", "down", "c", *typed("hi"), "q"], "--from", path, "--no-guide")
+    assert apply_mod.load(path)["issues"][-1]["notes"] == ["hi"]
+    assert "“fresh” note: hi" in tui.last
+
+
+def test_tui_guide_toggle_help_and_unknown_keys(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["v", "\x1b", "g", "g", "?", "z", "q"], "--from", path)
+    assert "guide — " in tui.text  # v showed its guide
+    assert "guide off — g brings it back" in tui.text
+    assert "guide on — press a key" in tui.text
+    assert "refetch the board" in tui.text  # the ? panel
+    assert "refetch the board" not in tui.last  # z cleared it
+
+
+def test_tui_offline_hides_the_online_keys(tui, tmp_path):
+    path = write_spec(tmp_path)
+    for key in "sbma":
+        tui.run([key, "q"], "--from", path, "--no-guide")
+        assert "offline — not here; the host does that" in tui.last, key
+    assert "offline —" in tui.last  # and the subtitle says so
+
+
+def test_tui_reload_picks_up_an_outside_edit(tui, tmp_path):
+    path = write_spec(tmp_path)
+    orig_key = tui._key
+
+    def key():
+        if tui.keys[0] == "r":  # someone edits the file just before the reload
+            spec = apply_mod.load(path)
+            spec["issues"].append({"title": "from outside"})
+            (tmp_path / path).write_text(apply_mod.dump(spec))
+        return orig_key()
+
+    tui.mp.setattr(cli, "_key", key)
+    tui.run(["r", "q"], "--from", path, "--no-guide")
+    assert "from outside" in tui.last
+
+
+def test_tui_edit_shows_the_diff_against_the_base_or_says_there_is_none(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.mp.setenv("VISUAL", "myedit --wait")
+
+    def edit(argv):
+        spec = apply_mod.load(path)
+        spec["issues"][0]["labels"] = ["Verify"]
+        (tmp_path / path).write_text(apply_mod.dump(spec))
+
+    tui.mp.setattr(
+        subprocess, "call", lambda argv: (tui.edits.append(argv), edit(argv))
+    )
+    tui.run(["e", "q"], "--from", path, "--no-guide")
+    assert tui.edits == [["myedit", "--wait", path]]
+    assert "the host applies" in tui.last and "one: labels" in tui.last
+    # no .base: nothing to diff against
+    (tmp_path / (path + ".base")).unlink()
+    tui.run(["e", "q"], "--from", path, "--no-guide")
+    assert f"edited; no {path}.base to diff against" in tui.last
+
+
+def test_tui_edit_with_no_change_says_the_board_matches(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.mp.delenv("VISUAL", raising=False)
+    tui.mp.delenv("EDITOR", raising=False)
+    tui.run(["e", "q"], "--from", path, "--no-guide")
+    assert tui.edits == [["vi", path]]
+    assert "no changes — board already matches" in tui.last
+
+
+def test_tui_offline_p_diffs_and_never_writes(tui, tmp_path):
+    path = write_spec(tmp_path, spec=edited())
+    tui.run(["p", "q"], "--from", path, "--no-guide")
+    assert "the host applies" in tui.last and "labels" in tui.last
+    clean = write_spec(tmp_path, "boards/c.yaml")
+    tui.run(["p", "q"], "--from", clean, "--no-guide")
+    assert "no changes — board already matches" in tui.last
+    (tmp_path / "boards/c.yaml.base").unlink()
+    tui.run(["p", "q"], "--from", clean, "--no-guide")
+    assert "no boards/c.yaml.base to diff against" in tui.last
+
+
+# --- tui: online (GitLab faked) --------------------------------------------------
+
+
+@pytest.fixture
+def live_tui(tui, gl, monkeypatch, tmp_path):
+    boards = [
+        types.SimpleNamespace(name="Dev Board"),
+        types.SimpleNamespace(name="Other"),
+    ]
+
+    def fetch(path, name=None):
+        gl["fetch"].append((path, name))
+        proj = types.SimpleNamespace(
+            path_with_namespace=path,
+            boards=types.SimpleNamespace(list=lambda **k: boards),
+        )
+        return proj, types.SimpleNamespace(name=name or "Dev Board")
+
+    monkeypatch.setattr(board_mod, "fetch", fetch)
+    write_spec(tmp_path)  # boards/x.yaml defines grp/proj, so a/p exist
+    return tui
+
+
+def test_tui_online_reload_snapshot_and_board_switch(live_tui, gl, tmp_path):
+    live_tui.run(["r", "s", "b", "2", "q"], "grp/proj", "--no-guide")
+    assert gl["fetch"] == [
+        ("grp/proj", None),  # first read
+        ("grp/proj", None),  # r
+        ("grp/proj", "Other"),  # b, 2
+    ]
+    assert len(snapshot_lines(tmp_path / "snapshots.jsonl")) == 2
+    assert "defined by boards/x.yaml" in live_tui.text
+
+
+def test_tui_board_switch_cancel_and_nothing_to_switch_to(
+    live_tui, gl, tmp_path, monkeypatch
+):
+    live_tui.run(["b", "x", "q"], "grp/proj", "--no-guide")
+    assert "cancelled" in live_tui.last
+    one = [types.SimpleNamespace(name="Dev Board")]
+
+    def fetch(path, name=None):
+        proj = types.SimpleNamespace(
+            path_with_namespace=path, boards=types.SimpleNamespace(list=lambda **k: one)
+        )
+        return proj, types.SimpleNamespace(name="Dev Board")
+
+    monkeypatch.setattr(board_mod, "fetch", fetch)
+    live_tui.run(["b", "q"], "grp/proj", "--no-guide")
+    assert "nothing else to switch to" in live_tui.last
+
+
+def test_tui_online_plan_apply_branches(live_tui, gl, tmp_path):
+    # empty plan
+    live_tui.run(["p", "a", "q"], "grp/proj", "--no-guide")
+    assert "no changes — board already matches" in live_tui.last
+    # p shows the table, a refuses on drift
+    gl["pending"]["plan"] = [("drift", "issue", "one: labels")]
+    live_tui.run(["p", "q"], "grp/proj", "--no-guide")
+    assert "a applies" in live_tui.last
+    live_tui.run(["a", "q"], "grp/proj", "--no-guide")
+    assert "1 field(s) changed on GitLab since the pull" in live_tui.last
+    assert "refused" in live_tui.last
+    assert gl["apply"] == []
+    # a clean write: n declines, y writes and clears the staged panel
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    live_tui.run(["a", "n", "q"], "grp/proj", "--no-guide")
+    assert "not applied" in live_tui.last and gl["apply"] == []
+    live_tui.run(["a", "y", "q"], "grp/proj", "--no-guide")
+    assert "apply 1 change(s)?  y / n" in live_tui.text
+    assert "1 change(s) written" in live_tui.last
+    assert gl["apply"] == [{"base": SPEC, "force": False}]
+
+
+def test_tui_online_apply_refused_by_the_token_is_a_clean_exit_1(
+    live_tui, gl, monkeypatch
+):
+    import gitlab as gitlab_pkg
+
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+
+    def forbidden(*a, **k):
+        raise gitlab_pkg.exceptions.GitlabAuthenticationError("403", response_code=403)
+
+    monkeypatch.setattr(apply_mod, "apply", forbidden)
+    live_tui.keys = ["a", "y", "q"]
+    r = runner.invoke(app, ["tui", "grp/proj", "--no-guide"])
+    assert r.exit_code == 1
+    assert "needs `api` scope" in live_tui.errbuf.getvalue()
+
+
+def test_tui_without_a_yaml_says_so_and_e_pulls_one(live_tui, gl, tmp_path):
+    (tmp_path / "boards/x.yaml").unlink()
+    (tmp_path / "boards/x.yaml.base").unlink()
+    live_tui.run(["p", "e", "q"], "grp/proj", "--no-guide")  # p: no spec, no-op
+    assert "no YAML yet — e pulls the board into one" in live_tui.text
+    assert apply_mod.load(str(tmp_path / "boards/proj.yaml")) == SPEC
+    assert live_tui.edits == [["vi", "boards/proj.yaml"]]
+
+
+def test_tui_online_edit_diffs_against_the_live_board(live_tui, gl, tmp_path):
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    live_tui.run(["e", "q"], "grp/proj", "--no-guide")
+    assert "a applies" in live_tui.last and "one: labels" in live_tui.last
+
+
+def test_tui_online_card_edit_adopts_a_card_the_yaml_lacks(live_tui, gl, tmp_path):
+    spec = {**SPEC, "issues": [SPEC["issues"][0]]}  # card two is not in the YAML
+    write_spec(tmp_path, spec=spec, base=False)
+    live_tui.run(["down", "down", "c", *typed("hello"), "q"], "grp/proj", "--no-guide")
+    issues = apply_mod.load("boards/x.yaml")["issues"]
+    assert [i["iid"] for i in issues] == [1, 2]
+    assert issues[1]["notes"] == ["hello"]
+    assert "a applies" in live_tui.last
+
+
+def test_tui_online_due_estimate_uses_the_assignees_history(
+    live_tui, gl, tmp_path, monkeypatch
+):
+    shutil.rmtree(tmp_path / "boards")  # live_tui's; the helper makes its own
+    _, dump = _estimate_setup(tmp_path, monkeypatch)
+    data = json.loads(dump.read_text())
+    spec = {**SPEC, "issues": [{**SPEC["issues"][0], "assignee": "alice"}]}
+    write_spec(tmp_path, spec=spec, base=False)
+    monkeypatch.setattr(
+        board_mod, "fetch_history", lambda *a, **k: (data["history"], ["Doing"])
+    )
+    monkeypatch.setattr(board_mod, "active_milestones", lambda p: [])
+    live_tui.run(["down", "d", "e", "q"], "grp/proj", "--no-guide")
+    due = apply_mod.load("boards/x.yaml")["issues"][0]["due_date"]
+    assert due == (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
+    assert "p85 of 5 cards: alice" in live_tui.last
+    # too few finished cards: no estimate, and the date is left alone
+    monkeypatch.setattr(
+        board_mod, "fetch_history", lambda *a, **k: (data["history"][:2], ["Doing"])
+    )
+    live_tui.run(["down", "down", "d", "e", "q"], "grp/proj", "--no-guide")
+    assert "no estimate: too little finished history" in live_tui.last
+
+
+def test_tui_migrate_comments_to_several_cards_and_close_the_source(
+    live_tui, gl, tmp_path, monkeypatch
+):
+    copies, closed = [], []
+
+    def copy(_gl, path, src, dst, dst_path=None):
+        copies.append((path, src, dst, dst_path))
+        return 2
+
+    monkeypatch.setattr(apply_mod, "migrate_comments", copy)
+    monkeypatch.setattr(
+        apply_mod,
+        "close_issue",
+        lambda _gl, p, i, superseded_by=(): closed.append((i, list(superseded_by))),
+    )
+    write_spec(tmp_path, "boards/b.yaml", {**SPEC, "project": "grp/b"}, base=False)
+    keys = ["m", *typed("1"), *typed("2"), "b", "3", *typed("7"), "\r", "y", "q"]
+    live_tui.run(keys, "grp/proj", "--no-guide")
+    assert copies == [("grp/proj", 1, 2, "grp/proj"), ("grp/proj", 1, 7, "grp/b")]
+    assert closed == [(1, ["#2", "grp/b#7"])]
+    assert "4 comment(s) copied; #1 closed" in live_tui.last
+    assert "copy comments from" in live_tui.text
+    assert "#1 “one”  →  onto" in live_tui.text
+
+
+def test_tui_migrate_comments_n_keeps_the_source_open_and_empty_cancels(
+    live_tui, gl, monkeypatch
+):
+    monkeypatch.setattr(apply_mod, "migrate_comments", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        apply_mod, "close_issue", lambda *a, **k: pytest.fail("source stays open")
+    )
+    live_tui.run(
+        ["m", *typed("1"), *typed("2"), "\r", "n", "q"], "grp/proj", "--no-guide"
+    )
+    assert "0 comment(s) copied #1 -> #2" in live_tui.last
+    live_tui.run(["m", "\r", "q"], "grp/proj", "--no-guide")
+    assert "cancelled" in live_tui.last
+    live_tui.run(["m", *typed("1"), "\x1b", "q"], "grp/proj", "--no-guide")
+    assert "cancelled" in live_tui.last

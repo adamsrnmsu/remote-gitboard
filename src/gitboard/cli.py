@@ -1809,7 +1809,7 @@ def tui(
                         draw(busy=f"reading {st['path']}…")
                         refetch()
                     else:
-                        st["status"] = Text("cancelled", "muted")
+                        st["status"] = st["status"] or Text("cancelled", "muted")
                 elif k == "e":
                     spec = spec_file()
                     live.stop()
