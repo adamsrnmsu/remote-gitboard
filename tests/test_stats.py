@@ -565,6 +565,27 @@ def test_render_weekly_md_dashes_and_percent():
     assert "| 2026-09-16 | 2 | 5 | 1 | – | – | – | 50% | 1 | 2 |" in md
 
 
+def test_render_milestone_trend_md():
+    assert stats.render_milestone_trend_md([row(), row(by_milestone={})]) == ""
+    bm = lambda o, a: {"open": o, "done": 0, "added": a, "due": None}  # noqa: E731
+    md = stats.render_milestone_trend_md(
+        [
+            row(end="2026-09-09T12:00:00+00:00"),  # old row, no by_milestone
+            row(end="2026-09-16T12:00:00+00:00", by_milestone={"Beta": bm(4, 2)}),
+            row(
+                end="2026-09-23T12:00:00+00:00",
+                by_milestone={"Beta": bm(6, 3), "Alpha": bm(1, 0)},
+            ),
+        ]
+    )
+    assert md.splitlines() == [
+        "| milestone | 2026-09-09 | 2026-09-16 | 2026-09-23 |",
+        "|---|---|---|---|",
+        "| Alpha | – | – | 1 (+0) |",
+        "| Beta | – | 4 (+2) | 6 (+3) |",
+    ]
+
+
 def test_render_team_md_weekly_is_opt_in():
     s = stats.summarise(history(), COLUMNS, START, END, NOW)
     plain = stats.render_team_md(s)

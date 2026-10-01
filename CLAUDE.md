@@ -39,7 +39,7 @@ Gantt charts: own, current milestone, project); `--all`; Monday 07:00 in `make c
 `graph [PROJECT] [--from FILE] [-M MILESTONE] [--html PATH] [--mermaid]`
 (which card waits on which, one tree per milestone). Every
 `stats`/`digest` run appends one row per board to `reports/stats.jsonl`
-(deduped per week); `stats --weeks N` and the mails' "8-week trend" read it.
+(deduped per week); `stats --weeks N` (plus a per-milestone open (+added) table) and the mails' "8-week trend" read it.
 Docs: `make docs` (Sphinx, `docs/`). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI

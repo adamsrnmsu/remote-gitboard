@@ -1072,9 +1072,12 @@ def stats(
         if weeks:
             path = _need(project, "project", "project")
             rows = stats_mod.weekly(stats_mod.load_rows(STATS_LOG), path, weeks)
-            print(
-                f"# {path} — last {weeks} weeks\n\n" + stats_mod.render_weekly_md(rows)
+            out = f"# {path} — last {weeks} weeks\n\n" + stats_mod.render_weekly_md(
+                rows
             )
+            if ms := stats_mod.render_milestone_trend_md(rows):
+                out += "\n\n## By milestone: open (+added)\n\n" + ms
+            print(out)
             return
         path = None if from_file else _need(project, "project", "project")
         history, columns, meta = _history(

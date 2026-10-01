@@ -743,6 +743,24 @@ def render_weekly_md(rows):
     )
 
 
+def render_milestone_trend_md(rows):
+    """One row per milestone seen in the window, one column per week:
+    "open (+added)", – where the week had no row for it. "" when no row has any."""
+    names = sorted({m for r in rows for m in r.get("by_milestone") or {}})
+    if not names:
+        return ""
+
+    def cell(r, m):
+        d = (r.get("by_milestone") or {}).get(m)
+        return None if d is None else f"{d['open']} (+{d['added']})"
+
+    return _table(
+        [(m, *(cell(r, m) for r in rows)) for m in names],
+        "milestone",
+        *((r.get("period_end") or "")[:10] for r in rows),
+    )
+
+
 def render_team_md(summary, weekly=None):
     p, o, t, v, f, tr = (
         summary[k] for k in ("period", "open", "throughput", "verify", "flow", "trend")
