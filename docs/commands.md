@@ -44,7 +44,7 @@ gitboard stats group/project                # team markdown: open by column/epic
 gitboard stats group/project --dump h.json  # ...and keep the fetched history for offline reruns
 gitboard stats --from h.json [--json]       # same, from the dump; --json prints the summary dict
 gitboard stats group/project --weeks 8      # the trend table from reports/stats.jsonl; no network
-gitboard digest group/project               # reports/<date>/<board>/: team + <user> as .md and .html, <user>.eml, graph.html, index.html
+gitboard digest group/project               # reports/<date>/<board>/: team + <user> as .md and .html, <user>.eml, graph.html, gantt.html, index.html (mails carry Gantt charts)
 gitboard digest --all                       # every local board (what `make cron` runs Monday 07:00)
 gitboard digest group/project --md-only     # markdown + plain-text .eml only, no HTML
 gitboard migrate-comments 12 34 35          # copy #12's comments onto #34 and #35
