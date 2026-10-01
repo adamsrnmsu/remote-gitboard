@@ -1,6 +1,7 @@
 """graph.py: model, flags, spec cards, tree and Mermaid. Pure."""
 
 import datetime
+import re
 
 from rich.console import Console
 
@@ -253,3 +254,22 @@ def test_empty_milestone_is_a_root_and_not_faded():
     # a known milestone that has cards keeps its count
     g = graph.build([card(1, milestone="Beta")], [{"title": "Beta"}])
     assert "no cards yet" not in _text(graph.render_tree(g, "2026-09-30"))
+
+
+def test_root_shows_the_late_forecast_only_when_given_and_positive():
+    g = graph.build(
+        [card(1, milestone="Beta")], [{"title": "Beta", "due_date": "2026-10-10"}]
+    )
+    base = _text(graph.render_tree(g, "2026-09-30"))
+    assert "forecast" not in base
+    assert _text(graph.render_tree(g, "2026-09-30", late={"Beta": 0})) == base
+    assert _text(graph.render_tree(g, "2026-09-30", late={"Other": 5})) == base
+    text = _text(graph.render_tree(g, "2026-09-30", late={"Beta": 12}))
+    assert "forecast 12 days late" in text
+
+
+def test_graph_does_not_import_estimate_or_stats():
+    import pathlib
+
+    src = pathlib.Path(graph.__file__).read_text()
+    assert not re.search(r"^\s*(from|import) .*\b(estimate|stats)\b", src, re.M)

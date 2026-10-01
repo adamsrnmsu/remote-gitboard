@@ -378,9 +378,11 @@ def _head(n):
     return name if name == n["title"] else f"{name} {n['title']}"
 
 
-def render_tree(g, today, flagged=frozenset()):
+def render_tree(g, today, flagged=frozenset(), late=None):
     """One tree per milestone, blockers nested under what they block.
-    `flagged` is the keys `flags` names (the caller has the columns), ⚑."""
+    `flagged` is the keys `flags` names (the caller has the columns), ⚑.
+    `late` maps milestone title to forecast days late (the caller has the
+    history; graph must not import estimate), shown on the root when > 0."""
     nodes, preds = g["nodes"], _preds(g["edges"])
     succs = _succs(g["edges"])
     star = {k for path in g["critical"].values() for k in path}
@@ -415,7 +417,9 @@ def render_tree(g, today, flagged=frozenset()):
     ms = [n for n in nodes.values() if n["kind"] == "milestone"]
     for m in sorted(ms, key=lambda n: (n["due_date"] or "9999", n["title"])):
         mine = [k for k in preds[m["key"]] if nodes[k]["kind"] != "milestone"]
-        tree = Tree(Text(_root(m, mine, nodes, today), "bold"))
+        tree = Tree(
+            Text(_root(m, mine, nodes, today, (late or {}).get(m["title"])), "bold")
+        )
         blockers = {p for k in mine for p in preds[k]}
         for k in sorted((k for k in mine if k not in blockers), key=links.ref_key):
             add(tree, k)
@@ -437,7 +441,7 @@ def render_tree(g, today, flagged=frozenset()):
     return Group(*trees)
 
 
-def _root(m, mine, nodes, today):
+def _root(m, mine, nodes, today, late=None):
     parts = [f"◆ {m['title']}"]
     if m["due_date"]:
         days = (
@@ -446,6 +450,8 @@ def _root(m, mine, nodes, today):
         ).days
         left = f"{days} days left" if days >= 0 else f"{-days} days late"
         parts.append(f"due {m['due_date']} · {left}")
+    if late and late > 0:
+        parts.append(f"forecast {late} days late")
     if mine:
         done = sum(not nodes[k]["open"] for k in mine)
         parts.append(f"{done}/{len(mine)} done")

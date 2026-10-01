@@ -924,6 +924,24 @@ def test_graph_live_fetches_history(tmp_path, monkeypatch):
     assert datetime.now(UTC) - seen["since"] > timedelta(days=29)
 
 
+def test_graph_live_passes_the_late_forecast_to_the_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: fake_board())
+    monkeypatch.setattr(
+        board_mod,
+        "fetch_history",
+        lambda *a, **k: (graph_mod.cards_from_spec(GRAPH_SPEC, "http://gl"), ["Doing"]),
+    )
+    monkeypatch.setattr(
+        cli.estimate_mod,
+        "late_milestones",
+        lambda *a: [{"milestone": "Beta", "days_late": 12}],
+    )
+    r = runner.invoke(app, ["graph", "grp/proj"])
+    assert r.exit_code == 0, r.output
+    assert "forecast 12 days late" in r.stdout
+    assert r.stdout.count("forecast") == 1  # GA is not late
+
+
 def test_changes_table_puts_link_and_order_rows_first():
     pending = [
         ("changed", "issue", "a: labels [Doing] -> [Verify]"),
