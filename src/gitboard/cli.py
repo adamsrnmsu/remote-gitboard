@@ -2178,7 +2178,11 @@ def status(
 
 @app.command()
 def config():
-    """Show the resolved configuration and where the token would come from."""
+    """Show the resolved configuration and where the token would come from.
+
+    Exits 1 when no read token is found, after printing the table, so a caller
+    such as `perch doctor` can report it.
+    """
     cfg = get_config()
     table = Table(box=None)
     table.add_column("", style="muted")
@@ -2192,8 +2196,10 @@ def config():
     try:
         cfg.token()
         table.add_row("read token", f"[added]found[/] [muted]({cfg.token_source})[/]")
+        has_token = True
     except ConfigError:
         table.add_row("read token", "[logging.level.error]not found[/]")
+        has_token = False
     if cfg.write_token_source:
         table.add_row(
             "write token", f"[added]found[/] [muted]({cfg.write_token_source})[/]"
@@ -2201,6 +2207,8 @@ def config():
     else:
         table.add_row("write token", "[muted]unset — apply reuses the read token[/]")
     out().print(table)
+    if not has_token:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

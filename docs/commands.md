@@ -25,7 +25,7 @@ gitboard graph group/project                # who waits on whom, one tree per mi
 gitboard graph group/project -M Beta        # only the Beta milestone and what feeds it
 gitboard graph group/project --html g.html  # interactive page (click a card: its chain)
 gitboard graph group/project --mermaid      # flowchart LR, paste into a GitLab description
-gitboard config                             # what URL/tokens resolved, and from where
+gitboard config                             # what URL/tokens resolved, and from where; exits 1 with no read token
 
 # plan / write (api token for apply and migrate)
 gitboard plan boards/x.yaml                 # three-way: YAML vs GitLab, with x.yaml.base as the ancestor

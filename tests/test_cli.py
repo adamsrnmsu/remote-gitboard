@@ -700,8 +700,11 @@ def test_config_command_survives_a_missing_keychain(monkeypatch):
 
     monkeypatch.setattr(config.subprocess, "run", no_security)
     r = runner.invoke(app, ["config"])
-    assert r.exit_code == 0, r.output
+    # No read token: the table still prints, and the exit code says so, so
+    # callers (perch doctor) can turn it into a FIX line.
+    assert r.exit_code == 1, r.output
     assert "not found" in r.output
+    assert r.exception is None or isinstance(r.exception, SystemExit)
 
 
 def _estimate_setup(tmp_path, monkeypatch, estimates=""):
