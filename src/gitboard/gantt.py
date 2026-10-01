@@ -166,8 +166,8 @@ def _table(rows, width=None):
     )
 
 
-def _cut(text, n=22):
-    return text if len(text) <= n else text[: n - 1] + "…"
+def _cut(text, n=22, ell="…"):
+    return text if len(text) <= n else text[: n - 1] + ell
 
 
 def _label(row):
@@ -222,6 +222,13 @@ def _legend(statuses, note):
     return _table(f"<tr>{cells}{_cell(_text(note, HACK['muted'], 11))}</tr>")
 
 
+def _span(shown, today, due):
+    """The axis [lo, hi) shared by the HTML and the text chart."""
+    lo = min(max(min(r["start"] for r in shown), today - LOOKBACK), today)
+    ends = [r["end"] for r in shown] + [today] + ([due] if due else [])
+    return lo, max(ends) + timedelta(days=1)
+
+
 def chart(command, rows, today, due=None, cap=ROWS, why=""):
     """One panel: `$ command`, a date axis, a row per bar, a legend. The
     axis starts at the later of the first start and LOOKBACK ago; a bar
@@ -230,9 +237,7 @@ def chart(command, rows, today, due=None, cap=ROWS, why=""):
     if not rows:
         return ""
     shown, rest = rows[:cap], len(rows) - (cap or len(rows))
-    lo = min(max(min(r["start"] for r in shown), today - LOOKBACK), today)
-    ends = [r["end"] for r in shown] + [today] + ([due] if due else [])
-    hi = max(ends) + timedelta(days=1)
+    lo, hi = _span(shown, today, due)
     pad = "padding:3px 0 3px 10px"
     comment = f"# {why + ' · ' if why else ''}{len(rows)} rows"
     head = _cell(
@@ -284,15 +289,51 @@ def chart(command, rows, today, due=None, cap=ROWS, why=""):
     return f"<tr>{td(panel, style='padding:12px 0 0')}</tr>"
 
 
+TEXT_W = 30  # columns across the axis
+LINE_MAX = 100
+
+
+def _md(d):
+    return f"{d:%b} {d.day}"
+
+
+def chart_text(command, rows, today, due=None, cap=ROWS, why=""):
+    """ASCII twin of `chart` for text-only clients: same axis, one line per
+    row, `#12 title  |..###...|  May 4 - May 20  tag`. "" with no rows."""
+    if not rows:
+        return ""
+    shown, rest = rows[:cap], len(rows) - (cap or len(rows))
+    lo, hi = _span(shown, today, due)
+    days = (hi - lo).days
+
+    def col(d):
+        return round((d - lo).days / days * TEXT_W)
+
+    out = [f"$ {command}  # {why + ' - ' if why else ''}{len(rows)} rows",
+           f"{'':26}  {_md(lo)} .. {_md(hi - timedelta(days=1))}"]  # fmt: skip
+    for r in shown:
+        b = min(TEXT_W, max(1, col(r["end"] + timedelta(days=1))))
+        a = min(max(0, col(r["start"])), b - 1)
+        bar = "." * a + "#" * (b - a) + "." * (TEXT_W - b)
+        head = f"#{r['iid']} " if r.get("iid") is not None else ""
+        label = _cut(f"{head}{r['title']}", 26, "~")
+        label = label.encode("ascii", "replace").decode()
+        span = f"{_md(max(r['start'], lo))} - {_md(r['end'])}"
+        out.append(f"{label:<26}  |{bar}|  {span}  {r['tag']}"[:LINE_MAX])
+    if rest > 0:
+        out.append(f"+{rest} more in gantt.html")
+    return "\n".join(out)
+
+
 # --- the three views ----------------------------------------------------------
 
 
-def person_chart(rows, who, today, cap=ROWS):
+def person_chart(rows, who, today, cap=ROWS, draw=chart):
     mine = [b for b in rows if b["assignee"] == who]
-    return chart(f"gantt --who {who}", mine, today, cap=cap)
+    return draw(f"gantt --who {who}", mine, today, cap=cap)
 
 
-def milestone_chart(rows, milestones, today, cap=ROWS):
+def milestone_chart(rows, milestones, today, cap=ROWS, draw=chart):
     """The current milestone's cards; the header says why it is current."""
     m = current_milestone(rows, milestones)
     if m is None:
@@ -301,32 +342,42 @@ def milestone_chart(rows, milestones, today, cap=ROWS):
     due = date.fromisoformat(due) if due else None
     mine = [b for b in rows if b["milestone"] == m]
     why = "current: soonest due, still open" if due else "current: most open cards"
-    return chart(f"gantt --milestone '{m}'", mine, today, due, cap, why)
+    return draw(f"gantt --milestone '{m}'", mine, today, due, cap, why)
 
 
-def project_chart(rows, milestones, today):
+def project_chart(rows, milestones, today, draw=chart):
     gs = groups(rows, milestones, today)
     by = "milestones" if any(b["milestone"] for b in rows) else "epics"
-    return chart("gantt --project", gs, today, cap=len(gs), why=f"by {by}")
+    return draw("gantt --project", gs, today, cap=len(gs), why=f"by {by}")
 
 
-def team_blocks(rows, milestones, today, people, cap=ROWS):
+def team_blocks(rows, milestones, today, people, cap=ROWS, draw=chart):
     """Team mail and gantt.html (cap None): project, current milestone,
     every person."""
-    blocks = [project_chart(rows, milestones, today)]
-    blocks.append(milestone_chart(rows, milestones, today, cap))
-    blocks += [person_chart(rows, who, today, cap) for who in sorted(people)]
+    blocks = [project_chart(rows, milestones, today, draw)]
+    blocks.append(milestone_chart(rows, milestones, today, cap, draw))
+    blocks += [person_chart(rows, who, today, cap, draw) for who in sorted(people)]
     return [b for b in blocks if b]
 
 
-def person_blocks(rows, milestones, today, who):
+def person_blocks(rows, milestones, today, who, draw=chart):
     """A person's mail: their own bars, then the milestone and the project."""
     blocks = [
-        person_chart(rows, who, today),
-        milestone_chart(rows, milestones, today),
-        project_chart(rows, milestones, today),
+        person_chart(rows, who, today, draw=draw),
+        milestone_chart(rows, milestones, today, draw=draw),
+        project_chart(rows, milestones, today, draw),
     ]
     return [b for b in blocks if b]
+
+
+def person_text(rows, milestones, today, who):
+    """The person's charts as ASCII, fenced for markdown; "" when none."""
+    blocks = person_blocks(rows, milestones, today, who, chart_text)
+    if not blocks:
+        return ""
+    return (
+        "\n## Timeline\n\n" + "\n\n".join(f"```text\n{b}\n```" for b in blocks) + "\n"
+    )
 
 
 def render_page(title, blocks):
