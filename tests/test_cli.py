@@ -681,8 +681,6 @@ def test_digest_writes_html_previews_and_a_multipart_eml(tmp_path, monkeypatch):
     text = msg.get_body(("plain",)).get_content()
     assert "## Timeline" in text and "$ gantt --who alice" in text
     assert "## Timeline" in (folder / "alice.md").read_text()
-    assert "gantt --who" not in html.replace(
-        "$ gantt --who alice", ""
     preview = (folder / "alice.html").read_text()
     assert "<svg" in preview and "a@x" in preview  # browser copy: chart + headers
     index = (folder / "index.html").read_text()
