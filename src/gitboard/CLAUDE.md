@@ -106,6 +106,20 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   downstream. No CDN, no vendored library: it works air-gapped and as a
   digest file. Every title goes through `html.escape`; the adjacency JSON
   escapes `<`, so a `</script>` title cannot close the script.
+- **`gantt.py`** — the digest's Gantt charts, hacker-dark (`HACK`,
+  `STATUS`; palette run through the dataviz validator against `#0a0f0a`:
+  CVD at the 6.1 floor, so every row also prints its status word). Same
+  Outlook rules as `mail.py`, whose `td` it uses: a track is painted per
+  pixel then run-length encoded into `td`s (`paint`), so clipping (`◂`),
+  the 4px minimum and the today/due markers need no special cases. `bars`:
+  start = `estimate.started` (Backlog: today), end = done, else due (past
+  due: `late`, ends today), else `estimate._expected` (`est`), else today
+  (`undated`); a Backlog card with neither is left out, done cards older
+  than `LOOKBACK` too. `current_milestone`: earliest due with open cards,
+  else most open cards. `groups` is the project view (per milestone, else
+  per `epic::`). `person_blocks` / `team_blocks` feed the mails' TIMELINE
+  zone (`mail._timeline`), capped at `ROWS`; `gantt.html` is `team_blocks`
+  uncapped. Imports `mail`; `mail` must not import it back.
 - **`edit.py`** — pure: the spec mutations behind the TUI's card keys
   (`move`, `assign`, `set_due`, `add_note`, `new_card`, `adopt`). Each
   returns the staged line or raises `EditError`. **The verdict rule holds
