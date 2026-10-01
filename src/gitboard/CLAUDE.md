@@ -97,9 +97,9 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   carry — flags, never moves; the `blocked_*` two need a Blocked column;
   `no_milestone` fires only once some open card has a milestone (Verify,
   Failed and Done cards excluded) and the graph's ⚑ skips it.
-  `render_tree` (one rich tree per milestone, a shared blocker printed once,
+  `render_tree(g, today, flagged, late=None)` (one rich tree per milestone, root shows "forecast N days late" from the caller's `late` {title: days}, a shared blocker printed once,
   then `(see #9 above)`) and `render_mermaid` (escaped labels, `i12` /
-  `m_<slug>` ids). Must not import `stats`, `apply`, `board` or `cli`.
+  `m_<slug>` ids). Must not import `estimate`, `stats`, `apply`, `board` or `cli`.
 - **`graph_html.py`** — `render_html(g, title, flagged)`: one
   self-contained page, inline SVG from `layers`, a native `<title>` per
   node for hover, ~30 lines of JS for click-to-highlight up- and

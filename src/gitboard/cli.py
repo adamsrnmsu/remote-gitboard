@@ -1298,7 +1298,19 @@ def graph(
             print(graph_mod.render_mermaid(g), end="")
         else:
             today = datetime.now().date().isoformat()
-            out().print(graph_mod.render_tree(g, today, flagged))
+            late = None
+            if not from_file:  # a spec has no history to forecast from
+                spec_path = find_spec(name)
+                cfg = estimate_mod.config(
+                    apply_mod.load(spec_path) if spec_path else {}
+                )
+                late = {
+                    m["milestone"]: m["days_late"]
+                    for m in estimate_mod.late_milestones(
+                        cards, columns, datetime.now(UTC), cfg
+                    )
+                }
+            out().print(graph_mod.render_tree(g, today, flagged, late))
 
     _run(go)
 
