@@ -364,7 +364,9 @@ def test_history_keeps_only_column_label_events_and_skips_null_labels():
 def test_history_exports_unanswered_questions():
     asked = [FakeNote("2026-09-03T00:00:00Z", "Q: which env?", "ana")]
     answered = asked + [FakeNote("2026-09-04T00:00:00Z", "prod", "bob")]
-    proj = StateProject([HistIssue(1, [], notes=asked), HistIssue(2, [], notes=answered)], [])
+    proj = StateProject(
+        [HistIssue(1, [], notes=asked), HistIssue(2, [], notes=answered)], []
+    )
     history, _ = board.fetch_history(proj, FakeBoard([]), SINCE)
     by = {h["iid"]: h["questions"] for h in history}
     assert by[1] == [
