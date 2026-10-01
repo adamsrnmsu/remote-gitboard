@@ -1163,6 +1163,7 @@ def digest(
         for who in sorted(people):
             person = stats_mod.for_person(summary, history, who, now)
             body = stats_mod.render_person_md(person, summary, who)
+            body += gantt_mod.person_text(plan, ms, today, who)  # also the .eml text
             write(f"{who}.md", body)
             to = emails.get(who)
             subject = f"[{meta['project']}] week of {week} — {who}"

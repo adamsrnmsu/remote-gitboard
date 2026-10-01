@@ -91,3 +91,20 @@ def test_charts_are_outlook_safe_escaped_and_empty_without_rows():
     assert "+8 more" in gantt.chart("x", many, TODAY)
     assert "more" not in gantt.chart("x", many, TODAY, cap=None)
     assert gantt.LABEL_W + gantt.TRACK_W + gantt.TAG_W == 600
+
+
+def test_chart_text_is_ascii_with_hand_checkable_bars():
+    today = date(2026, 9, 14)
+    rows = [
+        {"iid": 1, "title": "first ✓ thing", "start": date(2026, 9, 4), "end": date(2026, 9, 6), "tag": "done 09-06"},
+        {"iid": 2, "title": "x" * 80, "start": date(2026, 9, 10), "end": today, "tag": "late 09-12"},
+    ]  # fmt: skip
+    text = gantt.chart_text("gantt --who a", rows, today)
+    head, axis, one, two = text.split("\n")
+    assert head == "$ gantt --who a  # 2 rows"
+    assert axis.endswith("Sep 4 .. Sep 14")  # 11 days across 30 columns
+    assert "|" + "#" * 8 + "." * 22 + "|  Sep 4 - Sep 6  done 09-06" in one
+    assert "|" + "." * 16 + "#" * 14 + "|  Sep 10 - Sep 14  late 09-12" in two
+    assert text.isascii() and max(map(len, text.split("\n"))) <= gantt.LINE_MAX
+    assert gantt.chart_text("x", [], today) == ""
+    assert "+8 more" in gantt.chart_text("x", [rows[0]] * 20, today)
