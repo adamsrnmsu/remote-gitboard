@@ -1920,7 +1920,7 @@ def test_tui_edit_with_no_change_says_the_board_matches(tui, tmp_path):
     tui.mp.delenv("VISUAL", raising=False)
     tui.mp.delenv("EDITOR", raising=False)
     tui.run(["e", "q"], "--from", path, "--no-guide")
-    assert tui.edits == [["vi", path]]
+    assert tui.edits == [["vim", path]]
     assert "no changes — board already matches" in tui.last
 
 
@@ -2010,7 +2010,7 @@ def test_tui_online_plan_push_branches(live_tui, gl, tmp_path):
     assert gl["apply"] == [{"base": SPEC, "force": False}]
 
 
-def test_tui_online_push_refused_by_the_token_is_a_clean_exit_1(
+def test_tui_online_push_refused_by_the_token_stays_up_and_says_why(
     live_tui, gl, monkeypatch
 ):
     import gitlab as gitlab_pkg
@@ -2021,10 +2021,8 @@ def test_tui_online_push_refused_by_the_token_is_a_clean_exit_1(
         raise gitlab_pkg.exceptions.GitlabAuthenticationError("403", response_code=403)
 
     monkeypatch.setattr(apply_mod, "apply", forbidden)
-    live_tui.keys = ["a", "y", "q"]
-    r = runner.invoke(app, ["tui", "grp/proj", "--no-guide"])
-    assert r.exit_code == 1
-    assert "needs `api` scope" in live_tui.errbuf.getvalue()
+    live_tui.run(["a", "y", "q"], "grp/proj", "--no-guide")
+    assert "needs `api` scope" in live_tui.last
 
 
 def test_tui_without_a_yaml_says_so_and_e_pulls_one(live_tui, gl, tmp_path):
@@ -2033,7 +2031,7 @@ def test_tui_without_a_yaml_says_so_and_e_pulls_one(live_tui, gl, tmp_path):
     live_tui.run(["p", "e", "q"], "grp/proj", "--no-guide")  # p: no spec, no-op
     assert "no YAML yet — e pulls the board into one" in live_tui.text
     assert apply_mod.load(str(tmp_path / "boards/proj.yaml")) == SPEC
-    assert live_tui.edits == [["vi", "boards/proj.yaml"]]
+    assert live_tui.edits == [["vim", "boards/proj.yaml"]]
 
 
 def test_tui_online_edit_diffs_against_the_live_board(live_tui, gl, tmp_path):
@@ -2256,3 +2254,64 @@ def test_tui_switch_that_cannot_exec_exits_1(tui, tmp_path, monkeypatch):
     r = runner.invoke(app, ["tui", "--from", path, "--no-guide"])
     assert r.exit_code == 1
     assert "switch failed" in tui.errbuf.getvalue()
+
+
+# --- tui: GitLab down stays up (perch-8xc.3) ----------------------------------
+
+DOWN = "cannot reach http://localhost:8929: ConnectionError"
+
+
+@pytest.fixture
+def down(live_tui, monkeypatch):
+    """GitLab unreachable until `state["up"]` is set; then the live_tui fetch."""
+    real = board_mod.fetch
+    state = {"up": False}
+
+    def fetch(path, name=None):
+        if not state["up"]:
+            raise client.GitlabProblem(DOWN)
+        return real(path, name)
+
+    monkeypatch.setattr(board_mod, "fetch", fetch)
+    live_tui.state = state
+    return live_tui
+
+
+def test_tui_unreachable_at_start_shows_the_error_and_q_quits(down):
+    down.run(["q"], "grp/proj", "--no-guide")
+    assert DOWN in down.last
+    assert "r retry" in down.last and "q quit" in down.last
+
+
+def test_tui_unreachable_other_keys_just_reshow_the_error(down):
+    down.run(["v", "a", "?", "j", "q"], "grp/proj", "--no-guide")
+    assert DOWN in down.last
+
+
+def test_tui_unreachable_then_r_retries_into_the_board(down):
+    down.run(["r", "q"], "grp/proj", "--no-guide")  # still down
+    assert DOWN in down.last
+    down.state["up"] = True
+    down.run(["r", "q"], "grp/proj", "--no-guide")
+    assert "defined by boards/x.yaml" in down.last
+    assert DOWN not in down.last
+
+
+def test_tui_unreachable_shift_p_still_switches(down, monkeypatch, execs):
+    monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
+    down.run(["P"], "grp/proj", "--no-guide")
+    assert execs == [("chdir", "/ws"), ("exec", "perch", ["perch", "tui"])]
+
+
+def test_tui_gitlab_lost_mid_session_stays_up(down):
+    down.state["up"] = True
+
+    def key():
+        k = down.keys.pop(0)
+        down.state["up"] = k != "r"  # r finds GitLab gone
+        return k
+
+    down.mp.setattr(cli, "_key", key)
+    down.run(["r", "q"], "grp/proj", "--no-guide")
+    assert DOWN in down.last
+    assert "defined by boards/x.yaml" in down.last  # the old board stays

@@ -1501,17 +1501,17 @@ def tui(
 
         def refetch():
             held = selected_issue() if "columns" in st else None
+            # all or nothing: a failed read leaves the last board whole
             if offline:
                 spec = apply_mod.load(offline)
-                st["proj"], st["board"] = board_mod.spec_stand_ins(spec)
-                st["columns"] = board_mod.columns_from_spec(spec, get_config().url)
-                st["spec"] = offline
-                st["ages"] = _ages(spec["project"])
+                proj, board = board_mod.spec_stand_ins(spec)
+                columns = board_mod.columns_from_spec(spec, get_config().url)
+                found, ages = offline, _ages(spec["project"])
             else:
-                st["proj"], st["board"] = board_mod.fetch(st["path"], st["name"])
-                st["columns"] = board_mod.board_columns(st["proj"], st["board"])
-                st["spec"] = find_spec(st["path"])
-                st["ages"] = _ages(st["proj"].path_with_namespace)
+                proj, board = board_mod.fetch(st["path"], st["name"])
+                columns = board_mod.board_columns(proj, board)
+                found, ages = find_spec(st["path"]), _ages(proj.path_with_namespace)
+            st.update(proj=proj, board=board, columns=columns, spec=found, ages=ages)
             if held is not None:
                 st["cursor"] = _find_card(
                     st["columns"], held, st["limit"], prefer=st["cursor"][0]
@@ -1824,30 +1824,31 @@ def tui(
             def draw(busy=None):
                 if busy:
                     st["status"] = Text(busy, "muted")
-                live.update(view() if "proj" in st else Text(""), refresh=True)
+                live.update(view() if "proj" in st else no_board(), refresh=True)
                 if busy:
                     st["status"] = None
+
+            def no_board():
+                """GitLab never answered: why, and the keys that still work."""
+                return Group(
+                    Text("  ") + (st["status"] or Text("")),
+                    Text("  r retry · P perch · B Budgie · q quit", "muted"),
+                )
+
+            def attempt(fn, *args):
+                """Run fn; a GitLab or config error goes to the status line."""
+                try:
+                    fn(*args)
+                except (client.GitlabProblem, apply_mod.SpecError, ConfigError) as e:
+                    st["status"] = st["error"] = Text(
+                        f"{e} · r retry", "logging.level.error"
+                    )
 
             # a resize re-renders at the new size, including the fit limit
             signal.signal(signal.SIGWINCH, lambda *_: draw())
 
-            live.update(Text(f"reading {st['path']}…", "muted"), refresh=True)
-            refetch()
-            draw()
-            while True:
-                raw = _key()
-                k = raw.lower()
-                st["status"] = st["extra"] = st["prompt"] = None
-                if raw in SWITCH:  # before lowercasing turns P into plan
-                    if _suite_entry(SWITCH[raw]):
-                        return SWITCH[raw]
-                    st["status"] = Text(NO_SUITE, "muted")
-                    draw()
-                    continue
-                st["tip"] = guide_mod.panel(k) if st["guide"] else None
-                if k == "q":
-                    return
-                k = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(k, k)
+            def act(k):
+                """One key's action, the board loaded."""
                 if k in ("up", "down", "left", "right"):
                     sizes = [
                         len(issues[: st["limit"] or None])
@@ -1891,7 +1892,7 @@ def tui(
                     spec = spec_file()
                     live.stop()
                     editor = shlex.split(
-                        os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+                        os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vim"
                     )
                     subprocess.call([*editor, spec])
                     live.start(refresh=True)
@@ -2165,6 +2166,28 @@ def tui(
                         else:
                             st["extra"] = None
                             st["status"] = Text("not pushed", "muted")
+
+            live.update(Text(f"reading {st['path']}…", "muted"), refresh=True)
+            attempt(refetch)
+            draw()
+            while True:
+                raw = _key()
+                k = raw.lower()
+                st["status"] = st["extra"] = st["prompt"] = None
+                if raw in SWITCH:  # before lowercasing turns P into plan
+                    if _suite_entry(SWITCH[raw]):
+                        return SWITCH[raw]
+                    st["status"] = Text(NO_SUITE, "muted")
+                    draw()
+                    continue
+                st["tip"] = guide_mod.panel(k) if st["guide"] else None
+                if k == "q":
+                    return
+                k = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(k, k)
+                if "proj" in st or k == "r":
+                    attempt(act, k)
+                else:  # nothing else works without a board
+                    st["status"] = st["error"]
                 draw()
 
     target = _run(go)
