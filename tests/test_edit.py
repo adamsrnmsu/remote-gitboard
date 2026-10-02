@@ -93,6 +93,17 @@ def test_adopt_appends_a_missing_card_once():
     assert len(s["issues"]) == 4
 
 
+def test_adopt_takes_a_card_the_yaml_holds_by_title_only():
+    """A seeded YAML names cards by title alone; adopting the live card stamps
+    its iid on that entry, keeps the YAML's fields, and adds no second one."""
+    s = spec()
+    s["issues"].append({"title": "Four ", "labels": ["Review"]})
+    have = edit.adopt(s, {"title": "four", "iid": 4, "labels": ["Doing"]})
+    assert have is s["issues"][-1] and len(s["issues"]) == 4
+    assert have == {"title": "Four ", "iid": 4, "labels": ["Review"]}
+    assert edit.move(s, 4, "Doing") == "#4 Review → Doing"
+
+
 def test_adopt_lists_the_cards_milestone_so_load_still_passes(tmp_path):
     """A card adopted from GitLab carries `milestone:`; without a
     `milestones:` entry the next load() refuses the whole file."""
