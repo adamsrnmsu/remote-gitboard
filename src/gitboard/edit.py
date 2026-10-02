@@ -47,9 +47,14 @@ def name(ref):
 
 
 def adopt(spec, entry):
-    """Add a card the YAML has not seen yet; the existing entry wins. Its
-    milestone gets a `milestones:` entry, or load() refuses the file."""
+    """Add a card the YAML has not seen yet; the existing entry wins. An
+    entry that names the card by title alone (a seeded YAML) takes its iid
+    instead of gaining a twin load() would refuse. Its milestone gets a
+    `milestones:` entry, or load() refuses the file."""
     if (have := find(spec, entry["iid"])) is not None:
+        return have
+    if (have := find(spec, entry["title"])) is not None and "iid" not in have:
+        have["iid"] = entry["iid"]
         return have
     spec["issues"].append(entry)
     known = spec.get("milestones") or []

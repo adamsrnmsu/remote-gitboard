@@ -2053,6 +2053,23 @@ def test_tui_online_card_edit_adopts_a_card_the_yaml_lacks(live_tui, gl, tmp_pat
     assert "a applies" in live_tui.last
 
 
+def test_tui_online_card_edit_takes_a_card_the_yaml_holds_by_title_only(
+    live_tui, gl, tmp_path
+):
+    """A seeded YAML has no iids; staging an edit on card two must not append
+    a second `two`, or load() refuses the file as a duplicate title."""
+    spec = {
+        **SPEC,
+        "issues": [{k: v for k, v in i.items() if k != "iid"} for i in SPEC["issues"]],
+    }
+    write_spec(tmp_path, spec=spec, base=False)
+    live_tui.run(["down", "down", "c", *typed("hello"), "q"], "grp/proj", "--no-guide")
+    issues = apply_mod.load("boards/x.yaml")["issues"]
+    assert [(i["title"], i.get("iid")) for i in issues] == [("one", None), ("two", 2)]
+    assert issues[1]["notes"] == ["hello"]
+    assert "a applies" in live_tui.last
+
+
 def test_tui_online_due_estimate_uses_the_assignees_history(
     live_tui, gl, tmp_path, monkeypatch
 ):
