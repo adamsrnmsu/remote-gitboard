@@ -25,11 +25,11 @@ GitLab: avatar, **Edit profile**, **Access**, **Personal access tokens**. Mint t
 | Slot | Scope | Used by |
 |---|---|---|
 | `GITLAB_READ_TOKEN` | `read_api` | `show`, `pull`, `snapshot`, `tui`, the `/board` AI pass |
-| `GITLAB_WRITE_TOKEN` | `api` | `apply`, `migrate-comments` |
+| `GITLAB_WRITE_TOKEN` | `api` | `push`, `migrate-comments` |
 
 `api` is the only scope that writes issues and labels; it is broad, which is
 why it lives in its own slot. One `api` token in `GITLAB_READ_TOKEN` and the
-write slot unset is also valid: `apply` falls back to the read token, and a
+write slot unset is also valid: `push` falls back to the read token, and a
 `read_api` token failing there gives a one-line scope error, not a 403 trace.
 
 `write_repository` is Git-over-HTTP only. SSH keys and deploy tokens cannot
@@ -37,7 +37,7 @@ call the API at all.
 
 ### Make the agent's writes visible: a project access token
 
-A personal `api` token makes every `apply` look like you. Use a **project
+A personal `api` token makes every `push` look like you. Use a **project
 access token** for `GITLAB_WRITE_TOKEN` instead: GitLab creates a bot user
 for it (`project_123_bot_...`), so every label move and every
 `*staged via gitboard*` note the AI pass posts is attributed to the bot, and

@@ -27,13 +27,13 @@ gitboard graph group/project --html g.html  # interactive page (click a card: it
 gitboard graph group/project --mermaid      # flowchart LR, paste into a GitLab description
 gitboard config                             # what URL/tokens resolved, and from where; exits 1 with no read token
 
-# plan / write (api token for apply and migrate)
+# plan / write (api token for push and migrate)
 gitboard plan boards/x.yaml                 # three-way: YAML vs GitLab, with x.yaml.base as the ancestor
 gitboard plan boards/x.yaml --base FILE     # a different ancestor
 gitboard plan boards/x.yaml --against boards/x.yaml.base   # diff YAML against a file, no network
-gitboard apply boards/x.yaml                # write it (--yes skips the prompt)
-gitboard apply boards/x.yaml --ignore-drift # write even where the team moved things since the pull
-gitboard land boards/x.yaml                 # plan, y/n, apply, snapshot, rotate the base (--yes, --ignore-drift)
+gitboard push boards/x.yaml                 # write it (--yes skips the prompt)
+gitboard push boards/x.yaml --ignore-drift  # write even where the team moved things since the pull
+gitboard sync boards/x.yaml                 # plan, y/n, push, snapshot, rotate the base (--yes, --ignore-drift)
 
 gitboard estimate boards/x.yaml             # stage due dates from each person's finished history; local file only
 gitboard estimate boards/x.yaml --history h.json  # same from a `stats --dump` file, no network
@@ -77,10 +77,10 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
   no column label.
 
 `pull`
-: `apply` in reverse. Refuses to clobber an existing file unless `--force`,
-  and refuses even then when the file has edits that were never applied
+: `push` in reverse. Refuses to clobber an existing file unless `--force`,
+  and refuses even then when the file has edits that were never pushed
   (`plan` against the base is non-empty); `--discard-edits` overrides.
-  Pull-then-plan is always empty. Each issue carries its `iid`, which `apply`
+  Pull-then-plan is always empty. Each issue carries its `iid`, which `push`
   uses as the match key. `--base` writes a second, untouched copy as
   `<file>.base` (gitignored, not a `*.yaml`, so nothing scans it as a spec)
   and rotates the previous one to `<file>.base.old`. `--notes` adds a
@@ -99,18 +99,18 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 `plan --against FILE`
 : Diffs two YAML files. Never opens a connection or looks for a token.
 
-`apply`
+`push`
 : Additive: creates and updates, never deletes or closes. Matches by `iid`
   when present (so a retitle in the YAML is a rename) and by title otherwise;
   titles are stripped. Labels are truly additive: labels the team added in
-  the UI survive an apply that does not list them. Closed issues are skipped.
+  the UI survive a push that does not list them. Closed issues are skipped.
   Posts any `notes:` not already on the issue, each with a
   `*staged via gitboard*` first line. `drift` rows are refused unless
   `--ignore-drift`. Appends a snapshot afterwards.
 
-`land SPEC`
-: `plan`, a y/n on the table, `apply`, `snapshot`, then `<spec>.base` is
-  rewritten to the post-apply state (old one to `.base.old`). `--yes` skips
+`sync SPEC`
+: `plan`, a y/n on the table, `push`, `snapshot`, then `<spec>.base` is
+  rewritten to the post-push state (old one to `.base.old`). `--yes` skips
   the prompt, `--ignore-drift` passes through. The host side of the offline
   round in one command.
 
@@ -166,7 +166,9 @@ full-screen loop; resizing redraws.
 | `s` | append a snapshot |
 | `e` | edit the spec in `$EDITOR` (pulled first if missing); diff on return |
 | `p` | plan |
-| `a` | apply, after y/n on the change table |
+| `a` | push, after y/n on the change table |
+| `y` | sync: push (y/n), snapshot, then refresh the YAML and its `.base` from GitLab, as `gitboard sync` does |
+| `f` | pull: replace the YAML with the live board; asks y/n first and lists any staged edits that would be lost |
 | `m` | migrate comments; `b` in the destination prompt picks another project; y/n to close the source |
 | `g` | show or hide the guide panels for this session |
 | `?` | help |
@@ -175,7 +177,7 @@ full-screen loop; resizing redraws.
 **Card keys** stage a change into the YAML for you — no editor. Select a
 card with the arrows (or `h j k l`) and press the key, or press the key and
 type the card's number; then pick a value. `p` shows what is staged, `a`
-writes it. The first one pulls the board into a YAML if there is none. `esc`
+pushes it. The first one pulls the board into a YAML if there is none. `esc`
 drops the selection; it follows its card when a reload re-sorts or moves it.
 
 | Key | Does |
@@ -183,7 +185,7 @@ drops the selection; it follows its card when a reload re-sorts or moves it.
 | `v` | move: number, then a column by number. A card in Verify does not move by key and Done / Failed are not offered — those are a `verified:` / `failed:` comment on the card |
 | `u` | assign: number, then a person by number, or `t` to type a username |
 | `d` | due date: number, then `YYYY-MM-DD`, `+N` days, or `e` for the [estimate](board-yaml.md) from the assignee's finished history |
-| `c` | comment: number, then one line; staged under `notes:` and posted by `a` |
+| `c` | comment: number, then one line; staged under `notes:` and pushed by `a` |
 | `n` | new card: a title, then a column |
 
 `e` is still there for bulk edits. An offline `(new)` card has no number
@@ -196,7 +198,7 @@ a keypress. On by default; off with `g` (this session), `tui --no-guide`,
 
 `gitboard tui --from boards/x.yaml` is the offline variant: the YAML is the
 board. `r` reloads the file, `e` and the card keys edit it, `p` shows the
-staged diff against `x.yaml.base`. No `b`/`s`/`m`/`a`; the host applies.
+staged diff against `x.yaml.base`. No `b`/`s`/`m`/`a`/`y`/`f`; the host pushes.
 
 ## stdout / stderr
 

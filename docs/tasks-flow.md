@@ -49,7 +49,7 @@ gitboard plan boards/x.yaml --against boards/x.yaml.base
 
 # host
 gitboard plan boards/x.yaml                     # live: also shows drift since the pull
-gitboard apply boards/x.yaml
+gitboard push boards/x.yaml
 ```
 
 `ingest` does, per task:
@@ -102,7 +102,7 @@ live on the issue and `pull --notes` keeps a copy in the YAML.
 ## Replying
 
 The agent answers feedback by appending strings under the issue's `notes:`.
-`apply` posts each body once; a body already on the issue is skipped, so the
+`push` posts each body once; a body already on the issue is skipped, so the
 YAML can carry the whole exchange and stay idempotent. The next `pull
 --notes` brings the team's answers back as `discussion:` — including the
 verdicts, which the next `ingest` acts on.
@@ -127,6 +127,6 @@ task: team work on the board, agent work in beads.
 
 Tick a box (the verdict is the person's). Retitle without an `id:` (a new
 issue, not a rename). Invent or edit an `iid`. Edit `discussion:`. Run
-`apply`, `pull`, `snapshot` or `migrate-comments` where GitLab is
+`push`, `pull`, `snapshot` or `migrate-comments` where GitLab is
 unreachable. The `/board` command carries these rules; see
 [the agent briefing](agent-briefing.md).

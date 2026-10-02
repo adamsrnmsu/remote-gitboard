@@ -11,7 +11,7 @@ The CLI. Everything else in the package is a module it calls:
     gitboard show group/project
     gitboard show group/project --markdown | less
     gitboard plan boards/test.yaml
-    gitboard apply boards/test.yaml
+    gitboard push boards/test.yaml
 """
 
 import codecs
@@ -85,7 +85,7 @@ def main(
         None,
         "--write-token",
         envvar="GITLAB_WRITE_TOKEN",
-        help="PAT for `apply` (api scope). Falls back to --token.",
+        help="PAT for `push` (api scope). Falls back to --token.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging."),
     config_path: str | None = typer.Option(
@@ -115,7 +115,7 @@ def main(
 
 
 EXAMPLE = {
-    "spec": ('spec = "boards/team.yaml"', "gitboard apply boards/team.yaml"),
+    "spec": ('spec = "boards/team.yaml"', "gitboard push boards/team.yaml"),
     "project": ('project = "group/project"', "gitboard show group/project"),
 }
 
@@ -306,7 +306,7 @@ def plan(
         "when it exists.",
     ),
 ):
-    """Show what apply would change. Never writes."""
+    """Show what push would change. Never writes."""
 
     def go():
         spec_path = _need(spec, "spec", "spec file")
@@ -350,14 +350,14 @@ def _confirm_writes(pending, title, yes, ignore_drift):
         if pending:
             err().print("[muted]nothing to write[/]")
         return []
-    if not yes and not typer.confirm(f"apply {len(writes)} change(s)?"):
+    if not yes and not typer.confirm(f"push {len(writes)} change(s)?"):
         raise typer.Abort()
     return writes
 
 
 def _staged(parsed, spec_path, offline=None, write=False):
-    """The TUI's plan: what apply would do, three-way against `<spec>.base`
-    like the CLI's plan/apply. Offline it is the diff against the .base
+    """The TUI's plan: what push would do, three-way against `<spec>.base`
+    like the CLI's plan/push. Offline it is the diff against the .base
     alone (None when there is none)."""
     base = _base_of(spec_path)
     if not offline:
@@ -373,12 +373,12 @@ def _drift_refusal(pending):
     if n:
         return (
             f"{n} field(s) changed on GitLab since the pull — re-pull, or "
-            "`gitboard apply --ignore-drift`"
+            "`gitboard push --ignore-drift`"
         )
 
 
 def _write_spec(parsed, base, yes, ignore_drift):
-    """plan -> table -> y/n -> apply -> snapshot: the core of apply and land.
+    """plan -> table -> y/n -> apply -> snapshot: the core of push and sync.
 
     Returns (changes, project, board); the last two are None when nothing was
     written, so the caller knows whether the board was fetched.
@@ -401,8 +401,20 @@ def _write_spec(parsed, base, yes, ignore_drift):
     return changes, proj, board
 
 
+def _refresh_spec(spec_path, parsed, base, proj=None, board=None):
+    """The second half of sync: the YAML and its .base move to the live board.
+    `proj`/`board` are the post-write fetch, or None when nothing was written."""
+    if proj is None:
+        proj, board = board_mod.fetch(parsed["project"], parsed["board"])
+    columns = board_mod.board_columns(proj, board)
+    notes = any("discussion" in i for i in (base or parsed)["issues"])
+    _rotate_base(spec_path)
+    _pull_spec(proj, board, columns, spec_path, notes=notes, force=True)
+    _pull_spec(proj, board, columns, f"{spec_path}.base", notes=notes)
+
+
 @app.command()
-def apply(
+def push(
     spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
     ignore_drift: bool = IGNORE_DRIFT,
@@ -422,18 +434,18 @@ def apply(
 
 
 @app.command()
-def land(
+def sync(
     spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
     ignore_drift: bool = IGNORE_DRIFT,
 ):
-    """apply, snapshot, then refresh the YAML and <spec>.base from GitLab.
+    """push, snapshot, then refresh the YAML and <spec>.base from GitLab.
 
     The host's end-of-round step: what the container staged is written, the
     log gets a line, and both files move forward to the live board so the
     next `status`, `plan` and `pull` measure from now. Posted `notes:` come
     back as `discussion:`; a field GitLab kept (skipped) comes back as
-    GitLab has it. Nothing is staged after a land, by construction.
+    GitLab has it. Nothing is staged after a sync, by construction.
     """
 
     def go():
@@ -441,13 +453,7 @@ def land(
         parsed = apply_mod.load(spec_path)
         base = _base_of(spec_path)
         _, proj, board = _write_spec(parsed, base, yes, ignore_drift)
-        if proj is None:
-            proj, board = board_mod.fetch(parsed["project"], parsed["board"])
-        columns = board_mod.board_columns(proj, board)
-        notes = any("discussion" in i for i in (base or parsed)["issues"])
-        _rotate_base(spec_path)
-        _pull_spec(proj, board, columns, spec_path, notes=notes, force=True)
-        _pull_spec(proj, board, columns, f"{spec_path}.base", notes=notes)
+        _refresh_spec(spec_path, parsed, base, proj, board)
         err().print(
             f"[added]refreshed {spec_path} and its .base[/] from the live board"
         )
@@ -606,6 +612,46 @@ def _pull_spec(proj, board, columns, out_file, notes=False, force=False):
     return out_file
 
 
+def _staged_edits(target, existing):
+    """What `target` holds that its .base does not (plan's rows); [] with no .base."""
+    base_file = Path(f"{target}.base")
+    if not base_file.exists():
+        return []
+    have = apply_mod.have_from_spec(apply_mod.load(str(base_file)))
+    return apply_mod.diff(existing, have)
+
+
+def _pull_board(path, name, target, force, discard_edits, base, notes, no_snapshot):
+    """pull's body for one board: the guards, then the write. Prints nothing,
+    so the TUI can call it under its live display."""
+    if Path(target).exists():
+        try:
+            existing = apply_mod.load(target)
+        except apply_mod.SpecError:
+            existing = None  # unreadable: nothing to protect, --force decides
+        if existing and existing["project"] != path:
+            raise ConfigError(
+                f"{target} is the board of {existing['project']}, not {path} "
+                "— pass a different --out"
+            )
+        if existing and force and not discard_edits and _staged_edits(target, existing):
+            raise ConfigError(
+                f"{target} has edits not in {target}.base — push them "
+                "first, or --discard-edits"
+            )
+    proj, board = board_mod.fetch(path, name)
+    columns = board_mod.board_columns(proj, board)
+    _pull_spec(proj, board, columns, target, notes=notes, force=force)
+    if base:
+        # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
+        # and the /board command may only edit *.yaml — the copy
+        # stays pristine. The previous one becomes .base.old.
+        _rotate_base(target)
+        _pull_spec(proj, board, columns, f"{target}.base", notes=notes)
+    if not no_snapshot:
+        _write_snapshot(proj, board)
+
+
 @app.command()
 def pull(
     project: str | None = typer.Argument(None, help="group/project"),
@@ -632,7 +678,7 @@ def pull(
         False,
         "--discard-edits",
         help="With --force: overwrite even when the file has edits its .base "
-        "does not (edits that were never applied).",
+        "does not (edits that were never pushed).",
     ),
     no_snapshot: bool = typer.Option(
         False, "--no-snapshot", help=f"Do not append the board to {SNAPSHOTS}."
@@ -644,41 +690,13 @@ def pull(
         "edits guard still holds).",
     ),
 ):
-    """Save the live board as YAML — the file plan/apply read. Reads only."""
+    """Save the live board as YAML — the file plan/push read. Reads only."""
 
     def one(path, name, target, force):
-        if Path(target).exists():
-            try:
-                existing = apply_mod.load(target)
-            except apply_mod.SpecError:
-                existing = None  # unreadable: nothing to protect, --force decides
-            if existing and existing["project"] != path:
-                raise ConfigError(
-                    f"{target} is the board of {existing['project']}, not {path} "
-                    "— pass a different --out"
-                )
-            base_file = Path(f"{target}.base")
-            if existing and force and base_file.exists() and not discard_edits:
-                staged = apply_mod.diff(
-                    existing, apply_mod.have_from_spec(apply_mod.load(str(base_file)))
-                )
-                if staged:
-                    raise ConfigError(
-                        f"{target} has edits not in {target}.base — apply them "
-                        "first, or --discard-edits"
-                    )
         with err().status(f"reading {path}…"):
-            proj, board = board_mod.fetch(path, name)
-            columns = board_mod.board_columns(proj, board)
-            _pull_spec(proj, board, columns, target, notes=notes, force=force)
-            if base:
-                # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
-                # and the /board command may only edit *.yaml — the copy
-                # stays pristine. The previous one becomes .base.old.
-                _rotate_base(target)
-                _pull_spec(proj, board, columns, f"{target}.base", notes=notes)
-            if not no_snapshot:
-                _write_snapshot(proj, board)
+            _pull_board(
+                path, name, target, force, discard_edits, base, notes, no_snapshot
+            )
         err().print(
             f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
             + (f" --against {target}.base" if base else "")
@@ -1426,7 +1444,7 @@ def tui(
         "gitboard.toml, GITBOARD_GUIDE=0, or g inside).",
     ),
 ):
-    """The board, interactively: card keys stage into the YAML, a applies it."""
+    """The board, interactively: card keys stage into the YAML, a pushes it."""
 
     def go():
         if not sys.stdin.isatty():
@@ -1514,10 +1532,10 @@ def tui(
             if offline:
                 have_base = "p diffs against it" if Path(base).exists() else "no .base"
                 subtitle = (
-                    f"offline — {spec} is the board; {have_base}; the host applies"
+                    f"offline — {spec} is the board; {have_base}; the host pushes"
                 )
             elif spec:
-                subtitle = f"defined by {spec} — e edits, a applies"
+                subtitle = f"defined by {spec} — e edits, a pushes"
             else:
                 subtitle = "no YAML yet — e pulls the board into one"
             parts = [
@@ -1683,7 +1701,7 @@ def tui(
             st["staged"].append(line)
             if offline:
                 refetch()
-            how = "the host applies" if offline else "a applies"
+            how = "the host pushes" if offline else "a pushes"
             st["status"] = Text(f"staged: {line} · p shows, {how}", "added")
             st["extra"] = staged_panel()
 
@@ -1741,9 +1759,9 @@ def tui(
             lines = [
                 ("", "The YAML in boards/ is the source of truth; the board is"),
                 ("", "what GitLab currently shows. The card keys stage changes"),
-                ("", "into the YAML for you; a writes them to GitLab."),
-                ("", "--from FILE: offline. No b/s/m/a; p diffs against"),
-                ("", "FILE.base; copy the YAML to the host and apply there."),
+                ("", "into the YAML for you; a pushes them to GitLab."),
+                ("", "--from FILE: offline. No b/s/m/a/y/f; p diffs against"),
+                ("", "FILE.base; copy the YAML to the host and push there."),
                 ("r", "refetch the board"),
                 ("b", "switch board — this project's, plus any that a"),
                 ("", "boards/*.yaml defines (other projects included)"),
@@ -1751,7 +1769,9 @@ def tui(
                 ("e", "edit the YAML in $EDITOR (pulled from the board if there"),
                 ("", "is none yet); the diff is shown when you come back"),
                 ("p", "diff the YAML against the board — never writes"),
-                ("a", "write the YAML to the board — additive only, y/n first"),
+                ("a", "push the YAML to the board — additive only, y/n first"),
+                ("y", "sync: push, snapshot, then refresh the YAML from GitLab"),
+                ("f", "pull: replace the YAML with the live board (asks first)"),
                 ("m", "copy a finished issue's comments onto one or more"),
                 ("", "successors — enter on an empty prompt runs it"),
                 ("↑↓", "select a card (arrows or h j k l); the card keys then act"),
@@ -1761,7 +1781,7 @@ def tui(
                 ("u", "assign a card: number, then a person, or t to type one"),
                 ("d", "due date: number, then YYYY-MM-DD, +N days, or e for the"),
                 ("", "estimate from the assignee's finished history"),
-                ("c", "stage a comment on a card; a posts it"),
+                ("c", "stage a comment on a card; a pushes it"),
                 ("n", "new card: a title, then a column"),
                 ("g", "show or hide the guide panels"),
                 ("q", "quit"),
@@ -1811,7 +1831,7 @@ def tui(
                         else "guide off — g brings it back",
                         "muted",
                     )
-                elif offline and k in "sbma":
+                elif offline and k in "sbmayf":
                     st["tip"] = None
                     st["status"] = Text(
                         "offline — not here; the host does that", "muted"
@@ -1853,7 +1873,7 @@ def tui(
                         )
                     elif pending:
                         title = (
-                            f"{spec} — {'the host applies' if offline else 'a applies'}"
+                            f"{spec} — {'the host pushes' if offline else 'a pushes'}"
                         )
                         st["extra"] = _changes_table(pending, title)
                     else:
@@ -2013,10 +2033,53 @@ def tui(
                             st["status"] = Text(
                                 f"{total} comment(s) copied; #{m_src} closed", "added"
                             )
-                elif k in ("p", "a") and st["spec"]:
+                elif k == "f" and st["spec"]:
+                    spec = st["spec"]
+                    existing = apply_mod.load(spec)
+                    lost = _staged_edits(spec, existing)
+                    if lost:
+                        st["extra"] = _changes_table(
+                            lost,
+                            f"pull overwrites {spec} with the live board. "
+                            f"These {len(lost)} staged edits will be lost:",
+                        )
+                        st["prompt"] = "pull and lose them?  y / n"
+                    elif not Path(f"{spec}.base").exists():
+                        st["prompt"] = (
+                            f"pull overwrites {spec}; with no .base to compare, "
+                            "any edits in it are lost.  y / n"
+                        )
+                    else:
+                        st["prompt"] = (
+                            f"pull overwrites {spec}; nothing staged is lost.  y / n"
+                        )
+                    draw()
+                    st["prompt"] = None
+                    if _key().lower() == "y":
+                        draw(busy="pulling…")
+                        _pull_board(
+                            st["path"],
+                            st["name"],
+                            spec,
+                            True,
+                            True,
+                            Path(f"{spec}.base").exists(),
+                            any("discussion" in i for i in existing["issues"]),
+                            False,
+                        )
+                        refetch()
+                        st["extra"] = None
+                        st["staged"] = []
+                        st["status"] = Text(
+                            f"pulled {spec} from the live board", "added"
+                        )
+                    else:
+                        st["extra"] = None
+                        st["status"] = Text("not pulled — nothing written", "muted")
+                elif k in ("p", "a", "y") and st["spec"]:
                     parsed = apply_mod.load(st["spec"])
                     draw(busy="comparing…")
-                    pending = staged(parsed, write=(k == "a"))
+                    pending = staged(parsed, write=(k != "p"))
                     spec = st["spec"]
                     if pending is None:
                         st["status"] = Text(f"no {base} to diff against", "muted")
@@ -2024,15 +2087,23 @@ def tui(
                         st["status"] = Text(
                             "no changes — board already matches", "muted"
                         )
+                        if k == "y":
+                            draw(busy="refreshing…")
+                            _refresh_spec(spec, parsed, _base_of(spec))
+                            refetch()
+                            st["staged"] = []
+                            st["status"] = Text(
+                                f"refreshed {spec} from GitLab", "added"
+                            )
                     elif k == "p":
-                        how = "the host applies" if offline else "a applies"
+                        how = "the host pushes" if offline else "a pushes"
                         st["extra"] = _changes_table(pending, f"{spec} — {how}")
                     elif refusal := _drift_refusal(pending):
                         st["extra"] = _changes_table(pending, f"{spec} — refused")
                         st["status"] = Text(refusal, "bold red")
                     else:
                         st["extra"] = _changes_table(pending, f"{spec} — will write")
-                        st["prompt"] = f"apply {len(pending)} change(s)?  y / n"
+                        st["prompt"] = f"push {len(pending)} change(s)?  y / n"
                         draw()
                         st["prompt"] = None
                         if _key().lower() == "y":
@@ -2043,14 +2114,24 @@ def tui(
                                     gl, parsed, base=_base_of(spec)
                                 )
                             refetch()
+                            done = f"{len(changes)} change(s) written"
+                            if k == "y":
+                                _write_snapshot(st["proj"], st["board"])
+                                _refresh_spec(
+                                    spec,
+                                    parsed,
+                                    _base_of(spec),
+                                    st["proj"],
+                                    st["board"],
+                                )
+                                refetch()
+                                done += f"; {spec} refreshed from GitLab"
                             st["extra"] = None
                             st["staged"] = []
-                            st["status"] = Text(
-                                f"{len(changes)} change(s) written", "added"
-                            )
+                            st["status"] = Text(done, "added")
                         else:
                             st["extra"] = None
-                            st["status"] = Text("not applied", "muted")
+                            st["status"] = Text("not pushed", "muted")
                 draw()
 
     _run(go)
@@ -2229,7 +2310,7 @@ def config():
             "write token", f"[added]found[/] [muted]({cfg.write_token_source})[/]"
         )
     else:
-        table.add_row("write token", "[muted]unset — apply reuses the read token[/]")
+        table.add_row("write token", "[muted]unset — push reuses the read token[/]")
     out().print(table)
     if not has_token:
         raise typer.Exit(1)

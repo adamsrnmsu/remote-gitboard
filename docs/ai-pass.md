@@ -32,9 +32,9 @@ Stuck
 
 Hand back
 : Offline only, three lines: the file to copy back,
-  `gitboard land boards/x.yaml` on the host, any `migrate-comments` lines.
+  `gitboard sync boards/x.yaml` on the host, any `migrate-comments` lines.
 
-No progress prose, no follow-up list, no "shall I apply?": the agent stages
+No progress prose, no follow-up list, no "shall I push?": the agent stages
 the moves and the plan table is the question.
 
 ## What the agent may and may not stage
@@ -52,16 +52,16 @@ the moves and the plan table is the question.
 ## The write path
 
 Exactly one: edit the board's YAML in `boards/`, run `plan`, show the table,
-wait for a yes in the conversation, then `apply --yes`. Never an `apply`
+wait for a yes in the conversation, then `push --yes`. Never an `push`
 whose `plan` you have not just seen. No MCP write tools, no direct API calls.
-`apply` is additive-only, which bounds the blast radius: the worst case is an
+`push` is additive-only, which bounds the blast radius: the worst case is an
 extra issue or a wrong label, never a deletion.
 
 `migrate-comments` and `--close-source` are deliberately not in the
 command's `allowed-tools`. The AI writes the line; you run it.
 
-`status` is in the allowed tools (read-only); `land` is not, because it
-writes. Offline, none of `apply`, `land`, `pull` or `snapshot` is run.
+`status` is in the allowed tools (read-only); `sync` is not, because it
+writes. Offline, none of `push`, `sync`, `pull` or `snapshot` is run.
 
 ## Revoking write access
 
@@ -69,7 +69,7 @@ Two things allow the write; remove either.
 
 1. Drop `GITLAB_WRITE_TOKEN` from `.env` (and the `gitlab-write-token`
    keychain item), leaving a `read_api` token. Scope is the hard guarantee:
-   `apply` then fails with a one-line scope error regardless of the prompt.
+   `push` then fails with a one-line scope error regardless of the prompt.
 2. Re-restrict `allowed-tools` in `.claude/commands/board.md` to `show`,
    `plan`, `report` and `status`.
 

@@ -12,7 +12,7 @@ There is no GitLab here and no token. The board is `boards/x.yaml`
 (`boards/x.yaml.base` is the untouched pull). Use `/board boards/x.yaml`.
 
 Rules:
-- Never run `apply`, `migrate-comments`, `snapshot`, or `pull`. They need
+- Never run `push`, `migrate-comments`, `snapshot`, or `pull`. They need
   GitLab and the host runs them.
 - Stage every change in the YAML only. `plan boards/x.yaml --against
   boards/x.yaml.base` shows what you staged.
@@ -28,7 +28,7 @@ Rules:
 - A dropped `tasks.md` is ingested first: `gitboard ingest tasks.md --into
   boards/x.yaml`. Its shape is docs/tasks-md-contract.md.
 - Your own work is beads: `bd ready`, `bd update <id> --claim`, `bd close <id>`.
-- At the end, list the host commands: `gitboard land boards/x.yaml`,
+- At the end, list the host commands: `gitboard sync boards/x.yaml`,
   `bd import issues.jsonl`, and any `migrate-comments` lines.
 ```
 

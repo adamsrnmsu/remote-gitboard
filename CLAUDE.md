@@ -24,11 +24,11 @@ destinations are iids or `group/project#iid`; `pull --base` (also writes an
 untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
 `--force` (overwrite); `show --from FILE`, `plan FILE --against BASE`,
 `tui --from FILE` — the no-network trio for a container: the pulled YAML is
-the board, the agent edits it, the host runs `plan` then `apply`;
+the board, the agent edits it, the host runs `plan` then `push`;
 `ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only);
 `estimate SPEC [--history h.json]` stages due dates from history (local only);
 `status` (every local board: pulled ago, staged, notes, oldest in Verify,
-overdue); `land SPEC` (plan, y/n, apply, snapshot, rotate `.base`);
+overdue); `sync SPEC` (plan, y/n, push, snapshot, rotate `.base`);
 `--all` on `pull`/`snapshot`/`report`; `report --since SPEC`; `stats`
 (team markdown: open by column/epic/story, done, cycle time, verify
 queue/times/coverage, stuck, questions, blocker flags; `--dump`/`--from`
@@ -86,16 +86,16 @@ user config leaks in — twelve tests failed before the fixture existed.
 
 ## What the AI pass may write
 
-`.claude/commands/board.md` may run `show`, `plan`, `report`, `apply`,
-`ingest`, `estimate`, `status`, `stats`, `graph`, and edit `boards/*.yaml` (`land` is deliberately not
-allowed). Staged `notes:` widen what `apply` can write to comments — still
+`.claude/commands/board.md` may run `show`, `plan`, `report`, `push`,
+`ingest`, `estimate`, `status`, `stats`, `graph`, and edit `boards/*.yaml` (`sync` is deliberately not
+allowed). Staged `notes:` widen what `push` can write to comments — still
 additive, posted under a `*staged via gitboard*` first line, still shown in
 the plan table first. The agent may move an issue **into** Verify, never
 out: Done/Failed are people's verdict comments. It may stage
 `milestone`, `milestones:`, `priority::N`, `blocked_by` additions and
 removals and YAML reorders, proposing one fix per graph flag; it never
 edits a `Blocked by:` footer. The contract is the flow, stated in the command: YAML
-edit -> `plan` -> user go-ahead in conversation -> `apply --yes`. `apply` is
+edit -> `plan` -> user go-ahead in conversation -> `push --yes`. `push` is
 additive-only (nothing deleted or closed), which bounds the blast radius;
 `migrate` (board reformats: `migrate.py`, ops in `boards/*.migration.yaml`,
 one-way rows marked `!`, idempotent, `Verify`/`Done`/`Failed` refused as

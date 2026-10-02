@@ -22,7 +22,7 @@ def test_keys_that_prompt_carry_a_worked_example():
 
 def test_rows_offline_drop_the_gitlab_keys_and_plan_needs_a_yaml():
     offline = {k for k, _ in guide.rows(True, True)[0]}
-    assert not offline & set("bsma") and {"r", "e", "p", "g"} <= offline
+    assert not offline & set("bsmayf") and {"r", "e", "p", "g"} <= offline
     assert "a" not in {k for k, _ in guide.rows(False, False)[0]}
     assert guide.rows(False, False)[1] == guide.CARD_KEYS
 

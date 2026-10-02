@@ -1,7 +1,7 @@
 ---
-description: Read a GitLab board, stage the moves it needs, and — after a go-ahead — apply them.
+description: Read a GitLab board, stage the moves it needs, and — after a go-ahead — push them.
 argument-hint: <group/project> [board name]  |  boards/<file>.yaml (offline)
-allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli apply:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli ingest:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli status:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli stats:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli estimate:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli graph:*), Edit(boards/*.yaml)
+allowed-tools: Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli show:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli plan:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli push:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli report:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli ingest:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli status:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli stats:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli estimate:*), Bash(PYTHONPATH=src .venv/bin/python -m gitboard.cli graph:*), Edit(boards/*.yaml)
 ---
 
 `gitboard` below is `PYTHONPATH=src .venv/bin/python -m gitboard.cli`
@@ -21,7 +21,7 @@ the team works in.
 **Offline.** If `$ARGUMENTS` ends in `.yaml` there is no GitLab here: the
 file is the board. Use `show --from $ARGUMENTS --markdown` and
 `plan $ARGUMENTS --against $ARGUMENTS.base` (no `.base`: say so; you can
-list your edits but not a diff). Never run `apply`, `land`, `pull` or
+list your edits but not a diff). Never run `push`, `sync`, `pull` or
 `snapshot`; the host does. `report` works if `snapshots.jsonl` was copied in.
 
 **First, ingest.** If a `tasks.md` was dropped in, run
@@ -63,7 +63,7 @@ proposal in Staged, or say it belongs to none.
   move it up the list, pull its date in, assign it, or move the card into
   or out of Blocked (never out of Verify).
 - Never edit a `Blocked by:` footer line in a description, and do not
-  drop a ref only the footer holds from `blocked_by`: `plan` and `apply` only
+  drop a ref only the footer holds from `blocked_by`: `plan` and `push` only
   report it skipped and the ref stays. Name it
   for the lead to edit in GitLab instead.
 - Link removals and order moves go first in your summary, right after
@@ -71,8 +71,8 @@ proposal in Staged, or say it belongs to none.
 
 **Write path.** Exactly one: edit the board's YAML in `boards/`, run
 `gitboard plan <spec>`, show its table, wait for a yes in this conversation,
-then `gitboard apply <spec> --yes`. Never an `apply` whose `plan` the user
-has not just seen; never `land`, MCP write tools or direct API calls.
+then `gitboard push <spec> --yes`. Never an `push` whose `plan` the user
+has not just seen; never `sync`, MCP write tools or direct API calls.
 
 Rules for the YAML:
 
@@ -82,10 +82,10 @@ Rules for the YAML:
 - Never retitle an entry without an `iid`. With one, a new title is a
   **rename** of that issue: allowed, but the Staged row must say "rename".
 - Never edit `discussion:` (the team's comments, read-only). Reply by
-  appending a string to that issue's `notes:`; `apply` posts each once with
+  appending a string to that issue's `notes:`; `push` posts each once with
   a `*staged via gitboard*` first line.
 - Never invent or edit an `iid`; new issues carry none. Never delete or
-  close anything; closed issues are skipped by `apply`, not recreated.
+  close anything; closed issues are skipped by `push`, not recreated.
 - Labels you add are additive; labels the team added in the UI survive.
   `stale` (no movement past the threshold) and `re-verify` (changed after
   verification) are the follow-up labels: add them, do not invent others.
@@ -127,7 +127,7 @@ days, what would unstick it`, plus the label you staged (`stale`).
 
 ## Hand back
 Offline only, three lines: the file to copy back, then
-`gitboard land boards/<file>.yaml` on the host (plan, y/n, apply, snapshot,
+`gitboard sync boards/<file>.yaml` on the host (plan, y/n, push, snapshot,
 rotate base), then any `migrate-comments` lines.
 
 Ground every claim in an issue number from the output. If the board is

@@ -17,7 +17,7 @@ SPEC       ?=
 FILE       ?=
 GITBOARD    = PYTHONPATH=src $(PY) -m gitboard.cli
 
-.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan apply land migrate test fmt lint docs clean stats digest estimate
+.PHONY: help install activate link unlink up wait down reset logs seed show tui status snapshot report cron pull plan push sync migrate test fmt lint docs clean stats digest estimate
 
 help:
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -107,11 +107,11 @@ pull: install  ## save the board as YAML: make pull PROJECT=group/project
 plan: install  ## preview YAML changes: make plan SPEC=boards/test.yaml
 	@$(GITBOARD) plan $(SPEC)
 
-apply: install  ## write the YAML to GitLab: make apply SPEC=boards/test.yaml
-	@$(GITBOARD) apply $(SPEC)
+push: install  ## push the YAML to GitLab: make push SPEC=boards/test.yaml
+	@$(GITBOARD) push $(SPEC)
 
-land: install  ## apply, snapshot, refresh SPEC.base: make land SPEC=boards/test.yaml
-	@$(GITBOARD) land $(SPEC)
+sync: install  ## push, snapshot, refresh SPEC.base: make sync SPEC=boards/test.yaml
+	@$(GITBOARD) sync $(SPEC)
 
 migrate: install  ## run a board migration file: make migrate FILE=boards/x.migration.yaml
 	@$(GITBOARD) migrate $(FILE)

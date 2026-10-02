@@ -1,4 +1,4 @@
-"""Tests for cli.py: the drift guard, pull's guards, status, land, --all.
+"""Tests for cli.py: the drift guard, pull's guards, status, sync, --all.
 
 No network — `board_mod.fetch`, `board_mod.board_columns`, `apply_mod.*`
 and `client.gitlab` are patched. Each test runs in an empty cwd with the
@@ -191,13 +191,13 @@ def test_pull_refuses_another_projects_file_regardless_of_flags(gl, tmp_path):
     assert "other/proj" in r.output and "not grp/proj" in r.output
 
 
-# --- apply: the drift guard ------------------------------------------------
+# --- push: the drift guard ------------------------------------------------
 
 
-def test_apply_refuses_on_drift(gl, tmp_path):
+def test_push_refuses_on_drift(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     gl["pending"]["plan"] = [("drift", "issue", "one: labels")]
-    r = runner.invoke(app, ["apply", path, "--yes"])
+    r = runner.invoke(app, ["push", path, "--yes"])
     assert r.exit_code == 1
     assert "1 field(s) changed on GitLab since the pull" in r.output
     assert "--ignore-drift" in r.output
@@ -205,27 +205,27 @@ def test_apply_refuses_on_drift(gl, tmp_path):
     assert gl["plan"][0]["base"] == SPEC  # the .base was passed
 
 
-def test_apply_ignore_drift_forces_and_snapshots(gl, tmp_path):
+def test_push_ignore_drift_forces_and_snapshots(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     gl["pending"]["plan"] = [("drift", "issue", "one: labels")]
-    r = runner.invoke(app, ["apply", path, "--yes", "--ignore-drift"])
+    r = runner.invoke(app, ["push", path, "--yes", "--ignore-drift"])
     assert r.exit_code == 0, r.output
     assert gl["apply"] == [{"base": SPEC, "force": True}]
     assert (tmp_path / "snapshots.jsonl").exists()
 
 
-def test_apply_without_a_base_passes_none(gl, tmp_path):
+def test_push_without_a_base_passes_none(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited(), base=False)
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
-    r = runner.invoke(app, ["apply", path, "--yes"])
+    r = runner.invoke(app, ["push", path, "--yes"])
     assert r.exit_code == 0, r.output
     assert gl["apply"] == [{"base": None, "force": False}]
 
 
-def test_apply_with_only_skipped_rows_writes_nothing(gl, tmp_path):
+def test_push_with_only_skipped_rows_writes_nothing(gl, tmp_path):
     path = write_spec(tmp_path)
     gl["pending"]["plan"] = [("skipped", "issue", "one: labels")]
-    r = runner.invoke(app, ["apply", path, "--yes"])
+    r = runner.invoke(app, ["push", path, "--yes"])
     assert r.exit_code == 0, r.output
     assert gl["apply"] == []
     assert not (tmp_path / "snapshots.jsonl").exists()
@@ -306,17 +306,17 @@ def test_status_counts_questions_nobody_else_answered(gl, tmp_path):
     assert cli.waiting_questions(spec["issues"][0]) == 1
 
 
-# --- land ------------------------------------------------------------------
+# --- sync ------------------------------------------------------------------
 
 
-def test_land_yes_happy_path(gl, tmp_path):
+def test_sync_yes_happy_path(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     (tmp_path / "boards/issues.jsonl").write_text("")
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
-    r = runner.invoke(app, ["land", path, "--yes"])
+    r = runner.invoke(app, ["sync", path, "--yes"])
     assert r.exit_code == 0, r.output
     assert gl["apply"] == [{"base": SPEC, "force": False}]
-    # both files move forward to the live board: nothing is staged after a land
+    # both files move forward to the live board: nothing is staged after a sync
     assert apply_mod.load(path) == SPEC
     assert apply_mod.load(path + ".base") == SPEC
     assert (tmp_path / "boards/x.yaml.base.old").exists()
@@ -324,10 +324,10 @@ def test_land_yes_happy_path(gl, tmp_path):
     assert "bd import" in r.output
 
 
-def test_land_refuses_drift_and_keeps_the_base(gl, tmp_path):
+def test_sync_refuses_drift_and_keeps_the_base(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     gl["pending"]["plan"] = [("drift", "issue", "one: labels")]
-    r = runner.invoke(app, ["land", path, "--yes"])
+    r = runner.invoke(app, ["sync", path, "--yes"])
     assert r.exit_code == 1
     assert not (tmp_path / "boards/x.yaml.base.old").exists()
 
@@ -1009,7 +1009,7 @@ def test_changes_table_prints_bracketed_values_verbatim():
     assert "d: blocked_by [#11] -> []" in console.export_text()
 
 
-# --- tui: plan/apply carry the .base (gb-0yy) --------------------------------
+# --- tui: plan/push carry the .base (gb-0yy) --------------------------------
 
 
 def _tui_files(tmp_path, base_iids, spec_iids):
@@ -1043,7 +1043,7 @@ def test_tui_refuses_on_order_drift(monkeypatch, tmp_path):
     assert "1 field(s) changed on GitLab" in cli._drift_refusal(pending)
 
 
-def test_tui_apply_gets_the_same_base(monkeypatch, tmp_path):
+def test_tui_push_gets_the_same_base(monkeypatch, tmp_path):
     """The write half of _staged's wiring: apply_mod.plan sees the .base."""
     parsed, path = _tui_files(tmp_path, [1, 2], [2, 1])
     seen = {}
@@ -1073,7 +1073,7 @@ def test_commands_without_a_project_say_how_to_supply_one(gl):
 
 
 def test_commands_without_a_spec_say_how_to_supply_one(gl):
-    for argv in (["plan"], ["apply"], ["land"], ["estimate"]):
+    for argv in (["plan"], ["push"], ["sync"], ["estimate"]):
         r = runner.invoke(app, argv)
         assert r.exit_code == 1, argv
         assert "no spec file given" in r.output, argv
@@ -1149,49 +1149,49 @@ def test_plan_missing_file_is_a_clean_error(gl):
     assert r.exception is None or isinstance(r.exception, SystemExit)
 
 
-# --- apply / land: the refusals other than drift ------------------------------
+# --- push / sync: the refusals other than drift ------------------------------
 
 
-def test_apply_declined_prompt_aborts_and_writes_nothing(gl, tmp_path):
+def test_push_declined_prompt_aborts_and_writes_nothing(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
-    r = runner.invoke(app, ["apply", path], input="n\n")
+    r = runner.invoke(app, ["push", path], input="n\n")
     assert r.exit_code != 0
-    assert "apply 1 change(s)?" in r.output
+    assert "push 1 change(s)?" in r.output
     assert gl["apply"] == []
     assert not (tmp_path / "snapshots.jsonl").exists()
 
 
-def test_apply_confirmed_prompt_writes(gl, tmp_path):
+def test_push_confirmed_prompt_writes(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
-    r = runner.invoke(app, ["apply", path], input="y\n")
+    r = runner.invoke(app, ["push", path], input="y\n")
     assert r.exit_code == 0, r.output
     assert len(gl["apply"]) == 1
     assert "1 change(s) written" in r.output
 
 
-def test_apply_missing_file_exits_1_before_any_connection(monkeypatch):
+def test_push_missing_file_exits_1_before_any_connection(monkeypatch):
     monkeypatch.setattr(client, "gitlab", lambda write=False: pytest.fail("network"))
-    r = runner.invoke(app, ["apply", "boards/none.yaml", "--yes"])
+    r = runner.invoke(app, ["push", "boards/none.yaml", "--yes"])
     assert r.exit_code == 1
     assert "no such board file" in r.output
 
 
-def test_apply_gitlab_problem_while_planning_is_one_line(gl, tmp_path, monkeypatch):
+def test_push_gitlab_problem_while_planning_is_one_line(gl, tmp_path, monkeypatch):
     path = write_spec(tmp_path)
 
     def boom(_gl, spec, base=None):
         raise client.GitlabProblem("cannot reach gitlab")
 
     monkeypatch.setattr(apply_mod, "plan", boom)
-    r = runner.invoke(app, ["apply", path, "--yes"])
+    r = runner.invoke(app, ["push", path, "--yes"])
     assert r.exit_code == 1
     assert "cannot reach gitlab" in r.output
     assert gl["apply"] == []
 
 
-def test_apply_a_refused_write_explains_the_token_scope(gl, tmp_path, monkeypatch):
+def test_push_a_refused_write_explains_the_token_scope(gl, tmp_path, monkeypatch):
     import gitlab as gitlab_pkg
 
     path = write_spec(tmp_path, spec=edited())
@@ -1201,34 +1201,32 @@ def test_apply_a_refused_write_explains_the_token_scope(gl, tmp_path, monkeypatc
         raise gitlab_pkg.exceptions.GitlabAuthenticationError("403", response_code=403)
 
     monkeypatch.setattr(apply_mod, "apply", forbidden)
-    r = runner.invoke(app, ["apply", path, "--yes"])
+    r = runner.invoke(app, ["push", path, "--yes"])
     assert r.exit_code == 1
     assert "needs `api` scope" in r.output
 
 
-def test_apply_with_nothing_pending_prints_nothing_to_write_only_for_skips(
-    gl, tmp_path
-):
+def test_push_with_nothing_pending_prints_nothing_to_write_only_for_skips(gl, tmp_path):
     path = write_spec(tmp_path)
-    r = runner.invoke(app, ["apply", path, "--yes"])  # an empty plan
+    r = runner.invoke(app, ["push", path, "--yes"])  # an empty plan
     assert r.exit_code == 0, r.output
     assert gl["apply"] == []
     assert "nothing to write" not in r.output
 
 
-def test_land_declined_prompt_aborts_before_touching_the_files(gl, tmp_path):
+def test_sync_declined_prompt_aborts_before_touching_the_files(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
-    r = runner.invoke(app, ["land", path], input="n\n")
+    r = runner.invoke(app, ["sync", path], input="n\n")
     assert r.exit_code != 0
     assert gl["apply"] == []
     assert apply_mod.load(path)["issues"][0]["labels"] == ["Verify"]  # edit kept
     assert not (tmp_path / "boards/x.yaml.base.old").exists()
 
 
-def test_land_with_nothing_to_write_still_refreshes_from_the_live_board(gl, tmp_path):
+def test_sync_with_nothing_to_write_still_refreshes_from_the_live_board(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())  # plan is empty: fetched here
-    r = runner.invoke(app, ["land", path, "--yes"])
+    r = runner.invoke(app, ["sync", path, "--yes"])
     assert r.exit_code == 0, r.output
     assert gl["apply"] == []
     assert gl["fetch"] == ["grp/proj"]
@@ -1237,7 +1235,7 @@ def test_land_with_nothing_to_write_still_refreshes_from_the_live_board(gl, tmp_
     assert "bd import" not in r.output  # no issues.jsonl beside it
 
 
-def test_land_keeps_discussion_when_the_spec_carried_notes(gl, tmp_path, monkeypatch):
+def test_sync_keeps_discussion_when_the_spec_carried_notes(gl, tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(
         apply_mod,
@@ -1248,13 +1246,13 @@ def test_land_keeps_discussion_when_the_spec_carried_notes(gl, tmp_path, monkeyp
     spec["issues"][0]["discussion"] = ["bob: hi"]
     path = write_spec(tmp_path, spec=spec, base=False)
     Path(path + ".base").write_text(apply_mod.dump(spec))
-    r = runner.invoke(app, ["land", path, "--yes"])
+    r = runner.invoke(app, ["sync", path, "--yes"])
     assert r.exit_code == 0, r.output
     assert seen == [True, True]
 
 
-def test_land_missing_file_and_gitlab_problem_exit_1(gl, tmp_path, monkeypatch):
-    r = runner.invoke(app, ["land", "boards/none.yaml", "--yes"])
+def test_sync_missing_file_and_gitlab_problem_exit_1(gl, tmp_path, monkeypatch):
+    r = runner.invoke(app, ["sync", "boards/none.yaml", "--yes"])
     assert r.exit_code == 1 and "no such board file" in r.output
     path = write_spec(tmp_path)
 
@@ -1262,7 +1260,7 @@ def test_land_missing_file_and_gitlab_problem_exit_1(gl, tmp_path, monkeypatch):
         raise client.GitlabProblem("board vanished")
 
     monkeypatch.setattr(board_mod, "fetch", boom)
-    r = runner.invoke(app, ["land", path, "--yes"])
+    r = runner.invoke(app, ["sync", path, "--yes"])
     assert r.exit_code == 1 and "board vanished" in r.output
 
 
@@ -1584,10 +1582,10 @@ def test_config_lists_every_source_and_exits_0_with_tokens(tmp_path):
     assert "unset" not in flat  # board and spec are set too
     assert "found" in r.output
     assert "not found" not in r.output
-    assert "unset — apply reuses" not in r.output  # a write token is set
+    assert "unset — push reuses" not in r.output  # a write token is set
 
 
-def test_config_without_a_write_token_says_apply_reuses_the_read_one(monkeypatch):
+def test_config_without_a_write_token_says_push_reuses_the_read_one(monkeypatch):
     monkeypatch.delenv("GITLAB_WRITE_TOKEN", raising=False)
     monkeypatch.setattr(
         config.subprocess,
@@ -1596,7 +1594,7 @@ def test_config_without_a_write_token_says_apply_reuses_the_read_one(monkeypatch
     )
     r = runner.invoke(app, ["config"])
     assert r.exit_code == 0, r.output
-    assert "unset — apply reuses the read token" in r.output
+    assert "unset — push reuses the read token" in r.output
     assert r.output.count("unset") == 4  # project, board, spec, write token
 
 
@@ -1768,7 +1766,7 @@ def test_tui_offline_move_stages_into_the_yaml_and_refetches(tui, tmp_path):
     tui.run(["down", "v", "1", "q"], "--from", path, "--no-guide")
     spec = apply_mod.load(path)
     assert "labels" not in spec["issues"][0]
-    assert "staged: #1 Doing → Backlog · p shows, the host applies" in tui.last
+    assert "staged: #1 Doing → Backlog · p shows, the host pushes" in tui.last
     assert "staged this session (1)" in tui.last
     assert "Backlog (1)" in tui.last  # the reload moved the card
 
@@ -1909,7 +1907,7 @@ def test_tui_edit_shows_the_diff_against_the_base_or_says_there_is_none(tui, tmp
     )
     tui.run(["e", "q"], "--from", path, "--no-guide")
     assert tui.edits == [["myedit", "--wait", path]]
-    assert "the host applies" in tui.last and "one: labels" in tui.last
+    assert "the host pushes" in tui.last and "one: labels" in tui.last
     # no .base: nothing to diff against
     (tmp_path / (path + ".base")).unlink()
     tui.run(["e", "q"], "--from", path, "--no-guide")
@@ -1928,7 +1926,7 @@ def test_tui_edit_with_no_change_says_the_board_matches(tui, tmp_path):
 def test_tui_offline_p_diffs_and_never_writes(tui, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     tui.run(["p", "q"], "--from", path, "--no-guide")
-    assert "the host applies" in tui.last and "labels" in tui.last
+    assert "the host pushes" in tui.last and "labels" in tui.last
     clean = write_spec(tmp_path, "boards/c.yaml")
     tui.run(["p", "q"], "--from", clean, "--no-guide")
     assert "no changes — board already matches" in tui.last
@@ -1989,14 +1987,14 @@ def test_tui_board_switch_cancel_and_nothing_to_switch_to(
     assert "nothing else to switch to" in live_tui.last
 
 
-def test_tui_online_plan_apply_branches(live_tui, gl, tmp_path):
+def test_tui_online_plan_push_branches(live_tui, gl, tmp_path):
     # empty plan
     live_tui.run(["p", "a", "q"], "grp/proj", "--no-guide")
     assert "no changes — board already matches" in live_tui.last
     # p shows the table, a refuses on drift
     gl["pending"]["plan"] = [("drift", "issue", "one: labels")]
     live_tui.run(["p", "q"], "grp/proj", "--no-guide")
-    assert "a applies" in live_tui.last
+    assert "a pushes" in live_tui.last
     live_tui.run(["a", "q"], "grp/proj", "--no-guide")
     assert "1 field(s) changed on GitLab since the pull" in live_tui.last
     assert "refused" in live_tui.last
@@ -2004,14 +2002,14 @@ def test_tui_online_plan_apply_branches(live_tui, gl, tmp_path):
     # a clean write: n declines, y writes and clears the staged panel
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
     live_tui.run(["a", "n", "q"], "grp/proj", "--no-guide")
-    assert "not applied" in live_tui.last and gl["apply"] == []
+    assert "not pushed" in live_tui.last and gl["apply"] == []
     live_tui.run(["a", "y", "q"], "grp/proj", "--no-guide")
-    assert "apply 1 change(s)?  y / n" in live_tui.text
+    assert "push 1 change(s)?  y / n" in live_tui.text
     assert "1 change(s) written" in live_tui.last
     assert gl["apply"] == [{"base": SPEC, "force": False}]
 
 
-def test_tui_online_apply_refused_by_the_token_is_a_clean_exit_1(
+def test_tui_online_push_refused_by_the_token_is_a_clean_exit_1(
     live_tui, gl, monkeypatch
 ):
     import gitlab as gitlab_pkg
@@ -2040,7 +2038,7 @@ def test_tui_without_a_yaml_says_so_and_e_pulls_one(live_tui, gl, tmp_path):
 def test_tui_online_edit_diffs_against_the_live_board(live_tui, gl, tmp_path):
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
     live_tui.run(["e", "q"], "grp/proj", "--no-guide")
-    assert "a applies" in live_tui.last and "one: labels" in live_tui.last
+    assert "a pushes" in live_tui.last and "one: labels" in live_tui.last
 
 
 def test_tui_online_card_edit_adopts_a_card_the_yaml_lacks(live_tui, gl, tmp_path):
@@ -2050,7 +2048,7 @@ def test_tui_online_card_edit_adopts_a_card_the_yaml_lacks(live_tui, gl, tmp_pat
     issues = apply_mod.load("boards/x.yaml")["issues"]
     assert [i["iid"] for i in issues] == [1, 2]
     assert issues[1]["notes"] == ["hello"]
-    assert "a applies" in live_tui.last
+    assert "a pushes" in live_tui.last
 
 
 def test_tui_online_card_edit_takes_a_card_the_yaml_holds_by_title_only(
@@ -2067,7 +2065,7 @@ def test_tui_online_card_edit_takes_a_card_the_yaml_holds_by_title_only(
     issues = apply_mod.load("boards/x.yaml")["issues"]
     assert [(i["title"], i.get("iid")) for i in issues] == [("one", None), ("two", 2)]
     assert issues[1]["notes"] == ["hello"]
-    assert "a applies" in live_tui.last
+    assert "a pushes" in live_tui.last
 
 
 def test_tui_online_due_estimate_uses_the_assignees_history(
@@ -2134,3 +2132,69 @@ def test_tui_migrate_comments_n_keeps_the_source_open_and_empty_cancels(
     assert "cancelled" in live_tui.last
     live_tui.run(["m", *typed("1"), "\x1b", "q"], "grp/proj", "--no-guide")
     assert "cancelled" in live_tui.last
+
+
+# --- the old names are gone; sync and pull from the TUI (gb-35b) -----------------
+
+
+@pytest.mark.parametrize("old", ["apply", "land"])
+def test_the_old_command_names_no_longer_exist(old, gl):
+    r = runner.invoke(app, [old, "boards/x.yaml", "--yes"])
+    assert r.exit_code != 0
+    assert "No such command" in r.output
+
+
+def test_tui_f_with_staged_edits_warns_and_n_writes_nothing(live_tui, gl, tmp_path):
+    write_spec(tmp_path, spec=edited())
+    before = (tmp_path / "boards/x.yaml").read_text()
+    live_tui.run(["f", "n", "q"], "grp/proj", "--no-guide")
+    assert "These 2 staged edits will be lost" in live_tui.text
+    assert "not pulled" in live_tui.last
+    assert (tmp_path / "boards/x.yaml").read_text() == before
+
+
+def test_tui_f_y_overwrites_the_file_with_the_live_board(live_tui, gl, tmp_path):
+    write_spec(tmp_path, spec=edited())
+    live_tui.run(["f", "y", "q"], "grp/proj", "--no-guide")
+    assert apply_mod.load("boards/x.yaml") == SPEC
+    assert apply_mod.load("boards/x.yaml.base") == SPEC  # a .base existed
+    assert "pulled boards/x.yaml" in live_tui.last
+
+
+def test_tui_f_with_nothing_staged_says_so_and_any_other_key_cancels(
+    live_tui, gl, tmp_path
+):
+    live_tui.run(["f", "x", "q"], "grp/proj", "--no-guide")
+    assert "nothing staged is lost" in live_tui.text
+    assert "not pulled" in live_tui.last
+
+
+def test_tui_f_without_a_base_does_not_claim_nothing_is_lost(live_tui, gl, tmp_path):
+    write_spec(tmp_path, spec=edited())
+    (tmp_path / "boards/x.yaml.base").unlink()
+    live_tui.run(["f", "n", "q"], "grp/proj", "--no-guide")
+    assert "with no .base to compare" in live_tui.text
+    assert "nothing staged is lost" not in live_tui.text
+
+
+def test_tui_y_syncs_push_snapshot_and_refresh(live_tui, gl, tmp_path):
+    write_spec(tmp_path, spec=edited())
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    live_tui.run(["y", "y", "q"], "grp/proj", "--no-guide")
+    assert gl["apply"] == [{"base": SPEC, "force": False}]
+    assert len(snapshot_lines(tmp_path / "snapshots.jsonl")) == 2  # one batch
+    assert apply_mod.load("boards/x.yaml") == SPEC  # nothing left staged
+    assert "refreshed from GitLab" in live_tui.last
+
+
+def test_tui_y_declined_leaves_the_files_alone(live_tui, gl, tmp_path):
+    write_spec(tmp_path, spec=edited())
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    live_tui.run(["y", "n", "q"], "grp/proj", "--no-guide")
+    assert gl["apply"] == [] and apply_mod.load("boards/x.yaml") == edited()
+
+
+def test_tui_offline_has_no_sync_or_pull(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["y", "f", "q"], "--from", path, "--no-guide")
+    assert "offline — not here" in tui.last

@@ -84,7 +84,7 @@ def main():
             os.path.join(ROOT, ".venv", "bin", "python"),
             "-m",
             "gitboard.cli",
-            "apply",
+            "push",
             SPEC,
             "--yes",
         ],

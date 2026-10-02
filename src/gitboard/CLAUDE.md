@@ -22,7 +22,7 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
 - **`client.py`** — the connection, and the only place API errors become
   English. Everything user-actionable raises `GitlabProblem`; the CLI prints it
   as one line and exits 1. No tracebacks for a typo'd path.
-  `write_errors()` turns a 401/403 during `apply` into a message naming the
+  `write_errors()` turns a 401/403 during `push` into a message naming the
   scope, since a `read_api` token reads fine and fails only there.
 - **`board.py`** — reading. `board_columns()` is why this repo exists: **no MCP
   server exposes board structure.** A board list is bound to a label and
@@ -146,7 +146,7 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   a near-duplicate title (difflib ≥ 0.85) is reported, not added. `stale`
   (task vanished from its file) and `re-verify` (footer commit changed) are
   labels, never moves. `merge` reports `changed`; the CLI writes only then.
-- **`apply.py`** — the only writer (`apply`, `migrate_comments`, `close_issue`), and the
+- **`apply.py`** — the only writer (the `push` command; module name kept) (`apply`, `migrate_comments`, `close_issue`), and the
   spec schema's home: `spec_from_board`/`dump` are `pull`'s read direction,
   built so pull-then-plan is always empty. `diff(spec, have, base=None)` is
   the pure core; `plan` builds `have` from the API (`state="all"`),
@@ -174,7 +174,10 @@ two-column issue is one issue, and summing per-column counts double-counts it.
 `tui` is a keypress loop over `board_view` (shared with `show`, so they
 cannot drift) inside a rich `Live` alternate screen: reload / board-picker /
 snapshot / edit (`$EDITOR` on the spec, pulled via `spec_from_board` if
-missing, diff shown on return) / plan / apply-with-y/n /
+missing, diff shown on return) / plan / push-with-y/n /
+sync (push, snapshot, refresh the YAML: `_refresh_spec`, shared with the
+`sync` command) / pull (`_pull_board`, shared with `pull`; warns and asks y/n
+before overwriting, listing `_staged_edits`; online only) /
 migrate-with-close-y/n / help. The per-column truncation limit is computed
 from terminal height each draw, and SIGWINCH redraws, so resizing works.
 Raw input is `_key()` (termios cbreak, dies without a tty); all prompts
@@ -183,7 +186,7 @@ and takes single-key escapes (b = pick a destination project in `m`).
 Card keys `v u d c n` stage into the YAML through `stage()` -> `edit.py`:
 the file is read **raw** (`raw_spec`; `load` only validates, because it
 rewrites colour names to hex), a card a stale YAML lacks is adopted via
-`apply.issue_entry`, and nothing touches GitLab until `a`. The guide panel
+`apply.issue_entry`, and nothing touches GitLab until `a` (push). The guide panel
 (`st["tip"]`) is set per key and never blocks. The cursor (`st["cursor"]`,
 `(column index, row among the shown cards)`; arrows or `hjkl`, `esc` drops
 it) is a **position, not an iid** — a two-column card is on screen twice and
@@ -219,7 +222,7 @@ absence caused real bugs, each pinned by tests — **don't remove them**:
 - An unquoted `2026-09-01` is a `datetime.date` to PyYAML, which `requests`
   cannot JSON-encode. `wanted_issue` coerces to ISO.
 - GitLab strips a description's trailing newline; YAML's `|` keeps it, so
-  every apply reported a phantom `description` change. `norm_text` fixes both
+  every push reported a phantom `description` change. `norm_text` fixes both
   sides — `wanted_issue` and `current_issue` must always agree, or nothing is
   idempotent.
 
@@ -229,13 +232,12 @@ creates a second issue. `load()` strips titles and rejects duplicates; two
 open GitLab issues sharing a title is an error, not a coin toss. A title
 whose only live match is **closed** is skipped, never recreated. Apply is
 additive for issues and milestones: nothing is deleted or closed, removing an issue from the YAML
-leaves it on the board, and **labels the YAML does not name survive** (only
-column labels and labels the spec mentions are managed). Per-issue `notes:` are staged comments: `apply`
+leaves it on the board, and **push only manages column labels and labels the spec uses; any other label a card has in GitLab stays on it**. Per-issue `notes:` are staged comments: `push`
 posts each body not already on the issue (`ensure_notes`, same idempotency
 rule as `migrate_comments`); `discussion:` is what `pull --notes` read and is
 never written. `plan`/`diff` report notes as `("added", "note", ...)`; the
 online `plan` fetches notes only for issues that stage some. `people:`,
-`iid`, `discussion:` are spec keys apply ignores.
+`iid`, `discussion:` are spec keys push ignores.
 
 Blockers, milestones and order: **an absent key is unmanaged.** No
 `blocked_by` key leaves a card's links alone (`[]` removes them); no

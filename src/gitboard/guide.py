@@ -11,7 +11,12 @@ from rich.panel import Panel
 from rich.text import Text
 
 BOARD_KEYS = [("r", "reload"), ("b", "board"), ("s", "snapshot"), ("e", "edit")]
-SPEC_KEYS = [("p", "plan"), ("a", "apply")]  # only once a YAML exists
+SPEC_KEYS = [
+    ("p", "plan"),
+    ("a", "push"),
+    ("y", "sync"),
+    ("f", "pull"),
+]  # only once a YAML exists
 CARD_KEYS = [
     ("↑↓", "select"),
     ("v", "move"),
@@ -40,7 +45,7 @@ GUIDE = {
         "reload",
         [
             "Reads the board again. Nothing is written.",
-            "Use it after someone moved a card in GitLab, or after an apply.",
+            "Use it after someone moved a card in GitLab, or after a push.",
         ],
     ),
     "b": (
@@ -64,25 +69,43 @@ GUIDE = {
             "the card keys (v u d c n) are quicker and write the same file.",
             "Example: a card's column is a label, so `labels: [Doing]` ->",
             "`labels: [Review]` moves it. Save and quit; the diff shows here.",
-            "Only the file changes. `a` is what writes to GitLab.",
+            "Only the file changes. `a` is what pushes to GitLab.",
         ],
     ),
     "p": (
         "plan",
         [
-            "Compares the YAML with the board and lists what `a` would write:",
+            "Compares the YAML with the board and lists what `a` would push:",
             "+ added, ~ changed, - kept as GitLab has it, ! refused (both changed).",
             "Read-only. An empty plan means the board already matches.",
         ],
     ),
     "a": (
-        "apply",
+        "push",
         [
-            "Writes the YAML to GitLab after a y/n. Additive only: it creates and",
-            "updates; it never deletes or closes, and labels the YAML does not",
-            "name survive.",
-            "Example: staged `#12 Doing → Review` with v, press a, read the table,",
-            "press y. Any other key backs out with nothing written.",
+            "Sends your staged YAML edits to GitLab after a y/n. It only adds and",
+            "changes; it never deletes or closes a card. Labels: push only manages",
+            "column labels and labels your YAML uses. Any other label a card has in",
+            "GitLab stays on it.",
+            "Example: a card tagged `security` in GitLab keeps that tag even when",
+            "your YAML never mentions `security`.",
+            "Read the table, press y. Any other key backs out with nothing written.",
+        ],
+    ),
+    "y": (
+        "sync",
+        [
+            "Pushes your staged edits (after a y/n), logs a snapshot, then refreshes",
+            "the YAML from GitLab so it holds your edits plus everything teammates",
+            "changed. Nothing is left staged.",
+        ],
+    ),
+    "f": (
+        "pull",
+        [
+            "Replaces the YAML with the live board — GitLab to file. Asks first when",
+            "that would overwrite the file, and lists any staged edits that would be",
+            "lost. To keep your edits, use y (sync) instead.",
         ],
     ),
     "m": (
@@ -98,7 +121,7 @@ GUIDE = {
     "v": (
         "move a card",
         [
-            "Stages a column change in the YAML. `a` writes it.",
+            "Stages a column change in the YAML. `a` pushes it.",
             "Example: v, 12 ⏎, then 3 for the third column listed. With a card",
             "selected (arrows or h j k l) there is no number to type: v, then 3.",
             "A card in Verify does not move by key, and Done / Failed are not",
@@ -109,7 +132,7 @@ GUIDE = {
     "u": (
         "assign a card",
         [
-            "Stages an assignee in the YAML. `a` writes it.",
+            "Stages an assignee in the YAML. `a` pushes it.",
             "Example: u, 12 ⏎, then 2 for the second person — or t to type a",
             "GitLab username that is not listed yet. A selected card (arrows)",
             "skips the number.",
@@ -118,7 +141,7 @@ GUIDE = {
     "d": (
         "due date",
         [
-            "Stages a due date in the YAML. `a` writes it.",
+            "Stages a due date in the YAML. `a` pushes it.",
             "Example: d, 12 ⏎, then 2026-10-01 ⏎, or +3 ⏎ for three days from today.",
             "A selected card (arrows) skips the number.",
             "e instead asks the assignee's finished history (`gitboard estimate`)",
@@ -128,7 +151,7 @@ GUIDE = {
     "c": (
         "comment",
         [
-            "Stages one comment under the card's `notes:`. `a` posts it, marked",
+            "Stages one comment under the card's `notes:`. `a` pushes it, marked",
             "*staged via gitboard*; a body already on the card is not posted twice.",
             "Example: c, 12 ⏎ (or select the card with the arrows), then",
             "`Q: is the token rotation still blocking this?` ⏎",
@@ -138,7 +161,7 @@ GUIDE = {
     "n": (
         "new card",
         [
-            "Stages a new card in the YAML; it shows as (new) until `a` creates it.",
+            "Stages a new card in the YAML; it shows as (new) until `a` pushes it.",
             "Example: n, `Rotate the deploy token` ⏎, then 1 for the first column.",
             "The title is its identity until GitLab gives it a number, so a second",
             "card with the same title is refused.",

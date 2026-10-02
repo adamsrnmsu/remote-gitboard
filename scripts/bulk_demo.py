@@ -9,7 +9,7 @@ Stress data for the TUI and migrate-comments: many columns, extra category
 labels, overdue work, absurdly long titles, issues straddling two columns,
 and a handful of commented issues in test/payments so `m` has something to
 copy. Deterministic for a given --seed, and everything goes through
-`gitboard apply`, so re-running writes only drift (comment seeding skips
+`gitboard push`, so re-running writes only drift (comment seeding skips
 issues that already have notes).
 
 Only for the throwaway instance in docker-compose.yml — the specs say
@@ -158,7 +158,7 @@ def main():
         path = write_spec(slug, board, cols, tags, args.issues)
         print(f"applying {os.path.relpath(path, ROOT)}…")
         subprocess.run(
-            [PYTHON, "-m", "gitboard.cli", "apply", path, "--yes"],
+            [PYTHON, "-m", "gitboard.cli", "push", path, "--yes"],
             cwd=ROOT, env=env, check=True,
         )
 

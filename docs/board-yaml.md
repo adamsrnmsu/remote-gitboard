@@ -1,7 +1,7 @@
 # The board YAML
 
 One file per board in `boards/`. `pull` writes it, you edit it, `plan`
-diffs it, `apply` writes it back.
+diffs it, `push` writes it back.
 
 ## Annotated example
 
@@ -29,7 +29,7 @@ labels:                        # non-column labels: colour + description, so
   - name: stale
     color: gray
 
-milestones:                    # optional; apply creates and updates, never closes
+milestones:                    # optional; push creates and updates, never closes
   - title: Beta launch
     due_date: "2026-11-01"
     description: What "beta" means for us.
@@ -47,10 +47,10 @@ issues:                        # list order = GitLab board order (with a .base)
       Verify steps are a task list, so the card shows a progress bar:
       - [ ] Open /login, sign in as a viewer
       - [ ] Expect the dashboard
-    notes:                     # comments to post on apply; already-posted bodies are skipped
+    notes:                     # comments to post on push; already-posted bodies are skipped
       - "Moved to Doing after the review on Monday."
       - "Q: is the token rotation still blocking this?"   # a question for the team
-    discussion:                # pulled with --notes; read-only, apply ignores it
+    discussion:                # pulled with --notes; read-only, push ignores it
       - by: bruiz
         at: "2026-08-30"
         body: "Blocked on the token rotation."
@@ -98,7 +98,7 @@ Scoped labels
 
 `labels[].name`, `labels[].color`, `labels[].description`
 : Labels that are not columns (`type::bug`, `epic::Billing`, `stale`).
-  `apply` creates a missing one (default colour gitlab blue) and fixes a
+  `push` creates a missing one (default colour gitlab blue) and fixes a
   colour or description that differs; `plan` shows both as `label` rows.
   `pull` writes every non-column label a card on the board carries, so the
   look survives a move to another project. A name that is also a column is
@@ -116,15 +116,15 @@ Scoped labels
 
 `issues[].labels`, `assignee`, `due_date`, `description`
 : Optional. Labels that are column names place the issue; others are just
-  labels, and `apply` only ever adds: a label the team put on in the web UI
-  survives an apply that does not list it. Two labels have a meaning to the
+  labels, and `push` only ever adds: a label the team put on in the web UI
+  survives a push that does not list it. Two labels have a meaning to the
   flow: `stale` (sat in a column past the threshold, see `report`) and
   `re-verify` (changed after someone verified it). A description whose
   verify steps are a `- [ ]` task list gets GitLab's task progress on the
   card, and `ingest` writes them that way.
 
 `milestones[].title`, `due_date`, `description`
-: Optional. `apply` creates a missing milestone and fixes a due date or
+: Optional. `push` creates a missing milestone and fixes a due date or
   description that differs; it never closes or deletes one. A group
   milestone with the same title counts as existing. `pull` writes an entry
   for every milestone a card carries and every active (not closed) project
@@ -138,21 +138,21 @@ Scoped labels
 : The cards this one waits on, as a list of any of:
   - an int, an iid in this project (`9`);
   - a string `group/project#iid`, a card in another project;
-  - the exact title of another card in this file, which `apply` resolves
+  - the exact title of another card in this file, which `push` resolves
     after creating that card, so new cards can block each other.
 
   **No key leaves the card's links alone**; `blocked_by: []` removes them.
   A card blocking itself, a title that names no card, or a cycle among the
   file's cards is a load error. Written as native GitLab `is_blocked_by`
   links, which need Premium; on an instance that downgrades them to
-  `relates_to`, `apply` removes the stray link and stops with one error.
+  `relates_to`, `push` removes the stray link and stops with one error.
 
 Description footer (read only)
 : A description whose last line is `Blocked by: #9, infra/platform#4`
   counts as blockers too, so a Free/CE instance can still draw a graph.
   `pull` reads the union of links and footer; gitboard never writes a
   footer. Dropping a ref only the footer holds from `blocked_by` is not a
-  change: `plan` and `apply` each report one `skipped` row and the ref
+  change: `plan` and `push` each report one `skipped` row and the ref
   stays. Edit the description in GitLab.
 
 `priority::N`
@@ -169,16 +169,16 @@ List order
   did, `drift`. Cards new on either side go wherever GitLab puts them.
 
 `issues[].notes`
-: List of strings. Each is posted as a comment on `apply`, with a
+: List of strings. Each is posted as a comment on `push`, with a
   `*staged via gitboard*` first line so the team can tell a staged note
   from a typed one; a body that is already on the issue is skipped, so
-  re-applies do not duplicate. This is how an offline agent replies to team
+  re-pushes do not duplicate. This is how an offline agent replies to team
   feedback. A note starting `Q:` is a question for the team; the answer
   comes back as `discussion:` on the next `pull --notes`.
 
 `issues[].discussion`
 : List of `{by, on, body}`, written by `pull --notes`. Read-only context for
-  the AI pass. `apply` ignores it.
+  the AI pass. `push` ignores it.
 
 ## Change kinds
 
@@ -186,7 +186,7 @@ List order
 want), the live board (what is), and the base (what you pulled). Each row
 in its table is one of:
 
-| Kind | Meaning | `apply` |
+| Kind | Meaning | `push` |
 |---|---|---|
 | `added` | in the YAML, not on the board (or a note not yet posted) | creates / posts |
 | `changed` | YAML differs from both board and base; shown as `old -> new` | writes the YAML value |
@@ -201,18 +201,18 @@ detect: that is the plain two-way plan.
 - **Identity is `iid`, else title.** A retitle with an `iid` is a rename; a
   retitle without one is a second issue. Duplicate titles in one file are
   an error.
-- **Additive.** `apply` never deletes or closes an issue or a milestone.
+- **Additive.** `push` never deletes or closes an issue or a milestone.
   Removing an issue from the file leaves it on the board; removing a label
   leaves it on the issue. A blocker link is the one thing it removes, and
   only when the card has a `blocked_by` key that no longer lists it.
 - **An absent key is unmanaged.** No `blocked_by`, no `milestone`, no
-  `.base` for the order: `apply` leaves that part of the board alone.
+  `.base` for the order: `push` leaves that part of the board alone.
   Closing is an explicit act (`migrate-comments --close-source`). Closed
   issues are skipped, not reopened or recreated.
 - **Verify is one-way for the agent.** The AI pass may move an issue into
   `Verify`; `Done` and `Failed` come from a person's `verified:` /
   `failed:` comment, read by `ingest`.
-- **Idempotent.** `pull` then `plan` is empty; `apply` twice writes nothing
+- **Idempotent.** `pull` then `plan` is empty; `push` twice writes nothing
   the second time. Three normalisations keep it so, and each is pinned by a
   test:
   - Colours are normalised to hex on load (the API only speaks hex); `pull`

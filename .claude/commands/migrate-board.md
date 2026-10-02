@@ -55,7 +55,7 @@ The `gitboard plan` output for the new YAML, verbatim.
 ## Run it
 ```
 gitboard migrate boards/<name>.migration.yaml   # shows ! rows first, asks y/n
-gitboard apply boards/<name>.yaml               # then the additive rest
+gitboard push boards/<name>.yaml               # then the additive rest
 gitboard pull $ARGUMENTS --base --force -o boards/<name>.yaml
 ```
 Then stop. Do not edit `discussion:`, do not invent iids, do not retitle

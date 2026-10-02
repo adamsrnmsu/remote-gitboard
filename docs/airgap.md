@@ -13,7 +13,7 @@ before writing.
 
 | Needs GitLab | Works from files only |
 |---|---|
-| `show`, `plan`, `apply`, `land`, `pull`, `snapshot`, `status`, `tui`, `migrate-comments`, `stats`, `digest` | `show --from`, `plan --against`, `tui --from`, `report`, `ingest`, `stats --from`, `digest --from`, `bd` |
+| `show`, `plan`, `push`, `sync`, `pull`, `snapshot`, `status`, `tui`, `migrate-comments`, `stats`, `digest` | `show --from`, `plan --against`, `tui --from`, `report`, `ingest`, `stats --from`, `digest --from`, `bd` |
 
 Nothing in the right-hand column opens a connection or looks for a token.
 
@@ -30,7 +30,7 @@ team's comments, not just the labels. `pull` also appends to
 inside without a separate `snapshot`. `pull --all` does every board in
 `boards/`.
 
-If `boards/x.yaml` already has edits that were never applied, `pull --force`
+If `boards/x.yaml` already has edits that were never pushed, `pull --force`
 refuses rather than lose them; `--discard-edits` is the explicit override.
 
 **Beads.** `bd` needs git only for `bd init`, so initialise on the host and
@@ -95,24 +95,24 @@ bd ready                                               # the agent's own queue
 
 The agent edits `boards/x.yaml` only: labels, assignees, due dates, new
 issues without `iid`, and `notes:` as replies to the team. It never runs
-`apply`.
+`push`.
 
 ## Host, after
 
 Copy `boards/x.yaml` (and `issues.jsonl`) back. Then:
 
 ```bash
-gitboard land boards/x.yaml     # plan, y/n, apply, snapshot, rotate the base
+gitboard sync boards/x.yaml     # plan, y/n, push, snapshot, rotate the base
 bd import issues.jsonl          # additive
 ```
 
-`land` is the four host steps in one: `plan` against the live board (a
-three-way merge with `x.yaml.base`), a y/n on the table, `apply`, a snapshot,
-and `x.yaml.base` replaced by the post-apply state (the old one kept as
+`sync` is the four host steps in one: `plan` against the live board (a
+three-way merge with `x.yaml.base`), a y/n on the table, `push`, a snapshot,
+and `x.yaml.base` replaced by the post-push state (the old one kept as
 `x.yaml.base.old`). `--yes` skips the prompt. The three-way plan is the
 safety net: an issue the team moved while the container was thinking shows
-as a `drift` row, kept as the team left it, and `land` stops on drift unless
-you pass `--ignore-drift`. `plan boards/x.yaml` and `apply boards/x.yaml`
+as a `drift` row, kept as the team left it, and `sync` stops on drift unless
+you pass `--ignore-drift`. `plan boards/x.yaml` and `push boards/x.yaml`
 remain available as the separate steps.
 
 Inside, export with `bd export --all -o issues.jsonl`. Import is additive

@@ -4,7 +4,7 @@ Read a self-hosted GitLab issue board from the terminal, define one in YAML,
 and get an AI pass over it — progress, follow-ups, open questions.
 
 The AI pass is **read-only by design**: it can only suggest. Writes go through
-`gitboard apply`, which you run.
+`gitboard push`, which you run.
 
 ```
 test/test — Dev Board
@@ -33,7 +33,7 @@ make show PROJECT=group/project
 `make show` on a fresh checkout does the right thing.
 
 Without `make link`, use the `make` targets (`make show`, `make plan`,
-`make apply`) or `PYTHONPATH=src .venv/bin/python -m gitboard.cli`. The rest of
+`make push`) or `PYTHONPATH=src .venv/bin/python -m gitboard.cli`. The rest of
 this README writes `gitboard` for brevity.
 
 ## Pointing it at your instance
@@ -47,7 +47,7 @@ You want **two**, because the scopes differ:
 | Token | Scope | Used by |
 |---|---|---|
 | `GITLAB_READ_TOKEN` | `read_api` | `show`, `pull`, `status`, and the `/board` AI pass |
-| `GITLAB_WRITE_TOKEN` | `api` | `apply`, `land`, `migrate-comments` |
+| `GITLAB_WRITE_TOKEN` | `api` | `push`, `sync`, `migrate-comments` |
 
 For the write slot, prefer a **project access token** (project → Settings →
 Access tokens, scope `api`, role Reporter): GitLab creates a bot user for
@@ -62,7 +62,7 @@ single `api` token in `GITLAB_READ_TOKEN` would hand write scope to
 everything.
 
 If you only have one `api` token, set `GITLAB_READ_TOKEN` and leave the write
-slot unset — `apply` falls back to it. If the fallback lacks `api`, the write
+slot unset — `push` falls back to it. If the fallback lacks `api`, the write
 is refused with a message naming the fix rather than a raw 403.
 
 `write_repository` is **not** the one you want: it is Git-over-HTTP only and
@@ -140,7 +140,7 @@ gitboard show group/project "Dev Board"  # a named board
 gitboard show --all                      # do not truncate long columns
 gitboard show -n 20                      # 20 issues per column
 gitboard show --markdown                 # stable output, for pipes and the AI
-gitboard tui group/project               # interactive: reload, snapshot, apply
+gitboard tui group/project               # interactive: reload, snapshot, push
 gitboard pull group/project              # save the board as boards/<name>.yaml
 gitboard pull group/project --base       # …and an untouched .base copy, for offline
 gitboard pull group/project --notes --force  # …with comments; overwrite (refresh; rotates .base to .base.old)
@@ -151,8 +151,8 @@ gitboard plan team.yaml --against team.yaml.base  # two files, no network
 gitboard show --from boards/team.yaml    # render a YAML as the board, no network
 gitboard tui --from boards/team.yaml     # the TUI on that YAML, no network
 gitboard ingest tasks.md --into boards/team.yaml  # tasks.md -> issues + notes
-gitboard apply boards/team.yaml          # write it (--yes; --ignore-drift to override the team)
-gitboard land boards/team.yaml           # plan, y/n, apply, snapshot, rotate the base
+gitboard push boards/team.yaml          # write it (--yes; --ignore-drift to override the team)
+gitboard sync boards/team.yaml           # plan, y/n, push, snapshot, rotate the base
 gitboard migrate-comments 12 34 35       # copy #12's comments onto #34 and #35
 gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
 gitboard snapshot group/project          # append board state to snapshots.jsonl
@@ -167,22 +167,22 @@ each, so a 200-issue board still fits on a screen and the truncation never
 hides the part you were looking for. The footer counts issues, unassigned and
 overdue, and names the YAML that defines the board.
 
-`pull` is `apply` in reverse: it writes the live board as a YAML spec
+`pull` is `push` in reverse: it writes the live board as a YAML spec
 (refusing to clobber an existing file), so a board born in the web UI
 becomes editable text. `pull` then `plan` is always a no-op. Each pulled
-issue carries its `iid`, which `apply` uses as the match key, so a retitle
+issue carries its `iid`, which `push` uses as the match key, so a retitle
 in the YAML renames the issue instead of creating a twin. `pull` refuses to
 overwrite a file with unapplied edits (`--discard-edits` to insist), and
 every pull takes a snapshot.
 
 `plan` with a `.base` beside the spec is a three-way merge: `added`,
 `changed` (`old -> new`), `skipped` (closed on GitLab, never recreated) and
-`drift` (the team moved it since the pull; theirs is kept, and `apply`
+`drift` (the team moved it since the pull; theirs is kept, and `push`
 refuses unless `--ignore-drift`). Labels are truly additive: what the team
 adds in the UI survives. Staged `notes:` post with a `*staged via gitboard*`
 first line.
 
-### Offline: reason in a container, apply from the host
+### Offline: reason in a container, push from the host
 
 The YAML is the staged change. When the place you think (a container with
 the repo but no network, no git) is not the place that can write:
@@ -194,7 +194,7 @@ gitboard pull group/project --base       # host: boards/x.yaml + boards/x.yaml.b
 gitboard show --from boards/x.yaml       # container: the board, from the file
 gitboard plan boards/x.yaml --against boards/x.yaml.base   # container: staged diff
 # copy boards/x.yaml back
-gitboard land boards/x.yaml              # host: plan (drift shown), y/n, apply, snapshot, rotate base
+gitboard sync boards/x.yaml              # host: plan (drift shown), y/n, push, snapshot, rotate base
 ```
 
 Neither `--from` nor `--against` ever opens a connection or looks for a
@@ -203,7 +203,7 @@ scans `boards/` mistakes it for a spec.
 
 The board is also the conversation. `pull --notes` carries each issue's
 comments along as a read-only `discussion:` list; you (or the agent) answer
-by adding strings under that issue's `notes:`, and `apply` posts each one
+by adding strings under that issue's `notes:`, and `push` posts each one
 once. A `tasks.md` from another project's agent — a heading per person,
 `- [ ]` tasks with verify steps, an optional `**Feedback**` block — goes in
 with `ingest`: open tasks land in `Verify`, checked ones in `Done`, feedback
@@ -214,7 +214,9 @@ runbook: `make docs`, then `docs/_build/html/airgap.html`.
 project's own, plus any board a `boards/*.yaml` defines, other projects
 included, `s` snapshot, `e` edit the YAML
 in `$EDITOR` (pulling the board into one first if none exists) with the diff
-shown on return, `p` plan, `a` apply after a y/n on the change table, `m`
+shown on return, `p` plan, `a` push after a y/n on the change table, `y` sync (push, snapshot,
+refresh the YAML from GitLab), `f` pull (replace the YAML with the live board,
+asking first), `m`
 migrate comments between issues, `?` help, `q` quit. Arrows (or `h j k l`) select a card; card keys stage a
 change into the YAML without an editor — `v` move, `u` assign, `d` due date
 (`e` there asks the estimate), `c` comment, `n` new card — and a guide panel
@@ -249,8 +251,8 @@ and `b` inside its destination prompt sends copies to another project.
 
 ## Defining a board in YAML
 
-`show` reads; `apply` writes. Columns and issues live in a file you edit and
-re-apply:
+`show` reads; `push` writes. Columns and issues live in a file you edit and
+re-push:
 
 ```yaml
 project: test/test
@@ -277,7 +279,7 @@ issues:
 
 ```bash
 gitboard plan boards/test.yaml     # what would change
-gitboard apply boards/test.yaml    # write it
+gitboard push boards/test.yaml    # write it
 gitboard show test/test            # read it back
 ```
 
@@ -313,7 +315,7 @@ of these:
 Two gotchas that cost a debugging round each, both handled and both pinned by
 tests: an unquoted `due_date: 2026-09-01` is a date object to YAML (not JSON
 serialisable), and GitLab strips the trailing newline that a `|` block keeps —
-which made every apply report a phantom description change.
+which made every push report a phantom description change.
 
 ## The AI pass
 
@@ -330,12 +332,12 @@ is also staged as a `Q:` note on the card so the answer comes back through
 the board), **Staged** (the `plan` table verbatim, one reason per row, drift
 and skipped rows explained), **Stuck** (from the snapshot log: days in
 column, what would unstick it), and offline **Hand back** (three lines:
-what to copy, `gitboard land`, any `migrate-comments`). No progress prose.
+what to copy, `gitboard sync`, any `migrate-comments`). No progress prose.
 The agent ingests any `tasks.md` first, may move a card into `Verify` but
 never out (Done/Failed come from a person's `verified:` / `failed:`
 comment), never retitles without an `iid`, replies through `notes:`, and
 writes through one path only: YAML edit, `plan`, your yes in the
-conversation, `apply --yes`. Additive-only, so nothing is deleted or closed.
+conversation, `push --yes`. Additive-only, so nothing is deleted or closed.
 
 ## For the team
 
@@ -440,7 +442,7 @@ The package lives in `src/gitboard/`; `gitboard.cli:app` is the entry point.
 | `boards/*.yaml` | Board definitions — columns and issues, editable. |
 | `scripts/seed.py` | Mints a PAT, then applies `boards/demo.yaml`. |
 | `scripts/bulk_demo.py` | Five busy stress-test boards for the local instance. |
-| `.claude/commands/board.md` | The `/board` prompt: report, then apply after a go-ahead. |
+| `.claude/commands/board.md` | The `/board` prompt: report, then push after a go-ahead. |
 | `docker-compose.yml` | Disposable local GitLab CE for development. |
 
 `make` on its own lists every target.
@@ -531,7 +533,7 @@ The AI pass writes because two things allow it — revoke either:
 1. Re-restrict `allowed-tools` in `.claude/commands/board.md` to `show`,
    `plan`, `report` and `status`.
 2. Remove `GITLAB_WRITE_TOKEN` from `.env`, leaving a `read_api`-scope token.
-   The scope is the hard guarantee: without an `api` token, `apply` fails
+   The scope is the hard guarantee: without an `api` token, `push` fails
    with a one-line scope error no matter what the prompt says.
 
 For incremental label moves on issues you refuse to put in YAML,

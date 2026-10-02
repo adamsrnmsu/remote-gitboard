@@ -1,6 +1,6 @@
 # Migrations: reformatting a board
 
-`apply` is additive on purpose: it creates and updates, never renames a
+`push` is additive on purpose: it creates and updates, never renames a
 label everywhere, never merges two labels, never removes a column or moves a
 card to another project. A reformat needs exactly those one-way moves, so
 they live in a separate file and a separate command, and the agent never
@@ -17,7 +17,7 @@ runs it.
 
 ```bash
 gitboard migrate boards/<name>.migration.yaml   # ! rows are one-way; y/n
-gitboard apply boards/<name>.yaml               # the additive rest
+gitboard push boards/<name>.yaml               # the additive rest
 gitboard pull group/project --base --force -o boards/<name>.yaml
 ```
 
@@ -55,7 +55,7 @@ them; migrate the other labels around them.
 ## Labels in the board YAML
 
 Non-column labels get colours and descriptions through a top-level
-`labels:` list; `apply` creates and fixes them, `pull` writes them back, so
+`labels:` list; `push` creates and fixes them, `pull` writes them back, so
 scoped labels stop getting random colours:
 
 ```yaml
