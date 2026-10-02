@@ -540,11 +540,13 @@ def test_stats_from_renders_offline(tmp_path, monkeypatch):
 
 def test_stats_dump_round_trips_through_from(gl, tmp_path, monkeypatch):
     _, data = history_file(tmp_path)
-    monkeypatch.setattr(
-        board_mod,
-        "fetch_history",
-        lambda p, b, since: (data["history"], data["columns"]),
-    )
+    seen = []
+
+    def fake(p, b, since):
+        seen.append(since.isoformat())
+        return data["history"], data["columns"]
+
+    monkeypatch.setattr(board_mod, "fetch_history", fake)
     r = runner.invoke(app, ["stats", "grp/proj", "--dump", "h2.json"])
     assert r.exit_code == 0, r.output
     dumped = json.loads((tmp_path / "h2.json").read_text())
@@ -553,9 +555,11 @@ def test_stats_dump_round_trips_through_from(gl, tmp_path, monkeypatch):
         "board",
         "columns",
         "fetched_at",
+        "since",
         "milestones",
         "history",
     }
+    assert dumped["since"] == seen[0]
     assert dumped["history"] == data["history"]
     again = runner.invoke(app, ["stats", "--from", "h2.json"])
     assert again.exit_code == 0, again.output

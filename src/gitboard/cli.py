@@ -1009,6 +1009,7 @@ def _history(project, board_name, days, from_file=None, dump=None):
         "board": board.name,
         "columns": columns,
         "fetched_at": now.isoformat(),  # keep the fraction: `_in` is half-open
+        "since": since.isoformat(),  # start of the fetched window; absent in old dumps
         "milestones": board_mod.active_milestones(proj),
         "history": history,
     }
