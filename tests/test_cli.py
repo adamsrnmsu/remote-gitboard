@@ -8,6 +8,7 @@ own .env and boards/ never leak in.
 
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -2198,3 +2199,60 @@ def test_tui_offline_has_no_sync_or_pull(tui, tmp_path):
     path = write_spec(tmp_path)
     tui.run(["y", "f", "q"], "--from", path, "--no-guide")
     assert "offline — not here" in tui.last
+
+
+# --- tui: P and B hand the terminal to perch or Budgie (PI_SUITE) -------------
+
+SUITE = {
+    "perch": {"cwd": "/ws", "argv": ["perch", "tui"]},
+    "budgie": {"cwd": "/b", "argv": ["budgie", "tui"]},
+}
+
+
+@pytest.fixture
+def execs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(os, "chdir", lambda d: calls.append(("chdir", d)))
+    monkeypatch.setattr(os, "execvp", lambda f, a: calls.append(("exec", f, a)))
+    return calls
+
+
+def test_tui_shift_p_and_b_exec_the_target(tui, tmp_path, monkeypatch, execs):
+    monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
+    path = write_spec(tmp_path)
+    tui.run(["P"], "--from", path, "--no-guide")
+    tui.run(["B"], "--from", path, "--no-guide")
+    assert execs == [
+        ("chdir", "/ws"),
+        ("exec", "perch", ["perch", "tui"]),
+        ("chdir", "/b"),
+        ("exec", "budgie", ["budgie", "tui"]),
+    ]
+
+
+def test_tui_switch_without_pi_suite_stays_and_says_why(
+    tui, tmp_path, monkeypatch, execs
+):
+    monkeypatch.delenv("PI_SUITE", raising=False)
+    path = write_spec(tmp_path)
+    tui.run(["P", "q"], "--from", path, "--no-guide")
+    assert "start from perch tui to switch apps" in tui.last
+    assert execs == []
+
+
+def test_tui_shift_g_still_toggles_the_guide(tui, tmp_path, monkeypatch, execs):
+    monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
+    path = write_spec(tmp_path)
+    tui.run(["G", "q"], "--from", path, "--no-guide")
+    assert "guide on" in tui.text
+    assert execs == []
+
+
+def test_tui_switch_that_cannot_exec_exits_1(tui, tmp_path, monkeypatch):
+    gone = {"perch": {"cwd": str(tmp_path / "gone"), "argv": ["perch", "tui"]}}
+    monkeypatch.setenv("PI_SUITE", json.dumps(gone))
+    path = write_spec(tmp_path)
+    tui.keys = ["P"]
+    r = runner.invoke(app, ["tui", "--from", path, "--no-guide"])
+    assert r.exit_code == 1
+    assert "switch failed" in tui.errbuf.getvalue()

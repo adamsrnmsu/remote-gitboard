@@ -154,6 +154,31 @@ def _run(fn):
         raise typer.Exit(1) from e
 
 
+SUITE = "PI_SUITE"  # set by `perch tui`: app -> {"cwd", "argv"}
+SWITCH = {"P": "perch", "B": "budgie"}  # shifted, read before lowercasing
+NO_SUITE = "start from perch tui to switch apps"
+
+
+def _suite_entry(name):
+    """$PI_SUITE's entry for ``name``; None when unset, malformed or absent."""
+    try:
+        entry = json.loads(os.environ.get(SUITE, ""))[name]
+        cwd, argv = str(entry["cwd"]), [str(a) for a in entry["argv"]]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return {"cwd": cwd, "argv": argv} if argv else None
+
+
+def _switch(entry):
+    """Become the other app. Call only once Live and termios are restored."""
+    try:
+        os.chdir(entry["cwd"])
+        os.execvp(entry["argv"][0], entry["argv"])
+    except OSError as e:
+        err().print(f"[logging.level.error]error[/] switch failed: {e}")
+        raise typer.Exit(1) from e
+
+
 def _shortest(path):
     """Relative to the cwd when that is shorter — absolute paths are noise."""
     rel = os.path.relpath(str(path), Path.cwd())
@@ -1784,6 +1809,7 @@ def tui(
                 ("c", "stage a comment on a card; a pushes it"),
                 ("n", "new card: a title, then a column"),
                 ("g", "show or hide the guide panels"),
+                ("P", "perch, B Budgie: switch app (when opened from perch tui)"),
                 ("q", "quit"),
             ]
             grid = Table(box=None, show_header=False, padding=(0, 1))
@@ -1809,8 +1835,15 @@ def tui(
             refetch()
             draw()
             while True:
-                k = _key().lower()
+                raw = _key()
+                k = raw.lower()
                 st["status"] = st["extra"] = st["prompt"] = None
+                if raw in SWITCH:  # before lowercasing turns P into plan
+                    if _suite_entry(SWITCH[raw]):
+                        return SWITCH[raw]
+                    st["status"] = Text(NO_SUITE, "muted")
+                    draw()
+                    continue
                 st["tip"] = guide_mod.panel(k) if st["guide"] else None
                 if k == "q":
                     return
@@ -2134,7 +2167,9 @@ def tui(
                             st["status"] = Text("not pushed", "muted")
                 draw()
 
-    _run(go)
+    target = _run(go)
+    if target:
+        _switch(_suite_entry(target))
 
 
 def _review_first(row):
