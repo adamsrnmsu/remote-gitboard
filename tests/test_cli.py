@@ -566,6 +566,27 @@ def test_stats_dump_round_trips_through_from(gl, tmp_path, monkeypatch):
     assert again.stdout == r.stdout
 
 
+def test_stats_history_days_sets_only_the_dump_span(gl, tmp_path, monkeypatch):
+    _, data = history_file(tmp_path)
+    monkeypatch.setattr(
+        board_mod,
+        "fetch_history",
+        lambda p, b, since: (data["history"], data["columns"]),
+    )
+    r = runner.invoke(
+        app, ["stats", "grp/proj", "--dump", "h3.json", "--history-days", "276"]
+    )
+    assert r.exit_code == 0, r.output
+    dumped = json.loads((tmp_path / "h3.json").read_text())
+    span = datetime.fromisoformat(dumped["fetched_at"]) - datetime.fromisoformat(
+        dumped["since"]
+    )
+    assert span.days == 276
+    assert r.stdout.startswith("# Team — 7 days to")
+    row = json.loads((tmp_path / "reports/stats.jsonl").read_text().splitlines()[-1])
+    assert row["days"] == 7
+
+
 def test_stats_counts_a_verdict_in_the_fetchs_own_second(gl, tmp_path, monkeypatch):
     """gb-6xo: fetched_at kept whole seconds, so 18:30:00.103 fell outside the
     half-open window ending 18:30:00; the dump now keeps the fraction."""

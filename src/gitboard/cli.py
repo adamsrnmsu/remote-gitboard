@@ -988,7 +988,7 @@ def _movement(console, batches, days, repo, verifiers=None):
         console.print(f"[muted]{count} verdict(s) by {name} matched no assignee[/]")
 
 
-def _history(project, board_name, days, from_file=None, dump=None):
+def _history(project, board_name, days, from_file=None, dump=None, history_days=None):
     """(history, columns, meta): the issue history behind stats and digest.
 
     `--from` reads a dump and never opens a connection; otherwise fetch back
@@ -1002,7 +1002,9 @@ def _history(project, board_name, days, from_file=None, dump=None):
     now = datetime.now(UTC)
     proj, board = board_mod.fetch(project, board_name)
     # far enough back that a weekly run still has samples to estimate from
-    since = now - timedelta(days=max(2 * days, estimate_mod.HISTORY_DAYS))
+    since = now - timedelta(
+        days=max(2 * days, history_days or estimate_mod.HISTORY_DAYS)
+    )
     history, columns = board_mod.fetch_history(proj, board, since=since)
     meta = {
         "project": proj.path_with_namespace,
@@ -1059,6 +1061,11 @@ def stats(
     dump: str | None = typer.Option(
         None, "--dump", help="Save the fetched history as JSON for --from."
     ),
+    history_days: int | None = typer.Option(
+        None,
+        "--history-days",
+        help="How far back the fetch (and --dump) reaches; the summary keeps --days.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="The summary dict as JSON."),
     weeks: int | None = typer.Option(
         None,
@@ -1082,7 +1089,7 @@ def stats(
             return
         path = None if from_file else _need(project, "project", "project")
         history, columns, meta = _history(
-            path, board_name or get_config().board, days, from_file, dump
+            path, board_name or get_config().board, days, from_file, dump, history_days
         )
         summary, _ = _summary(history, columns, meta, days)
         if as_json:

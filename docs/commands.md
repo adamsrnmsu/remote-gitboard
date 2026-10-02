@@ -42,6 +42,7 @@ gitboard estimate boards/x.yaml --history h.json  # same from a `stats --dump` f
 # numbers and digests (read_api token; --from FILE works with no network)
 gitboard stats group/project                # team markdown: open by column/epic/story/milestone, done, cycle, verify, stuck
 gitboard stats group/project --dump h.json  # ...and keep the fetched history for offline reruns
+gitboard stats group/project --dump h.json --history-days 276  # ...reaching 276 days back (default max(2*--days, 90)); the summary still uses --days
 gitboard stats --from h.json [--json]       # same, from the dump; --json prints the summary dict
                                             # dump: history[] per issue; `questions` = [{ts, author, text}] of `Q:` notes nobody else answered since ([] = none; absent in older dumps); `since` = ISO start of the fetched history window (absent in older dumps = unknown)
 gitboard stats group/project --weeks 8      # the trend table from reports/stats.jsonl; no network
