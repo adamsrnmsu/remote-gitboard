@@ -817,6 +817,17 @@ def test_by_milestone_tally_and_old_row():
     assert "By milestone" not in stats.render_team_md(none), "absent when empty"
 
 
+def test_by_milestone_drops_rows_with_nothing_in_the_window():
+    old = {"milestone": "Old", "milestone_due": "2026-01-01"}
+    live = {"milestone": "Live", "milestone_due": "2026-12-01"}
+    h = [
+        {**issue(1, created=1, closed=2, labels=["Done"]), **old},
+        {**issue(2, created=1), **live},
+    ]
+    s = stats.summarise(h, COLUMNS, START, END, NOW)
+    assert list(s["by_milestone"]) == ["Live"]
+
+
 def test_blockers_md_collapses_no_milestone_only_past_five():
     def md(n):
         d = {"no_milestone": [{"iid": k, "title": "t", "detail": ""} for k in range(n)]}

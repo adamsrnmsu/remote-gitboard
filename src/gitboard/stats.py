@@ -376,6 +376,12 @@ def summarise(history, columns, start, end, now):
     added = [i for i in history if _in(parse_ts(i["created_at"]), start, end)]
     for m, n in tally(added, lambda i: i.get("milestone")).items():
         by_milestone[m]["added"] = n
+    # a long dump seeds milestones that finished long ago: skip the all-zero ones
+    by_milestone = {
+        m: v
+        for m, v in by_milestone.items()
+        if any(v[k] for k in ("open", "done", "added"))
+    }
     prev = _period(history, start - (end - start), start)
     cur = _period(history, start, end)
     weak = weak_verdicts(history, start, end)
