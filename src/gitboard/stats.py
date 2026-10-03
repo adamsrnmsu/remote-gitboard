@@ -14,7 +14,7 @@ from email.utils import format_datetime
 from pathlib import Path
 from statistics import mean, median
 
-from gitboard import graph, ingest, report
+from gitboard import blocks, graph, ingest, report
 
 FLAGS = graph.FLAGS
 VERIFY, REVIEW, DONE, FAILED = "Verify", "Review", "Done", "Failed"
@@ -604,25 +604,37 @@ def _n(v):
     return "–" if v is None else v
 
 
-def _trend(pair):
+def _trend_parts(pair):
+    """(`5 ▲`, `4`): the latest value with its arrow, and the previous one."""
     prev, now = pair
     arrow = (
         ""
         if prev is None or now is None or prev == now
         else (" ▲" if now > prev else " ▼")
     )
-    return f"{_n(now)}{arrow} (prev {_n(prev)})"
+    return f"{_n(now)}{arrow}", str(_n(prev))
+
+
+def _trend(pair):
+    value, prev = _trend_parts(pair)
+    return f"{value} (prev {prev})"
+
+
+def _tbl(rows, *head):
+    return blocks.table(list(head), [[str(_n(c)) for c in r] for r in rows])
 
 
 def _table(rows, *head):
-    if not rows:
-        return "_none_"
-    body = ["| " + " | ".join(str(_n(c)) for c in r) + " |" for r in rows]
-    return "\n".join(["| " + " | ".join(head) + " |", "|" + "---|" * len(head), *body])
+    return blocks.to_md([_tbl(rows, *head)])
+
+
+def _bars(d):
+    ranked = sorted(d.items(), key=lambda kv: (-kv[1], str(kv[0])))
+    return blocks.bars([(str(_n(k)), n) for k, n in ranked])
 
 
 def _counts(d):
-    return _table(sorted(d.items(), key=lambda kv: (-kv[1], str(kv[0]))), "name", "n")
+    return blocks.to_md([_bars(d)])
 
 
 def milestone_lines(by_ms):
@@ -637,10 +649,10 @@ def _milestones(by_ms):
     if not by_ms:
         return []
     lines = [
-        f"- {m}{f' (due {d})' if d else ''}: {o} open, {dn} done, +{a} added"
+        f"{m}{f' (due {d})' if d else ''}: {o} open, {dn} done, +{a} added"
         for m, d, o, dn, a in milestone_lines(by_ms)
     ]
-    return ["", "### By milestone", *lines]
+    return [blocks.heading("By milestone", 3), blocks.bullets(lines)]
 
 
 def _stat_row(label, s):
@@ -650,7 +662,7 @@ def _stat_row(label, s):
 def _weak_table(weak, verifier=False):
     """Verified with steps unticked, or minutes after entering Verify."""
     who = ("verifier",) if verifier else ()
-    return _table(
+    return _tbl(
         [
             (
                 w["iid"],
@@ -669,7 +681,7 @@ def _weak_table(weak, verifier=False):
 
 def _tight_table(tight, who=False):
     """Due dates earlier than the finish the person's history expects."""
-    return _table(
+    return _tbl(
         [
             (t["iid"], t["title"], *([t["assignee"]] if who else []),
              t["due"], t["expected"], t["basis"])
@@ -689,15 +701,14 @@ def lower_bound(m):
     )
 
 
-def _late_md(items):
+def _late_blocks(items):
     """Milestones forecast past their due date; no section when none are."""
     if not items:
         return []
     rows = [(m["milestone"], m["due"], m["expected"], lower_bound(m)) for m in items]
     return [
-        "### Late milestones",
-        _table(rows, "milestone", "due", "expected", "forecast"),
-        "",
+        blocks.heading("Late milestones", 3),
+        _tbl(rows, "milestone", "due", "expected", "forecast"),
     ]
 
 
@@ -706,21 +717,29 @@ def blocker_items(d):
     return [{"kind": k, **x} for k in FLAGS for x in d.get(k, [])]
 
 
-def _blockers_md(d, heading):
-    """Where the board disagrees with its links; no section when it agrees."""
+def _blocker_rows(d):
+    """Where the board disagrees with its links, as table rows; [] when it agrees."""
     items = blocker_items(d)
-    if not items:
-        return []
     rows = [(x["kind"], f"#{x['iid']} {x['title']}", x["detail"]) for x in items]
     if (n := sum(x["kind"] == "no_milestone" for x in items)) > 5:
         keep = [r for r in rows if r[0] != "no_milestone"]
         rows = keep + [r for r in rows if r[0] == "no_milestone"][:5]
         rows.append(("no_milestone", f"+{n - 5} more", ""))
+    return rows
+
+
+def _blockers_md(d, heading):
+    if not (rows := _blocker_rows(d)):
+        return []
     return [heading, _table(rows, "kind", "card", "detail"), ""]
 
 
 def render_weekly_md(rows):
-    return _table(
+    return blocks.to_md([_weekly_table(rows)])
+
+
+def _weekly_table(rows):
+    return _tbl(
         [
             (
                 (r.get("period_end") or "")[:10],
@@ -767,48 +786,48 @@ def render_milestone_trend_md(rows):
     )
 
 
-def render_team_md(summary, weekly=None):
+def team_blocks(summary, weekly=None):
+    """The team report as blocks; `render_team_md` is these as markdown."""
     p, o, t, v, f, tr = (
         summary[k] for k in ("period", "open", "throughput", "verify", "flow", "trend")
     )
     cov = "–" if v["coverage"] is None else f"{v['coverage']:.0%}"
-    parts = [
-        f"# Team — {p['days']} days to {p['end'][:10]}",
-        "",
-        f"**Open {o['total']}** ({o['unassigned']} unassigned) · "
+    done, done_prev = _trend_parts(tr["done"])
+    h = blocks.heading
+    headline = blocks.figures(
+        [
+            blocks.figure("Open", str(o["total"]), f"{o['unassigned']} unassigned"),
+            blocks.figure("Opened", str(t["opened"])),
+            blocks.figure("Done", done, f"prev {done_prev}"),
+            blocks.figure("Closed", str(t["closed"])),
+        ],
+        md=f"**Open {o['total']}** ({o['unassigned']} unassigned) · "
         f"opened {t['opened']} · done {_trend(tr['done'])} · closed {t['closed']}",
-        "",
-        "## Open",
-        "",
-        "### By column",
-        _counts(o["by_column"]),
-        "",
-        "### By epic",
-        _counts(o["by_epic"]),
-        "",
-        "### By story",
-        _counts(o["by_story"]),
+    )
+    out = [
+        h(f"Team — {p['days']} days to {p['end'][:10]}", 1),
+        headline,
+        h("Open"),
+        h("By column", 3),
+        _bars(o["by_column"]),
+        h("By epic", 3),
+        _bars(o["by_epic"]),
+        h("By story", 3),
+        _bars(o["by_story"]),
         *_milestones(summary.get("by_milestone")),
-        "",
-        "### By type",
-        _counts(o["by_type"]),
-        "",
-        "### By assignee",
-        _counts(o["by_assignee"]),
-        "",
-        "## Done this period",
-        "",
-        "### By assignee",
-        _counts(t["done_by"]["assignee"]),
-        "",
-        "### By epic",
-        _counts(t["done_by"]["epic"]),
-        "",
-        "### By story",
-        _counts(t["done_by"]["story"]),
-        "",
-        "## Time",
-        _table(
+        h("By type", 3),
+        _bars(o["by_type"]),
+        h("By assignee", 3),
+        _bars(o["by_assignee"]),
+        h("Done this period"),
+        h("By assignee", 3),
+        _bars(t["done_by"]["assignee"]),
+        h("By epic", 3),
+        _bars(t["done_by"]["epic"]),
+        h("By story", 3),
+        _bars(t["done_by"]["story"]),
+        h("Time"),
+        _tbl(
             [
                 _stat_row("cycle (created → done)", t["cycle_days"]),
                 _stat_row("in Verify", v["verify_days"]),
@@ -819,60 +838,66 @@ def render_team_md(summary, weekly=None):
             "mean",
             "n",
         ),
-        "",
-        f"Trend: cycle median {_trend(tr['cycle_median'])}, "
-        f"verify median {_trend(tr['verify_median'])}",
-        "",
-        "## Verification",
-        "",
-        f"Verified {v['verified']}, failed {v['failed']}, coverage {cov} · "
-        f"queue {len(v['queue'])}, oldest {_n(v['oldest_days'])} days",
-        "",
-        "### Verifiers",
-        _counts(v["verifiers"]),
-        "",
-        "### Weak verdicts",
+        blocks.text(
+            f"Trend: cycle median {_trend(tr['cycle_median'])}, "
+            f"verify median {_trend(tr['verify_median'])}",
+            "dim",
+        ),
+        h("Verification"),
+        blocks.text(
+            f"Verified {v['verified']}, failed {v['failed']}, coverage {cov} · "
+            f"queue {len(v['queue'])}, oldest {_n(v['oldest_days'])} days"
+        ),
+        h("Verifiers", 3),
+        _bars(v["verifiers"]),
+        h("Weak verdicts", 3),
         _weak_table(v.get("weak", []), verifier=True),
-        "",
-        "### Queue",
-        _table(
+        h("Queue", 3),
+        _tbl(
             [(q["iid"], q["title"], q["assignee"], q["days"]) for q in v["queue"]],
             "iid",
             "title",
             "assignee",
             "days",
         ),
-        "",
-        "## Flow",
-        "",
-        f"Overdue {f['overdue']} · stale {f['stale']} · re-verify {f['reverify']} · "
-        f"multi-scope {', '.join(f'#{i}' for i in f['multi_scope']) or '–'}",
-        "",
-        "### Stuck",
-        _table(f["stuck"], "iid", "column", "days"),
-        "",
-        "### Tight dates",
+        h("Flow"),
+        blocks.text(
+            f"Overdue {f['overdue']} · stale {f['stale']} · "
+            f"re-verify {f['reverify']} · "
+            f"multi-scope {', '.join(f'#{i}' for i in f['multi_scope']) or '–'}"
+        ),
+        h("Stuck", 3),
+        _tbl(f["stuck"], "iid", "column", "days"),
+        h("Tight dates", 3),
         _tight_table(f.get("tight", []), who=True),
-        "",
-        *_late_md(f.get("late_milestones", [])),
-        *_blockers_md(f, "### Blockers"),
-        "### WIP",
-        _counts(f["wip"]),
-        "",
-        "### Questions waiting",
-        _table(
+        *_late_blocks(f.get("late_milestones", [])),
+        *(
+            [
+                h("Blockers", 3),
+                _tbl(rows, "kind", "card", "detail"),
+            ]
+            if (rows := _blocker_rows(f))
+            else []
+        ),
+        h("WIP", 3),
+        _bars(f["wip"]),
+        h("Questions waiting", 3),
+        _tbl(
             [(q["iid"], q["author"], q["text"], q["days"]) for q in f["questions"]],
             "iid",
             "asked by",
             "question",
             "days",
         ),
-        "",
     ]
-    md = "\n".join(parts)
     if weekly is not None:
-        md += "\n## 8-week trend\n" + render_weekly_md(weekly)
-    return md
+        out += [h("8-week trend"), _weekly_table(weekly)]
+    return out
+
+
+def render_team_md(summary, weekly=None):
+    md = blocks.to_md(team_blocks(summary, weekly))
+    return md if weekly is not None else md + "\n"
 
 
 def render_person_md(person, summary, username):
@@ -892,7 +917,7 @@ def render_person_md(person, summary, username):
         ),
         "",
         "## Your weak verdicts",
-        _weak_table(person.get("weak", [])),
+        blocks.to_md([_weak_table(person.get("weak", []))]),
         "",
         "## Overdue",
         _table(
@@ -903,7 +928,7 @@ def render_person_md(person, summary, username):
         ),
         "",
         "## Tight dates",
-        _tight_table(person.get("tight", [])),
+        blocks.to_md([_tight_table(person.get("tight", []))]),
         "",
         *_blockers_md(person, "## Your blockers"),
         "## Open by column",

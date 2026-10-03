@@ -26,6 +26,7 @@ from rich.table import Table
 from rich.text import Text
 
 from gitboard import apply as apply_mod
+from gitboard import blocks as blocks_mod
 from gitboard import board as board_mod
 from gitboard import client, graph_html
 from gitboard import edit as edit_mod
@@ -1139,7 +1140,10 @@ def stats(
             print(json.dumps(summary, default=str, indent=2))
         else:
             weekly = _weekly(meta["project"], meta["board"])
-            print(stats_mod.render_team_md(summary, weekly=weekly))
+            if blocks_mod.wanted():
+                blocks_mod.emit(stats_mod.team_blocks(summary, weekly))
+            else:
+                print(stats_mod.render_team_md(summary, weekly=weekly))
 
     _run(go)
 

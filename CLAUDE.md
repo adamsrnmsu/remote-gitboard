@@ -40,6 +40,7 @@ Gantt charts: own, current milestone, project; the <user>.md and the .eml text p
 (which card waits on which, one tree per milestone). Every
 `stats`/`digest` run appends one row per board to `reports/stats.jsonl`
 (deduped per week); `stats --weeks N` (plus a per-milestone open (+added) table) and the mails' "8-week trend" read it.
+`stats` with `PI_BLOCKS=1` prints JSON-lines blocks (`src/gitboard/blocks.py`) instead of markdown; the format is perch/docs/superpowers/specs/2026-10-02-tui-blocks-design.md.
 Docs: `make docs` (Sphinx, `docs/`). See README "Offline".
 
 `make` alone lists targets. For flags the targets don't expose, call the CLI
