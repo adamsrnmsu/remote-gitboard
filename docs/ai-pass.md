@@ -52,7 +52,7 @@ the moves and the plan table is the question.
 ## The write path
 
 Exactly one: edit the board's YAML in `boards/`, run `plan`, show the table,
-wait for a yes in the conversation, then `push --yes`. Never an `push`
+wait for a yes in the conversation, then `push --yes`. Never a `push`
 whose `plan` you have not just seen. No MCP write tools, no direct API calls.
 `push` is additive-only, which bounds the blast radius: the worst case is an
 extra issue or a wrong label, never a deletion.

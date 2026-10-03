@@ -71,7 +71,7 @@ proposal in Staged, or say it belongs to none.
 
 **Write path.** Exactly one: edit the board's YAML in `boards/`, run
 `gitboard plan <spec>`, show its table, wait for a yes in this conversation,
-then `gitboard push <spec> --yes`. Never an `push` whose `plan` the user
+then `gitboard push <spec> --yes`. Never a `push` whose `plan` the user
 has not just seen; never `sync`, MCP write tools or direct API calls.
 
 Rules for the YAML:
