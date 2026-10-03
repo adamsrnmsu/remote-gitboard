@@ -171,6 +171,8 @@ full-screen loop; resizing redraws.
 | `f` | pull: replace the YAML with the live board; asks y/n first and lists any staged edits that would be lost |
 | `m` | migrate comments; `b` in the destination prompt picks another project; y/n to close the source |
 | `g` | show or hide the guide panels for this session |
+| `P` | perch on the same project (Shift+p): instant inside `perch suite`, else gitboard closes and perch opens |
+| `B` | Budgie on the same project (Shift+b), the same way |
 | `?` | help |
 | `q` | quit |
 

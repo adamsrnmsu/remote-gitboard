@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import typer
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -2216,6 +2217,7 @@ def execs(monkeypatch):
 
 
 def test_tui_shift_p_and_b_exec_the_target(tui, tmp_path, monkeypatch, execs):
+    monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
     path = write_spec(tmp_path)
     tui.run(["P"], "--from", path, "--no-guide")
@@ -2254,6 +2256,106 @@ def test_tui_switch_that_cannot_exec_exits_1(tui, tmp_path, monkeypatch):
     r = runner.invoke(app, ["tui", "--from", path, "--no-guide"])
     assert r.exit_code == 1
     assert "switch failed" in tui.errbuf.getvalue()
+
+
+SUITE_TMUX = "/private/tmp/tmux-501/pi,123,0"
+TMUX = ["tmux", "-L", "pi"]
+P_KEY = json.dumps(SUITE["perch"], sort_keys=True)
+
+
+@pytest.fixture
+def hops(monkeypatch):
+    """In perch suite; records tmux argv; list-windows answers .listing."""
+    calls = []
+    real = subprocess.run  # other subprocess users on the tui path stay real
+
+    class Fake:
+        listing = ""
+        stderr = ""
+
+    def run(argv, **kw):
+        if argv[:1] != ["tmux"]:
+            return real(argv, **kw)
+        calls.append(list(argv))
+        if "list-windows" in argv:
+            return subprocess.CompletedProcess(argv, 0, Fake.listing, "")
+        return subprocess.CompletedProcess(
+            argv, 1 if Fake.stderr else 0, "", Fake.stderr
+        )
+
+    Fake.calls = calls
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setenv("TMUX", SUITE_TMUX)
+    return Fake
+
+
+def test_in_suite_only_on_the_pi_socket(monkeypatch):
+    monkeypatch.setenv("TMUX", SUITE_TMUX)
+    assert cli._in_suite()
+    monkeypatch.setenv("TMUX", "/private/tmp/tmux-501/default,1,0")
+    assert not cli._in_suite()
+    monkeypatch.delenv("TMUX")
+    assert not cli._in_suite()
+
+
+def test_hop_rule(hops, monkeypatch):
+    monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
+    env = f"PI_SUITE={json.dumps(SUITE)}"
+    hops.listing = f"perch\t{P_KEY}\n"
+    assert cli._hop("perch", SUITE["perch"]) is None
+    assert hops.calls[-1] == [*TMUX, "select-window", "-t", "pi:=perch"]
+    hops.listing = "gitboard\t{}\n"
+    cli._hop("perch", SUITE["perch"])
+    assert hops.calls[-1] == [
+        *TMUX, "new-window", "-t", "pi:", "-n", "perch",
+        "-c", "/ws", "-e", env, "perch", "tui",
+        ";", "set-option", "-w", "-t", "pi:=perch", "@entry", P_KEY,
+    ]  # fmt: skip
+    hops.listing = "perch\t\n"
+    cli._hop("perch", SUITE["perch"])
+    assert hops.calls[-1] == [
+        *TMUX, "respawn-window", "-k", "-t", "pi:=perch",
+        "-c", "/ws", "-e", env, "perch", "tui",
+        ";", "set-option", "-w", "-t", "pi:=perch", "@entry", P_KEY,
+        ";", "select-window", "-t", "pi:=perch",
+    ]  # fmt: skip
+
+
+def test_tui_in_suite_shift_p_hops_and_stays(tui, tmp_path, monkeypatch, execs, hops):
+    monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
+    hops.listing = f"perch\t{P_KEY}\n"
+    path = write_spec(tmp_path)
+    tui.run(["P", "B", "q"], "--from", path, "--no-guide")
+    assert execs == []
+    assert [c[3] for c in hops.calls] == [
+        "list-windows", "select-window", "list-windows", "new-window",
+    ]  # fmt: skip
+
+
+def test_tui_in_suite_a_failed_hop_shows_on_the_status_line(
+    tui, tmp_path, monkeypatch, execs, hops
+):
+    monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
+    hops.stderr = "no server running"
+    path = write_spec(tmp_path)
+    tui.run(["P", "q"], "--from", path, "--no-guide")
+    assert "switch failed: no server running" in tui.text
+    assert execs == []
+
+
+def test_tui_in_suite_without_pi_suite_runs_no_tmux(
+    tui, tmp_path, monkeypatch, execs, hops
+):
+    monkeypatch.delenv("PI_SUITE", raising=False)
+    path = write_spec(tmp_path)
+    tui.run(["P", "q"], "--from", path, "--no-guide")
+    assert "start from perch tui to switch apps" in tui.last
+    assert hops.calls == []
+
+
+def test_switch_with_an_empty_program_exits_1(tmp_path):
+    with pytest.raises(typer.Exit):
+        cli._switch({"cwd": str(tmp_path), "argv": [""]})
 
 
 # --- tui: GitLab down stays up (perch-8xc.3) ----------------------------------
@@ -2298,6 +2400,7 @@ def test_tui_unreachable_then_r_retries_into_the_board(down):
 
 
 def test_tui_unreachable_shift_p_still_switches(down, monkeypatch, execs):
+    monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("PI_SUITE", json.dumps(SUITE))
     down.run(["P"], "grp/proj", "--no-guide")
     assert execs == [("chdir", "/ws"), ("exec", "perch", ["perch", "tui"])]

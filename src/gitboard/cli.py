@@ -17,6 +17,7 @@ The CLI. Everything else in the package is a module it calls:
 import codecs
 import json
 import os
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -175,9 +176,52 @@ def _switch(entry):
     try:
         os.chdir(entry["cwd"])
         os.execvp(entry["argv"][0], entry["argv"])
-    except OSError as e:
+    except (OSError, ValueError) as e:  # ValueError: an empty program name
         err().print(f"[logging.level.error]error[/] switch failed: {e}")
         raise typer.Exit(1) from e
+
+
+PI = "pi"  # perch suite's tmux: the server (-L pi) and its session
+
+
+def _in_suite():
+    """Inside `perch suite`: hop to the app's tmux window instead of exec."""
+    return os.path.basename(os.environ.get("TMUX", "").split(",")[0]) == PI
+
+
+def _hop(name, entry):
+    """Bring ``name``'s window to the front; tmux's complaint, or None.
+
+    Same entry running there: just select it. Another (another project) or
+    none recorded: restart that window only. No window (the app was quit):
+    open it. A copy of perch/core/suite.py's rule: a change goes in all three.
+    """
+    tmux, window = ["tmux", "-L", PI], f"{PI}:={name}"
+    key = json.dumps(entry, sort_keys=True)
+    env = f"{SUITE}={os.environ.get(SUITE, '')}"
+    start = ["-c", entry["cwd"], "-e", env, *entry["argv"]]
+    mark = [";", "set-option", "-w", "-t", window, "@entry", key]
+    try:
+        listing = subprocess.run(
+            [*tmux, "list-windows", "-t", PI, "-F", "#{window_name}\t#{@entry}"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        entries = dict(
+            line.split("\t", 1) for line in listing.splitlines() if "\t" in line
+        )
+        if name not in entries:
+            argv = [*tmux, "new-window", "-t", f"{PI}:", "-n", name, *start]
+            argv += mark
+        elif entries[name] == key:
+            argv = [*tmux, "select-window", "-t", window]
+        else:
+            argv = [*tmux, "respawn-window", "-k", "-t", window, *start, *mark,
+                    ";", "select-window", "-t", window]  # fmt: skip
+        done = subprocess.run(argv, capture_output=True, text=True)
+    except OSError as e:
+        return str(e)
+    return (done.stderr.strip() or "tmux failed") if done.returncode else None
 
 
 def _shortest(path):
@@ -2179,9 +2223,18 @@ def tui(
                 k = raw.lower()
                 st["status"] = st["extra"] = st["prompt"] = None
                 if raw in SWITCH:  # before lowercasing turns P into plan
-                    if _suite_entry(SWITCH[raw]):
+                    st["tip"] = None  # perch-dvq item 2: no stale guide tip
+                    entry = _suite_entry(SWITCH[raw])
+                    if entry and not _in_suite():
                         return SWITCH[raw]
-                    st["status"] = Text(NO_SUITE, "muted")
+                    if entry:  # perch suite: hop, keep the board running
+                        why = _hop(SWITCH[raw], entry)
+                        if why:
+                            st["status"] = Text(
+                                f"switch failed: {why}", "logging.level.error"
+                            )
+                    else:
+                        st["status"] = Text(NO_SUITE, "muted")
                     draw()
                     continue
                 st["tip"] = guide_mod.panel(k) if st["guide"] else None
