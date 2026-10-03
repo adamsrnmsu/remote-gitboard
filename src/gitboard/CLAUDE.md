@@ -44,6 +44,11 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   ticked, or that came within `FAST_VERIFY` of entering Verify — a flag in
   stats/digest (`verify.weak`, `weak` in `stats.jsonl`), never a move. `emails:` in the
   spec maps username to address for `digest`.
+  Team report is built once as blocks (`team_blocks`);
+  `render_team_md = to_md(team_blocks(...))`, byte-identical (golden test
+  `tests/golden_team_md.json`). `PI_BLOCKS=1` makes `stats` emit JSON-lines
+  blocks for perch tui; contract at
+  `perch/docs/superpowers/specs/2026-10-02-tui-blocks-design.md`.
 - **`mail.py`** — the HTML digest, stdlib only. Outlook on Windows renders
   with Word, so: 600px tables, inline styles, px widths, no images, no SVG,
   every `td` with `bgcolor` and every text run with a `color` (that is what

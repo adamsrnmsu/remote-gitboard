@@ -101,6 +101,13 @@ def test_emit_one_line_per_block_keeping_unicode():
     assert json.loads(lines[1])["items"] == ["a"]
 
 
+def test_emit_refuses_non_finite_numbers_and_writes_nothing():
+    out = io.StringIO()
+    with pytest.raises(ValueError):
+        blocks.emit([blocks.heading("x"), blocks.bars([("a", float("nan"))])], out)
+    assert out.getvalue() == ""
+
+
 def test_to_md_each_block_type():
     md = blocks.to_md(
         [

@@ -52,10 +52,11 @@ def bullets(items, md=None):
 
 
 def emit(blocks, out=None):
-    """One JSON line per block, to stdout unless told otherwise."""
+    """One JSON line per block, to stdout unless told otherwise. NaN/Infinity
+    are not JSON: ValueError, raised before anything is written."""
     out = out or sys.stdout
-    for b in blocks:
-        out.write(json.dumps(b, ensure_ascii=False) + "\n")
+    lines = [json.dumps(b, ensure_ascii=False, allow_nan=False) for b in blocks]
+    out.write("".join(line + "\n" for line in lines))
     out.flush()
 
 
