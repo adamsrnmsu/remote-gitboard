@@ -1931,9 +1931,15 @@ def tui(
                 elif k == "b":
                     picked = pick_board()
                     if picked:
+                        was = st["path"], st["name"]
                         st["path"], st["name"] = picked
                         draw(busy=f"reading {st['path']}…")
-                        refetch()
+                        try:
+                            refetch()
+                        except BaseException:
+                            # the old board is still shown; r must retry it
+                            st["path"], st["name"] = was
+                            raise
                     else:
                         st["status"] = st["status"] or Text("cancelled", "muted")
                 elif k == "e":
