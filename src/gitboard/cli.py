@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -168,7 +169,7 @@ def _suite_entry(name):
         cwd, argv = str(entry["cwd"]), [str(a) for a in entry["argv"]]
     except (ValueError, KeyError, TypeError):
         return None
-    return {"cwd": cwd, "argv": argv} if argv else None
+    return {**entry, "cwd": cwd, "argv": argv} if argv else None
 
 
 def _switch(entry):
@@ -201,27 +202,39 @@ def _hop(name, entry):
     env = f"{SUITE}={os.environ.get(SUITE, '')}"
     start = ["-c", entry["cwd"], "-e", env, *entry["argv"]]
     mark = [";", "set-option", "-w", "-t", window, "@entry", key]
+    list_windows = [*tmux, "list-windows", "-t", PI, "-F", "#{window_name}\t#{@entry}"]
+
+    def entries():
+        listed = subprocess.run(list_windows, capture_output=True, text=True)
+        found = {}
+        for line in listed.stdout.splitlines():  # the first window of a name wins
+            n, tab, e = line.partition("\t")
+            if tab:
+                found.setdefault(n, e)
+        return listed, found
+
     try:
-        listing = subprocess.run(
-            [*tmux, "list-windows", "-t", PI, "-F", "#{window_name}\t#{@entry}"],
-            capture_output=True,
-            text=True,
-        ).stdout
-        entries = dict(
-            line.split("\t", 1) for line in listing.splitlines() if "\t" in line
-        )
-        if name not in entries:
+        listed, found = entries()
+        if listed.returncode:  # an empty listing would spawn a duplicate
+            return listed.stderr.strip() or "tmux failed"
+        if name not in found:
             argv = [*tmux, "new-window", "-t", f"{PI}:", "-n", name, *start]
             argv += mark
-        elif entries[name] == key:
+        elif found[name] == key:
             argv = [*tmux, "select-window", "-t", window]
         else:
             argv = [*tmux, "respawn-window", "-k", "-t", window, *start, *mark,
                     ";", "select-window", "-t", window]  # fmt: skip
         done = subprocess.run(argv, capture_output=True, text=True)
+        if done.returncode:
+            return done.stderr.strip() or "tmux failed"
+        if found.get(name) != key:
+            time.sleep(0.5)  # new-window exits 0 even if the app crashes
+            if name not in entries()[1]:
+                return f"{name} exited at startup"
     except OSError as e:
         return str(e)
-    return (done.stderr.strip() or "tmux failed") if done.returncode else None
+    return None
 
 
 def _shortest(path):
