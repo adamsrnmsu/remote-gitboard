@@ -2418,3 +2418,19 @@ def test_tui_gitlab_lost_mid_session_stays_up(down):
     down.run(["r", "q"], "grp/proj", "--no-guide")
     assert DOWN in down.last
     assert "defined by boards/x.yaml" in down.last  # the old board stays
+
+
+def test_tui_failed_board_switch_keeps_the_old_board_for_r(live_tui, gl, monkeypatch):
+    real = board_mod.fetch
+
+    def fetch(path, name=None):
+        asked.append(name)
+        if name == "Other":
+            raise client.GitlabProblem("boom")
+        return real(path, name)
+
+    asked = []
+
+    monkeypatch.setattr(board_mod, "fetch", fetch)
+    live_tui.run(["b", "2", "r", "q"], "grp/proj", "--no-guide")
+    assert asked == [None, "Other", None]  # r retried the board on screen
