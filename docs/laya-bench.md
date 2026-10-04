@@ -91,4 +91,4 @@ Accuracy on the cards Laya answers at or above a threshold; the rest would go to
 | Claude claude-opus-5-5 | 108 | 31 | 102 | 59 |
 | Claude claude-sonnet-5-5 | 112 | 27 | 100 | 61 |
 
-Claude seconds are API time per call divided by the batch size; Laya seconds are the median of one card per call (its batched figure is under Laya timing). Accuracy is ± a 95% interval. See README.md for what this does and does not show.
+Claude seconds are API time per call divided by the batch size; Laya seconds are the median of one card per call (its batched figure is under Laya timing). Accuracy is ± a 95% interval. See 'What it does not show' above.
