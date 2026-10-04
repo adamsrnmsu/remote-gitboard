@@ -87,8 +87,9 @@ Rules for the YAML:
 - Never invent or edit an `iid`; new issues carry none. Never delete or
   close anything; closed issues are skipped by `push`, not recreated.
 - Labels you add are additive; labels the team added in the UI survive.
-  `stale` (no movement past the threshold) and `re-verify` (changed after
-  verification) are the follow-up labels: add them, do not invent others.
+  `stale` (no movement past the threshold), `re-verify` (changed after
+  verification) and `followup` (a decision the lead is tracking, staged by
+  perch's /walk) are the follow-up labels: add them, do not invent others.
 - Scoped labels are the vocabulary `stats` reads: `epic::<name>`,
   `story::<name>`, `type::<bug|task|chore|verify>`. Keep them on cards you
   touch; for an unlabelled card, propose one in Staged (reuse names that
