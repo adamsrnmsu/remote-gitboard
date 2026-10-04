@@ -22,7 +22,7 @@ exclude_patterns = ["_build", "_cli.md", "superpowers"]
 
 html_theme = "furo"
 html_title = "gitboard"
-# The shared pi_suite terminal skin: see the header of _static/hacker.css.
+# The shared pi apps terminal skin: see the header of _static/hacker.css.
 html_static_path = ["_static"]
 html_css_files = ["hacker.css"]
 pygments_style = pygments_dark_style = "native"

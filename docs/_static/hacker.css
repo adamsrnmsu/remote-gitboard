@@ -1,7 +1,7 @@
 /*
  * hacker.css -- a dark-only, phosphor-green terminal skin over the furo theme.
  *
- * Shared by the Sphinx docs of the pi_suite repos (budgie, remote-gitboard).
+ * Shared by the Sphinx docs of the pi apps (budgie, remote-gitboard).
  * The file is copied verbatim into each repo's docs/_static/, so change it in
  * one and copy it to the other. ponytail: two copies; extract a small theme
  * package if a third repo picks it up.
