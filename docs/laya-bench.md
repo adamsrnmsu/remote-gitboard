@@ -1,6 +1,6 @@
 # laya-bench
 
-This measured whether [Laya](https://huggingface.co/convaiinnovations/laya) picks an issue's `type::` label faster or better than Claude does, on the same 300 issues. The code (`laya-bench`) was deleted on 2026-10-04 when pi_suite was dissolved; this page keeps the result. The conclusion stands: Laya was less accurate than every Claude run.
+This measured whether [Laya](https://huggingface.co/convaiinnovations/laya) picks an issue's `type::` label faster or better than Claude does, on the same 300 issues. The code (`laya-bench`) was deleted on 2026-10-04 when pi_suite was dissolved; this page keeps the result. `bench.py` and the data were deleted with it, so the commands and code names below (`bench.py laya-variants`, `CRITERIA`) refer to code that is gone. The conclusion stands: Laya was less accurate than every Claude run.
 
 ## Result (30 September 2026, Intel i7-9750H MacBook)
 
@@ -41,6 +41,17 @@ below Sonnet and Opus by more than the margin of error.
   `--no-thinking` sets `MAX_THINKING_TOKENS=0`.
 
 `type::verify` is left out: `gitboard ingest` sets it by rule, nothing guesses it.
+
+## What it does not show
+
+- These are GitLab's own issues, not your board. Titles on a small team's
+  board are shorter and the split between task and chore is a local habit.
+- Maintainer labels are noisy, and a title alone is sometimes not enough to
+  tell. Neither system can reach 100%.
+- 300 issues gives about ±5 points on accuracy. Differences smaller than
+  that are not differences.
+- Laya's speed is this Intel Mac's GPU through MPS, at full precision. A CUDA
+  GPU or Apple Silicon is faster; the model card quotes 33 ms per card on a T4.
 
 ## Full report
 
