@@ -2272,19 +2272,27 @@ def hops(monkeypatch):
     class Fake:
         listing = ""
         stderr = ""
+        list_fail = ""  # non-empty: list-windows itself fails with it
+        dies = False  # True: a spawned window is gone when looked at again
 
     def run(argv, **kw):
         if argv[:1] != ["tmux"]:
             return real(argv, **kw)
         calls.append(list(argv))
         if "list-windows" in argv:
-            return subprocess.CompletedProcess(argv, 0, Fake.listing, "")
+            if Fake.list_fail:
+                return subprocess.CompletedProcess(argv, 1, "", Fake.list_fail)
+            spawned = any(c[3] in ("new-window", "respawn-window") for c in calls)
+            up = spawned and not Fake.dies
+            listing = "perch\t{}\ngitboard\t{}\n" if up else Fake.listing
+            return subprocess.CompletedProcess(argv, 0, listing, "")
         return subprocess.CompletedProcess(
             argv, 1 if Fake.stderr else 0, "", Fake.stderr
         )
 
     Fake.calls = calls
     monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
     monkeypatch.setenv("TMUX", SUITE_TMUX)
     return Fake
 
@@ -2306,19 +2314,50 @@ def test_hop_rule(hops, monkeypatch):
     assert hops.calls[-1] == [*TMUX, "select-window", "-t", "pi:=perch"]
     hops.listing = "gitboard\t{}\n"
     cli._hop("perch", SUITE["perch"])
-    assert hops.calls[-1] == [
+    assert hops.calls[-2] == [
         *TMUX, "new-window", "-t", "pi:", "-n", "perch",
         "-c", "/ws", "-e", env, "perch", "tui",
         ";", "set-option", "-w", "-t", "pi:=perch", "@entry", P_KEY,
     ]  # fmt: skip
     hops.listing = "perch\t\n"
     cli._hop("perch", SUITE["perch"])
-    assert hops.calls[-1] == [
+    assert hops.calls[-2] == [
         *TMUX, "respawn-window", "-k", "-t", "pi:=perch",
         "-c", "/ws", "-e", env, "perch", "tui",
         ";", "set-option", "-w", "-t", "pi:=perch", "@entry", P_KEY,
         ";", "select-window", "-t", "pi:=perch",
     ]  # fmt: skip
+
+
+def test_hop_with_a_failed_list_windows_says_why_and_spawns_nothing(hops):
+    hops.list_fail = "no server running"
+    assert cli._hop("perch", SUITE["perch"]) == "no server running"
+    assert [c[3] for c in hops.calls] == ["list-windows"]
+
+
+def test_hop_with_duplicate_windows_uses_the_first(hops):
+    hops.listing = f"perch\t{P_KEY}\nperch\t{{}}\n"
+    assert cli._hop("perch", SUITE["perch"]) is None
+    assert hops.calls[-1][3] == "select-window"
+
+
+def test_hop_to_an_app_that_dies_at_startup_says_so(hops):
+    hops.listing = "gitboard\t{}\n"
+    hops.dies = True
+    assert cli._hop("perch", SUITE["perch"]) == "perch exited at startup"
+
+
+def test_the_project_in_an_entry_makes_another_project_respawn(hops):
+    old = {**SUITE["perch"], "project": "a"}
+    hops.listing = f"perch\t{json.dumps(old, sort_keys=True)}\n"
+    cli._hop("perch", {**SUITE["perch"], "project": "b"})
+    assert hops.calls[-2][3] == "respawn-window"
+
+
+def test_suite_entry_keeps_the_project(monkeypatch):
+    m = {"perch": {**SUITE["perch"], "project": "a"}}
+    monkeypatch.setenv("PI_SUITE", json.dumps(m))
+    assert cli._suite_entry("perch") == m["perch"]
 
 
 def test_tui_in_suite_shift_p_hops_and_stays(tui, tmp_path, monkeypatch, execs, hops):
@@ -2329,6 +2368,7 @@ def test_tui_in_suite_shift_p_hops_and_stays(tui, tmp_path, monkeypatch, execs, 
     assert execs == []
     assert [c[3] for c in hops.calls] == [
         "list-windows", "select-window", "list-windows", "new-window",
+        "list-windows",
     ]  # fmt: skip
 
 
