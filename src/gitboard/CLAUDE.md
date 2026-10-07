@@ -152,6 +152,14 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   (`move`, `assign`, `set_due`, `add_note`, `new_card`, `adopt`). Each
   returns the staged line or raises `EditError`. **The verdict rule holds
   for people too**: no move out of Verify, Done/Failed are never targets.
+- **`tui.py`** — `gitboard tui`: `run(...)` is the whole keypress loop (the
+  `tui` command in cli.py only parses options and hands over), plus the
+  TUI-only helpers `_key`/`_split_keys`/`_pending`, `_find_card` and
+  `_move_cursor`. Helpers other commands share (`_staged`, `_refresh_spec`,
+  `_pull_board`, `_changes_table`, the suite hop) stay in cli.py and are
+  imported by name, so tests patch the TUI's `sys`, `err` and `_key` on
+  `gitboard.tui`. cli.py imports tui inside the command only, never at
+  module scope, so the two never import each other on load.
 - **`guide.py`** — the TUI keybar (`rows`) and the guide texts (`GUIDE`); a
   test pins that every keybar key has a text and every prompting key an
   example, so a new key cannot ship unexplained.

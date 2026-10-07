@@ -63,6 +63,7 @@ stdlib-only python3 that shell out to the CLI.
 | File | Purpose |
 |---|---|
 | `src/gitboard/cli.py` | Typer CLI, the only entry point |
+| `src/gitboard/tui.py` | `gitboard tui`, the keypress loop over `board_view` |
 | `src/gitboard/board.py` | reading; `board_columns` is the gap no MCP server fills |
 | `src/gitboard/apply.py` | the only writer; spec schema, `pull`'s read direction |
 | `src/gitboard/report.py` | snapshot diffing, commit correlation; local only |

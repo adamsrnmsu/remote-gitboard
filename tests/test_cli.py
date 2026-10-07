@@ -26,6 +26,7 @@ from gitboard import board as board_mod
 from gitboard import cli, client, config
 from gitboard import graph as graph_mod
 from gitboard import report as report_mod
+from gitboard import tui as tui_mod
 from gitboard.cli import SIGN, STYLE, _changes_table, app
 from gitboard.log import THEME
 
@@ -789,24 +790,24 @@ def test_estimate_knob_off_prints_and_leaves_the_file_alone(tmp_path, monkeypatc
 
 
 def test_split_keys_names_arrows_and_keeps_everything_else_per_char():
-    assert cli._split_keys("\x1b[A") == ["up"]
-    assert cli._split_keys("\x1bOB\x1b[C\x1b[D") == ["down", "right", "left"]
-    assert cli._split_keys("12\r") == ["1", "2", "\r"]
-    assert cli._split_keys("\x1b") == ["\x1b"]  # a lone esc still cancels
-    assert cli._split_keys("é\x1b[Bq") == ["é", "down", "q"]
+    assert tui_mod._split_keys("\x1b[A") == ["up"]
+    assert tui_mod._split_keys("\x1bOB\x1b[C\x1b[D") == ["down", "right", "left"]
+    assert tui_mod._split_keys("12\r") == ["1", "2", "\r"]
+    assert tui_mod._split_keys("\x1b") == ["\x1b"]  # a lone esc still cancels
+    assert tui_mod._split_keys("é\x1b[Bq") == ["é", "down", "q"]
 
 
 def test_move_cursor_walks_cards_and_skips_empty_columns():
     sizes = [2, 0, 3]  # shown cards per column
-    assert cli._move_cursor(None, "down", sizes) == (0, 0)
-    assert cli._move_cursor((0, 0), "down", sizes) == (0, 1)
-    assert cli._move_cursor((0, 1), "down", sizes) == (2, 0)  # over the empty one
-    assert cli._move_cursor((2, 0), "up", sizes) == (0, 1)
-    assert cli._move_cursor((0, 0), "up", sizes) == (2, 2)  # wraps
-    assert cli._move_cursor((2, 2), "left", sizes) == (0, 1)  # row clamped
-    assert cli._move_cursor((0, 1), "right", sizes) == (2, 1)
-    assert cli._move_cursor((1, 5), "down", sizes) == (0, 0)  # stale cursor resets
-    assert cli._move_cursor(None, "down", [0, 0]) is None
+    assert tui_mod._move_cursor(None, "down", sizes) == (0, 0)
+    assert tui_mod._move_cursor((0, 0), "down", sizes) == (0, 1)
+    assert tui_mod._move_cursor((0, 1), "down", sizes) == (2, 0)  # over the empty one
+    assert tui_mod._move_cursor((2, 0), "up", sizes) == (0, 1)
+    assert tui_mod._move_cursor((0, 0), "up", sizes) == (2, 2)  # wraps
+    assert tui_mod._move_cursor((2, 2), "left", sizes) == (0, 1)  # row clamped
+    assert tui_mod._move_cursor((0, 1), "right", sizes) == (2, 1)
+    assert tui_mod._move_cursor((1, 5), "down", sizes) == (0, 0)  # stale cursor resets
+    assert tui_mod._move_cursor(None, "down", [0, 0]) is None
 
 
 def test_find_card_follows_a_resorted_card_and_prefers_its_column():
@@ -815,12 +816,12 @@ def test_find_card_follows_a_resorted_card_and_prefers_its_column():
 
     two = card(2)
     columns = [("Doing", [card(1), two]), ("Blocked", [card(2)]), ("Review", [])]
-    assert cli._find_card(columns, two, 5, prefer=1) == (1, 0)  # on screen twice
-    assert cli._find_card(columns, two, 5, prefer=0) == (0, 1)
-    assert cli._find_card(columns, two, 1, prefer=0) == (1, 0)  # hidden in Doing
-    assert cli._find_card(columns, card(9), 5) is None
+    assert tui_mod._find_card(columns, two, 5, prefer=1) == (1, 0)  # on screen twice
+    assert tui_mod._find_card(columns, two, 5, prefer=0) == (0, 1)
+    assert tui_mod._find_card(columns, two, 1, prefer=0) == (1, 0)  # hidden in Doing
+    assert tui_mod._find_card(columns, card(9), 5) is None
     new = card(None, "fresh")
-    assert cli._find_card([("Doing", [card(None, "other"), new])], new, 5) == (0, 1)
+    assert tui_mod._find_card([("Doing", [card(None, "other"), new])], new, 5) == (0, 1)
 
 
 # --- graph -----------------------------------------------------------------
@@ -1700,17 +1701,17 @@ class Tui:
         monkeypatch.setattr(rich.live, "Live", FakeLive)
         monkeypatch.setattr(signal, "signal", lambda *a: None)
         monkeypatch.setattr(
-            cli,
+            tui_mod,
             "sys",
             types.SimpleNamespace(stdin=types.SimpleNamespace(isatty=lambda: True)),
         )
         self.errbuf = io.StringIO()
-        monkeypatch.setattr(
-            cli,
-            "err",
-            lambda: Console(file=self.errbuf, width=120, height=50, theme=THEME),
+        console = lambda: Console(  # noqa: E731
+            file=self.errbuf, width=120, height=50, theme=THEME
         )
-        monkeypatch.setattr(cli, "_key", self._key)
+        monkeypatch.setattr(cli, "err", console)  # cli helpers the TUI calls
+        monkeypatch.setattr(tui_mod, "err", console)
+        monkeypatch.setattr(tui_mod, "_key", self._key)
         monkeypatch.setattr(subprocess, "call", lambda argv: self.edits.append(argv))
         self.edits = []
         self.on_edit = None
@@ -1892,7 +1893,7 @@ def test_tui_reload_picks_up_an_outside_edit(tui, tmp_path):
             (tmp_path / path).write_text(apply_mod.dump(spec))
         return orig_key()
 
-    tui.mp.setattr(cli, "_key", key)
+    tui.mp.setattr(tui_mod, "_key", key)
     tui.run(["r", "q"], "--from", path, "--no-guide")
     assert "from outside" in tui.last
 
@@ -2456,7 +2457,7 @@ def test_tui_gitlab_lost_mid_session_stays_up(down):
         down.state["up"] = k != "r"  # r finds GitLab gone
         return k
 
-    down.mp.setattr(cli, "_key", key)
+    down.mp.setattr(tui_mod, "_key", key)
     down.run(["r", "q"], "grp/proj", "--no-guide")
     assert DOWN in down.last
     assert "defined by boards/x.yaml" in down.last  # the old board stays
@@ -2505,13 +2506,15 @@ def test_key_timeout_returns_none_when_nothing_arrives(monkeypatch):
     import select
 
     monkeypatch.setattr(
-        cli, "sys", types.SimpleNamespace(stdin=types.SimpleNamespace(fileno=lambda: 0))
+        tui_mod,
+        "sys",
+        types.SimpleNamespace(stdin=types.SimpleNamespace(fileno=lambda: 0)),
     )
     monkeypatch.setattr(select, "select", lambda r, w, x, t: ([], [], []))
-    cli._pending.clear()
-    assert cli._key(0.1) is None
-    cli._pending.append("x")  # a queued key beats the timeout
-    assert cli._key(0.1) == "x"
+    tui_mod._pending.clear()
+    assert tui_mod._key(0.1) is None
+    tui_mod._pending.append("x")  # a queued key beats the timeout
+    assert tui_mod._key(0.1) == "x"
 
 
 def test_tui_idle_tick_reloads_and_marks_what_moved(tui, tmp_path):
@@ -2526,7 +2529,7 @@ def test_tui_idle_tick_reloads_and_marks_what_moved(tui, tmp_path):
             os.utime(tmp_path / path, ns=(1, 1))  # mtime differs
         return orig()
 
-    tui.mp.setattr(cli, "_key", key)
+    tui.mp.setattr(tui_mod, "_key", key)
     tui.run([None, "q"], "--from", path, "--no-guide")
     assert "auto-reload every file change" in tui.last
     assert "● #99" in tui.last
@@ -2594,7 +2597,7 @@ def _arrivals(tui, tmp_path, path, iids):
             os.utime(tmp_path / path, ns=(n, n))  # mtime differs each time
         return orig()
 
-    tui.mp.setattr(cli, "_key", key)
+    tui.mp.setattr(tui_mod, "_key", key)
 
 
 def test_tui_marks_pile_up_across_idle_ticks(tui, tmp_path):
