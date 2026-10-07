@@ -54,6 +54,9 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   `tests/golden_team_md.json`). `PI_BLOCKS=1` makes `stats` emit JSON-lines
   blocks for perch tui; contract at
   `perch/docs/superpowers/specs/2026-10-02-tui-blocks-design.md`.
+  `status` (one table, the text columns and order) and `report`
+  (`_movement_blocks`: figures, moved/new/closed table, per-assignee tally in
+  name order, stuck list) also emit blocks; their text paths are unchanged.
 - **`mail.py`** — the HTML digest, stdlib only. Outlook on Windows renders
   with Word, so: 600px tables, inline styles, px widths, no images, no SVG,
   every `td` with `bgcolor` and every text run with a `color` (that is what

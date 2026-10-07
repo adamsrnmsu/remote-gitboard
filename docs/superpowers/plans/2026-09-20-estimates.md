@@ -68,7 +68,11 @@ def done(iid, who, days, kind=None, start=1):
 def test_config_defaults_overrides_and_rejections():
     assert estimate.config({}) == estimate.DEFAULTS
     cfg = estimate.config({"estimates": {"suggest_due": False, "method": "median"}})
-    assert (cfg["suggest_due"], cfg["method"], cfg["min_samples"]) == (False, "median", 5)
+    assert (cfg["suggest_due"], cfg["method"], cfg["min_samples"]) == (
+        False,
+        "median",
+        5,
+    )
     for bad in ("yes", {"method": "p99"}, {"min_samples": 0}, {"min_samples": "3"}):
         with pytest.raises(SpecError):
             estimate.config({"estimates": bad})
@@ -452,7 +456,8 @@ def _estimate_setup(tmp_path, monkeypatch, estimates=""):
     (tmp_path / "boards").mkdir()
     spec = tmp_path / "boards" / "b.yaml"
     spec.write_text(
-        "project: g/p\nboard: dev\n" + estimates
+        "project: g/p\nboard: dev\n"
+        + estimates
         + "issues:\n  - title: next\n    assignee: alice\n    labels: [Doing]\n"
     )
     done = [
