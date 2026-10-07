@@ -161,8 +161,16 @@ gitboard snapshot group/project          # append board state to snapshots.jsonl
 gitboard report group/project --repo .   # what moved, what is stuck; correlate with commits
 gitboard report group/project --since boards/team.yaml  # …since that pull
 gitboard config                          # what URL and tokens resolved
+gitboard doctor [--offline]              # config, tokens, scopes, board files, snapshots; exit 1 on a failure
 gitboard --help
 ```
+
+`doctor` is read only: it checks the config file and URL, that GitLab answers, the
+read token (valid, scopes) and whether `push` has an `api`-scope token, that the
+configured project and board resolve, that every `boards/*.yaml` loads, each
+`.base` (warn past 7 days), and the last snapshot (warn past a day: `make cron`).
+Warnings print their fix but do not fail; a 404 on the token-scope endpoint is
+"scope unknown", a warning. `--offline` makes no network calls. Output is stderr.
 
 `show` sorts overdue work to the top of each column and truncates to 5 issues
 each, so a 200-issue board still fits on a screen and the truncation never

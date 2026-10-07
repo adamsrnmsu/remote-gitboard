@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -2501,6 +2502,58 @@ def status(
         out().print(table)
 
     _run(go)
+
+
+def _doctor_http(path, token):
+    """(status, JSON or None) for one GET against the configured instance."""
+    import requests
+
+    r = requests.get(
+        get_config().url.rstrip("/") + path,
+        headers={"PRIVATE-TOKEN": token} if token else {},
+        timeout=10,
+    )
+    try:
+        return r.status_code, r.json()
+    except ValueError:
+        return r.status_code, None
+
+
+@app.command()
+def doctor(
+    offline: bool = typer.Option(False, "--offline", help="Skip every network check."),
+):
+    """Check config, tokens, board files and snapshots; exit 1 if anything fails.
+
+    Read only. Warnings print their fix but do not fail. Output goes to stderr
+    (like logs), so a pipe sees nothing.
+    """
+    from gitboard import doctor as doctor_mod
+
+    cfg = get_config()
+    root = cfg.source.parent if cfg.source else Path.cwd()
+    specs = sorted((root / "boards").glob("*.yaml"))
+    if cfg.spec and Path(cfg.spec) not in specs:
+        specs.insert(0, Path(cfg.spec))
+    checks = doctor_mod.run(
+        cfg,
+        http=_doctor_http,
+        resolve=lambda project, board: board_mod.fetch(project, board),
+        root=root,
+        specs=specs,
+        offline=offline,
+    )
+    mark = {
+        "ok": "[added]ok  [/]",
+        "warn": "[bold yellow]warn[/]",
+        "fail": "[logging.level.error]FAIL[/]",
+    }
+    for c in checks:
+        err().print(f"{mark[c.status]}  {escape(c.what)}")
+        if c.status != "ok" and c.fix:
+            err().print(f"      [muted]fix: {escape(c.fix)}[/]")
+    if any(c.status == "fail" for c in checks):
+        raise typer.Exit(1)
 
 
 @app.command()
