@@ -1713,7 +1713,7 @@ class Tui:
         self.edits = []
         self.on_edit = None
 
-    def _key(self):
+    def _key(self, timeout=None):
         assert self.keys, "script ran out of keys (no q?)"
         return self.keys.pop(0)
 
@@ -1883,7 +1883,7 @@ def test_tui_reload_picks_up_an_outside_edit(tui, tmp_path):
     path = write_spec(tmp_path)
     orig_key = tui._key
 
-    def key():
+    def key(timeout=None):
         if tui.keys[0] == "r":  # someone edits the file just before the reload
             spec = apply_mod.load(path)
             spec["issues"].append({"title": "from outside"})
@@ -2449,7 +2449,7 @@ def test_tui_unreachable_shift_p_still_switches(down, monkeypatch, execs):
 def test_tui_gitlab_lost_mid_session_stays_up(down):
     down.state["up"] = True
 
-    def key():
+    def key(timeout=None):
         k = down.keys.pop(0)
         down.state["up"] = k != "r"  # r finds GitLab gone
         return k
@@ -2497,3 +2497,40 @@ def test_completion_never_raises(monkeypatch):
 def test_completion_flags_in_help():
     out = runner.invoke(app, ["--help"]).output
     assert "--install-completion" in out and "--show-completion" in out
+
+
+def test_key_timeout_returns_none_when_nothing_arrives(monkeypatch):
+    import select
+
+    monkeypatch.setattr(
+        cli, "sys", types.SimpleNamespace(stdin=types.SimpleNamespace(fileno=lambda: 0))
+    )
+    monkeypatch.setattr(select, "select", lambda r, w, x, t: ([], [], []))
+    cli._pending.clear()
+    assert cli._key(0.1) is None
+    cli._pending.append("x")  # a queued key beats the timeout
+    assert cli._key(0.1) == "x"
+
+
+def test_tui_idle_tick_reloads_and_marks_what_moved(tui, tmp_path):
+    path = write_spec(tmp_path)
+    orig = tui._key
+
+    def key(timeout=None):
+        if tui.keys[0] is None:  # the file changes, then the tick fires
+            spec = apply_mod.load(path)
+            spec["issues"].append({"iid": 99, "title": "arrived"})
+            (tmp_path / path).write_text(apply_mod.dump(spec))
+            os.utime(tmp_path / path, ns=(1, 1))  # mtime differs
+        return orig()
+
+    tui.mp.setattr(cli, "_key", key)
+    tui.run([None, "q"], "--from", path, "--no-guide")
+    assert "auto-reload every file change" in tui.last
+    assert "● #99" in tui.last
+
+
+def test_tui_idle_tick_offline_skips_when_the_file_is_unchanged(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run([None, "q"], "--from", path, "--no-guide")
+    assert "●" not in tui.last

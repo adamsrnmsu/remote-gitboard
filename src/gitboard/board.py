@@ -357,7 +357,26 @@ def snapshot_records(project, board, ts):
     return list(records.values())
 
 
-def board_view(project, board, limit=5, columns=None, ages=None, selected=None):
+def moved(old, new):
+    """iids in `new` columns that are new or sit in different columns than in
+    `old` (both `[(name, issues)]`). A card gone from the board is not marked;
+    an offline `(new)` card has no iid and is skipped."""
+
+    def where(columns):
+        out = {}
+        for name, issues in columns:
+            for i in issues:
+                if i.iid is not None:
+                    out.setdefault(i.iid, set()).add(name)
+        return out
+
+    before = where(old)
+    return {iid for iid, cols in where(new).items() if before.get(iid) != cols}
+
+
+def board_view(
+    project, board, limit=5, columns=None, ages=None, selected=None, marked=()
+):
     """Tree + totals as one renderable, plus the hidden count.
 
     `show` prints it once; `tui` redraws it on every keypress and resize.
@@ -367,7 +386,8 @@ def board_view(project, board, limit=5, columns=None, ages=None, selected=None):
     caller already has them; `ages` (see issue_line) adds time-in-column.
     `selected` is the TUI's cursor, `(column name, index among the shown
     cards)`: a position, not an iid, because a two-column card is on screen
-    twice and an offline `(new)` card has no number.
+    twice and an offline `(new)` card has no number. `marked` is a set of
+    iids (see `moved`) drawn with a `●` until the next reload.
     """
     columns = board_columns(project, board) if columns is None else columns
     tree = Tree(
@@ -387,6 +407,8 @@ def board_view(project, board, limit=5, columns=None, ages=None, selected=None):
         shown = issues if limit == 0 else issues[:limit]
         for at, issue in enumerate(shown):
             line = issue_line(issue, name, ages)
+            if issue.iid in marked:
+                line = Text("● ", "bold cyan") + line
             if selected == (name, at):
                 line = Text("▶ ", "bold") + line
                 line.stylize("reverse", 2)

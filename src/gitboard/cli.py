@@ -1510,19 +1510,24 @@ def _split_keys(text):
     return out
 
 
-def _key():
-    """One keypress. The whole input layer of the TUI.
+def _key(timeout=None):
+    """One keypress. The whole input layer of the TUI. With `timeout`
+    (seconds), None when nothing arrives in time (a key already in
+    `_pending` is still returned first).
 
     Reads the fd directly: an arrow arrives as three bytes in one read, and
     `sys.stdin.read(1)` would hand them over as ESC plus two stray letters.
     A paste or fast typing arrives as several keys at once; the rest wait
     in `_pending`.
     """
+    import select
     import termios
     import tty
 
     fd = sys.stdin.fileno()
     while not _pending:
+        if timeout is not None and not select.select([fd], [], [], timeout)[0]:
+            return None
         old = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
@@ -1595,6 +1600,13 @@ def tui(
         help="Hide the per-mode guide panels (also: guide = false in "
         "gitboard.toml, GITBOARD_GUIDE=0, or g inside).",
     ),
+    watch: float | None = typer.Option(
+        None,
+        "--watch",
+        min=0.25,
+        help="Reload the board every MINUTES (read only). Offline, reloads "
+        "when the YAML changes, checked every MINUTES (default 2 seconds).",
+    ),
 ):
     """The board, interactively: card keys stage into the YAML, a pushes it."""
 
@@ -1625,7 +1637,18 @@ def tui(
             "guide": get_config().guide and not no_guide,
             "path": from_file or _need(project, "project", "project"),
             "name": board_name or get_config().board,
+            "marked": set(),
+            "last": None,
         }
+        # ponytail: offline polls the file's mtime every 2s, online refetches
+        # every --watch minutes; no --watch online means no auto-reload.
+        tick = watch * 60 if watch else (2.0 if offline else None)
+
+        def mtime():
+            try:
+                return os.stat(offline).st_mtime_ns
+            except OSError:
+                return None
 
         def refetch():
             held = selected_issue() if "columns" in st else None
@@ -1639,7 +1662,14 @@ def tui(
                 proj, board = board_mod.fetch(st["path"], st["name"])
                 columns = board_mod.board_columns(proj, board)
                 found, ages = find_spec(st["path"]), _ages(proj.path_with_namespace)
+            # first load marks nothing; later ones mark what moved since
+            st["marked"] = (
+                board_mod.moved(st["columns"], columns) if "columns" in st else set()
+            )
             st.update(proj=proj, board=board, columns=columns, spec=found, ages=ages)
+            st["last"] = datetime.now().strftime("%H:%M")
+            if offline:
+                st["mtime"] = mtime()
             if held is not None:
                 st["cursor"] = _find_card(
                     shown(), held, st["limit"], prefer=st["cursor"][0]
@@ -1684,6 +1714,7 @@ def tui(
                 columns=cols,
                 ages=st["ages"],
                 selected=(cols[cur[0]][0], cur[1]) if selected_issue() else None,
+                marked=st["marked"],
             )
             spec = st["spec"]
             if offline:
@@ -1717,6 +1748,11 @@ def tui(
                 parts.append(st["extra"])
             if st["status"] is not None:
                 parts.append(Text("  ") + st["status"])
+            if tick and st["last"]:
+                every = f"{watch:g}m" if watch else "file change"
+                parts.append(
+                    Text(f"  auto-reload every {every} · last {st['last']}", "muted")
+                )
             parts.append(keybar())
             return Group(*parts)
 
@@ -2327,7 +2363,12 @@ def tui(
             attempt(refetch)
             draw()
             while True:
-                raw = _key()
+                raw = _key(tick) if tick else _key()
+                if raw is None:  # idle tick: reload, keep what is on screen
+                    if not offline or mtime() != st.get("mtime"):
+                        attempt(refetch)
+                    draw()
+                    continue
                 k = raw.lower()
                 st["status"] = st["extra"] = st["prompt"] = None
                 if raw in SWITCH:  # before lowercasing turns P into plan
