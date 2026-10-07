@@ -210,7 +210,7 @@ with `ingest`: open tasks land in `Verify`, checked ones in `Done`, feedback
 becomes an attributed note, and every issue gets a `Source:` footer. Full
 runbook: `make docs`, then `docs/_build/html/airgap.html`.
 
-`tui` is the interactive loop: `r` reload, `b` switch board — the
+`tui` is the interactive loop: `r` reload (`--watch MINUTES` reloads on a timer, read only; offline it reloads when the YAML changes, polled every 2 s; a `●` marks cards new or moved since the last reload), `b` switch board — the
 project's own, plus any board a `boards/*.yaml` defines, other projects
 included, `s` snapshot, `e` edit the YAML
 in `$EDITOR` (pulling the board into one first if none exists) with the diff

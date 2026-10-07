@@ -510,3 +510,35 @@ def test_board_view_limit_zero_shows_everything_and_limit_n_truncates():
     _, hidden = board.board_view(project, lists, limit=0)
     assert hidden == 0
     assert board.board_view(project, lists, limit=1)[1] == 2
+
+
+def test_moved_marks_new_and_changed_columns_only():
+    def cols(**kw):
+        return [(n, [FakeIssue(i, [n], "t") for i in ids]) for n, ids in kw.items()]
+
+    old = cols(Todo=[1, 2, 3], Doing=[4])
+    new = cols(Todo=[1, 3], Doing=[2, 5])  # 2 moved, 5 new, 4 closed
+    assert board.moved(old, new) == {2, 5}
+    assert board.moved(old, old) == set()
+    # a two-column card changing its set of columns is moved; unchanged is not
+    two = [("A", [FakeIssue(7, ["A"], "t")]), ("B", [FakeIssue(7, ["B"], "t")])]
+    assert board.moved(two, two) == set()
+    assert board.moved(two[:1], two) == {7}
+    # offline (new) cards have no iid
+    assert board.moved([], [("A", [FakeIssue(None, ["A"], "t")])]) == set()
+
+
+def test_board_view_draws_a_dot_before_marked_cards():
+    from io import StringIO
+
+    from rich.console import Console
+
+    from gitboard.log import THEME
+
+    proj = FakeProject([FakeIssue(1, ["Doing"], "one"), FakeIssue(2, ["Doing"], "two")])
+    lists = FakeBoard([FakeList("Doing", 1)])
+    c = Console(width=120, file=StringIO(), theme=THEME)
+    c.print(board.board_view(proj, lists, marked={2})[0])
+    lines = c.file.getvalue().splitlines()
+    assert {("two" in x) for x in lines if "●" in x} == {True}
+    assert sum("●" in x for x in lines) == 1
