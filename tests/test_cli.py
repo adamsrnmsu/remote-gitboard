@@ -25,6 +25,7 @@ from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import cli, client, config
 from gitboard import graph as graph_mod
+from gitboard import report as report_mod
 from gitboard.cli import SIGN, STYLE, _changes_table, app
 from gitboard.log import THEME
 
@@ -63,6 +64,7 @@ COLUMNS = [
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     for var in ("GITBOARD_CONFIG", "GITLAB_URL", "GITLAB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GITLAB_READ_TOKEN", "read-tok")
@@ -2534,3 +2536,39 @@ def test_tui_idle_tick_offline_skips_when_the_file_is_unchanged(tui, tmp_path):
     path = write_spec(tmp_path)
     tui.run([None, "q"], "--from", path, "--no-guide")
     assert "●" not in tui.last
+
+
+def test_tui_start_says_what_changed_since_last_seen(tui, tmp_path):
+    path = write_spec(tmp_path)
+    key = "grp/proj/Dev Board"
+    then = datetime.now(UTC) - timedelta(hours=5)
+    report_mod.mark_seen(key, then)
+    rows = [
+        {
+            "ts": ts.isoformat(),
+            "project": "grp/proj",
+            "board": "Dev Board",
+            "iid": 1,
+            "title": "one",
+            "assignee": None,
+            "due_date": None,
+            "columns": [col],
+        }
+        for ts, col in [
+            (then - timedelta(hours=1), "Backlog"),
+            (datetime.now(UTC), "Doing"),
+        ]
+    ]
+    (tmp_path / "snapshots.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows)
+    )
+    tui.run(["q"], "--from", path, "--no-guide")
+    assert "1 moved" in tui.text
+    assert report_mod.last_seen(key) > then  # quitting re-stamped it
+
+
+def test_tui_first_run_has_no_line_but_records(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["q"], "--from", path, "--no-guide")
+    assert "since" not in tui.text
+    assert report_mod.last_seen("grp/proj/Dev Board") is not None

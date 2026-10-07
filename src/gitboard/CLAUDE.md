@@ -36,6 +36,10 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
 - **`report.py`** — reads `snapshots.jsonl`, no network: batches -> first/last
   diff -> per-assignee tally; `commit_counts` shells to `git log` and
   `match_author` joins heuristically (name or email local part).
+  `away`/`describe` give the TUI's "since you were away" line (counts only,
+  no person); `last_seen`/`mark_seen` keep one UTC stamp per `project/board`
+  in `$XDG_CACHE_HOME/gitboard/seen.json` (its only write; a corrupt file
+  reads as empty). The TUI stamps on `q` and on a switch away, never on start.
 - **`replay.py`** — `gitboard replay`: `frames(batches)` -> `(frames, cards)`
   (pure; columns Backlog-first then first-seen in every frame, a two-column
   card in both lanes, consecutive identical frames collapsed, moved/new/closed

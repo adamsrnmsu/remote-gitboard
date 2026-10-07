@@ -224,7 +224,16 @@ with `ingest`: open tasks land in `Verify`, checked ones in `Done`, feedback
 becomes an attributed note, and every issue gets a `Source:` footer. Full
 runbook: `make docs`, then `docs/_build/html/airgap.html`.
 
+<<<<<<< HEAD
 `tui` is the interactive loop: `r` reload (`--watch MINUTES` reloads on a timer, read only; offline it reloads when the YAML changes, polled every 2 s; a `●` marks cards new or moved since the last reload), `b` switch board — the
+=======
+`tui` opens with one status line of counts from `snapshots.jsonl` since you
+last quit that board (`since Tue 14:02: 6 moved · 2 new · 3 to Done`; nothing
+to say, no line). Last-seen is kept per board in
+`$XDG_CACHE_HOME/gitboard/seen.json` (default `~/.cache`).
+
+`tui` is the interactive loop: `r` reload, `b` switch board — the
+>>>>>>> worktree-agent-ad3f97f540625f61b
 project's own, plus any board a `boards/*.yaml` defines, other projects
 included, `s` snapshot, `e` edit the YAML
 in `$EDITOR` (pulling the board into one first if none exists) with the diff
