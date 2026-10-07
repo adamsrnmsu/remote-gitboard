@@ -13,7 +13,7 @@ from rich.console import Group
 from rich.text import Text
 from rich.tree import Tree
 
-from gitboard import client, links, stats
+from gitboard import client, links, report, stats
 from gitboard.apply import MARKER
 from gitboard.ingest import VERDICT
 from gitboard.log import out
@@ -255,7 +255,8 @@ def as_markdown(project, board, columns=None, ages=None):
 def issue_line(issue, column, ages=None):
     """One issue as a styled line. Extra labels are the ones from *other*
     columns — the column's own label is redundant inside it. `ages`
-    ({iid: (column, days)}, from report.age_days) adds ` · Verify 3d`."""
+    ({iid: (column, days)}, from report.age_days) adds ` · Verify 3d`, amber
+    once past the column's `report.STUCK` threshold."""
     line = Text.assemble(
         (f"{ref(issue)} ", "muted"),
         issue.title,
@@ -275,7 +276,8 @@ def issue_line(issue, column, ages=None):
         line.append(f"  {' '.join(extra)}", "magenta")
     if ages and issue.iid in ages:
         col, days = ages[issue.iid]
-        line.append(f" · {col} {days}d", "muted")
+        late = any(days >= report.STUCK.get(c, days + 1) for c in col.split("+"))
+        line.append(f" · {col} {days}d", "dark_orange" if late else "muted")
     return line
 
 

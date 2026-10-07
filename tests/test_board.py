@@ -295,6 +295,13 @@ def test_issue_line_and_board_view_show_age():
     assert "urgent" in own and "Doing" not in own, "column's own label omitted"
     line = board.issue_line(FakeIssue(1, ["Verify"]), "Verify", {1: ("Verify", 3)})
     assert line.plain.endswith("· Verify 3d")
+    assert line.spans[-1].style == "dark_orange", "past Verify's 1-day threshold"
+    calm = board.issue_line(FakeIssue(1, ["Doing"]), "Doing", {1: ("Doing", 2)})
+    assert calm.spans[-1].style == "muted", "under Doing's 3 days"
+    two = board.issue_line(FakeIssue(1, ["Doing"]), "Doing", {1: ("Doing+Verify", 1)})
+    assert two.spans[-1].style == "dark_orange", "any column over threshold counts"
+    other = board.issue_line(FakeIssue(1, ["Backlog"]), "Backlog", {1: ("Backlog", 90)})
+    assert other.spans[-1].style == "muted", "no threshold, never amber"
     assert "·" not in board.issue_line(FakeIssue(1, ["Verify"]), "Verify").plain
     view, _ = board.board_view(
         FakeProject([FakeIssue(1, ["Verify"])]),
