@@ -40,6 +40,7 @@ from gitboard import guide as guide_mod
 from gitboard import ingest as ingest_mod
 from gitboard import mail as mail_mod
 from gitboard import migrate as migrate_mod
+from gitboard import replay as replay_mod
 from gitboard import report as report_mod
 from gitboard import stats as stats_mod
 from gitboard.config import (
@@ -964,6 +965,60 @@ def ingest(
                 f"under `people:` in {short} to assign[/]"
             )
         err().print(f"[muted]next: gitboard plan {short}[/]")
+
+    _run(go)
+
+
+@app.command()
+def replay(
+    project: str | None = typer.Argument(None, help="group/project"),
+    days: int = typer.Option(30, "--days", "-d", help="Window, in days."),
+    db: str = typer.Option(SNAPSHOTS, "--db", help="Snapshot log to read."),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        metavar="SPEC",
+        help="Window starts at the pull: SPEC.base's mtime. Replaces --days.",
+    ),
+    out_path: str = typer.Option("replay.html", "--out", "-o", help="Page to write."),
+):
+    """A timelapse of the board from the snapshot log, as one HTML page.
+
+    Local files only: no network, no token. Cards slide between columns and
+    fade when they leave the open set.
+    """
+
+    def go():
+        ts = None
+        path = project
+        if since:
+            base_file = Path(f"{since}.base")
+            if not base_file.exists():
+                raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
+            mtime = datetime.fromtimestamp(base_file.stat().st_mtime, UTC)
+            ts = mtime.isoformat(timespec="seconds")
+            path = project or apply_mod.load(since)["project"]
+        batches = report_mod.load(db, project=path, days=AGE_WINDOW if ts else days)
+        if ts:
+            batches = report_mod.since(batches, ts)
+        projects = sorted({r["project"] for b in batches for r in b.values()})
+        if len(projects) > 1:
+            raise ConfigError(f"several projects in {db}: {', '.join(projects)}")
+        if len(batches) < 2:
+            raise ConfigError(
+                f"need at least 2 snapshots in the window; have {len(batches)}"
+            )
+        frames, cards = replay_mod.frames(batches)
+        try:
+            url = get_config().url
+        except ConfigError:
+            url = None
+        title = f"{projects[0]} replay"
+        page = replay_mod.render_html(frames, cards, title, url, projects[0])
+        Path(out_path).write_text(page)
+        err().print(
+            f"[muted]wrote {out_path} — {len(frames)} frame(s), {len(cards)} card(s)[/]"
+        )
 
     _run(go)
 
