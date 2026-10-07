@@ -158,6 +158,7 @@ gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
 gitboard snapshot group/project          # append board state to snapshots.jsonl
 gitboard report group/project --repo .   # what moved, what is stuck; correlate with commits
 gitboard report group/project --since boards/team.yaml  # …since that pull
+gitboard replay group/project --days 30  # timelapse of the board as one HTML page
 gitboard config                          # what URL and tokens resolved
 gitboard --help
 ```
@@ -244,6 +245,14 @@ per-assignee tally. `--repo path` adds a commits column from `git log` over
 the same window, matching GitLab usernames to git authors by name or email
 local part — who ships what they pick up, and whose board activity has no
 commits behind it.
+
+`replay` plays the same log back: one self-contained HTML file (`--out`,
+default `replay.html`; `--days` or `--since SPEC` pick the window) with a lane
+per column, cards that slide as they move, fade in when new and out when they
+close, a play/pause button, a scrubber, a speed control and per-frame counts
+of moved, new and closed. It reads only `snapshots.jsonl` (no network, no
+token), needs at least two snapshots, and shows no per-person numbers. Cards
+link to GitLab when `GITLAB_URL` is set.
 
 `migrate-comments --close-source` closes the source issue after copying,
 leaving a "superseded by …" note; the TUI's `m` offers the same as a y/n,

@@ -31,6 +31,15 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
 - **`report.py`** — reads `snapshots.jsonl`, no network: batches -> first/last
   diff -> per-assignee tally; `commit_counts` shells to `git log` and
   `match_author` joins heuristically (name or email local part).
+- **`replay.py`** — `gitboard replay`: `frames(batches)` -> `(frames, cards)`
+  (pure; columns Backlog-first then first-seen in every frame, a two-column
+  card in both lanes, consecutive identical frames collapsed, moved/new/closed
+  counts per frame, no per-person figure) and `render_html(frames, cards,
+  title, base_url, project)`, a graph_html-style page (inline CSS/JS, no CDN,
+  lane colours from `mail.COLUMN_COLORS`, CSS transitions between frames).
+  Data goes in via graph_html's `_json`; JS writes text with `textContent`;
+  a card links only when `base_url` is http(s) (snapshots carry no web_url).
+  Spec: `docs/superpowers/specs/2026-10-06-replay-design.md`.
 - **`stats.py`** — pure, stdlib: `summarise(history, ...)` over the dicts
   `board.fetch_history` returns (issues incl. recently closed, label
   transitions from `resource_label_events`, verdict and question notes);
