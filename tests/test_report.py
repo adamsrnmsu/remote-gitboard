@@ -1,5 +1,7 @@
 """Tests for report.py — pure diffing over synthetic snapshot batches."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 from gitboard import report
@@ -51,8 +53,6 @@ def test_match_author_by_name_or_email_local_part():
 
 
 # --- age in column ---------------------------------------------------------
-
-from datetime import UTC, datetime  # noqa: E402
 
 
 def test_verifier_counts_windows_verdicts_by_author():
@@ -135,3 +135,71 @@ def test_commit_counts_names_the_repo_when_git_log_fails_silently(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fail)
     with pytest.raises(OSError, match="git log failed in /r"):
         report.commit_counts("/r", 7)
+
+
+# --- away: "since you were away" ----------------------------------------------
+
+A0, A1 = "2026-10-05T10:00:00+00:00", "2026-10-06T10:00:00+00:00"
+ANOW = datetime(2026, 10, 6, 12, tzinfo=UTC)
+
+
+def arec(iid, ts, columns=("Doing",), due=None, board="B"):
+    return {
+        "ts": ts,
+        "project": "g/p",
+        "board": board,
+        "iid": iid,
+        "due_date": due,
+        "columns": list(columns),
+    }
+
+
+def abatch(ts, *recs):
+    return {r[0]: arec(r[0], ts, *r[1:]) for r in recs}
+
+
+def test_away_counts_each_kind():
+    before = abatch(A0, (1,), (2,), (3,), (4,), (5,), (6,))
+    after = abatch(
+        A1,
+        (1, ["Review"]),  # moved
+        (2, ["Done"]),  # moved, to Done; 3 is gone: closed
+        (4, ["Doing"], "2026-10-04"),  # due before the window: not newly overdue
+        (5, ["Doing"], "2026-10-06"),  # due today: not passed yet
+        (6, ["Doing"], "2026-10-05"),  # passed while away
+        (7,),  # new
+    )
+    got = report.away([before, after], A0, ANOW)
+    assert got == {"moved": 2, "new": 1, "to Done": 1, "closed": 1, "newly overdue": 1}
+
+
+def test_away_empty_and_nothing_to_compare():
+    assert report.away([], A0, ANOW) == {}
+    assert report.away([abatch(A0, (1,))], A0, ANOW) == {}  # latest is the baseline
+    assert report.away([abatch(A1, (1,))], A0, ANOW) == {}  # nothing before
+
+
+def test_away_is_per_board():
+    before = {**abatch(A0, (1,)), 9: arec(9, A0, board="Other")}
+    after = {**abatch(A1, (1, ["Done"])), 9: arec(9, A1, ["Done"], board="Other")}
+    got = report.away([before, after], A0, ANOW, board="B")
+    assert got == {"moved": 1, "to Done": 1}
+
+
+def test_describe_omits_zeros_and_nothing_is_none():
+    assert report.describe({}, ANOW) is None
+    line = report.describe({"moved": 6, "new": 2}, ANOW)
+    assert line == f"since {ANOW.astimezone().strftime('%a %H:%M')}: 6 moved · 2 new"
+
+
+def test_seen_round_trip_and_corrupt(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    assert report.last_seen("g/p/B") is None
+    report.mark_seen("g/p/B", ANOW)
+    report.mark_seen("g/p/C", ANOW)
+    assert report.last_seen("g/p/B") == ANOW
+    seen = tmp_path / "gitboard" / "seen.json"
+    seen.write_text("{nope")
+    assert report.last_seen("g/p/B") is None
+    report.mark_seen("g/p/B", ANOW)  # rewrites over the corrupt file
+    assert report.last_seen("g/p/B") == ANOW

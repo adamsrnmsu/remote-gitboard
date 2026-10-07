@@ -1880,6 +1880,32 @@ def tui(
                 grid.add_row(f" {key} " if key else "", text)
             return Panel(grid, title="keys", border_style="muted", padding=(0, 1))
 
+        def seen_key():
+            return f"{st['proj'].path_with_namespace}/{st['board'].name}"
+
+        def mark():
+            """Stamp this board as seen now (the next start's 'since')."""
+            if "proj" in st:
+                report_mod.mark_seen(seen_key())
+
+        def away_line():
+            """Status line: what changed since this board was last left."""
+            if "proj" not in st:
+                return
+            since = report_mod.last_seen(seen_key())
+            if since is None or not Path(SNAPSHOTS).exists():
+                return
+            days = (datetime.now(UTC) - since).days + 1
+            batches = report_mod.load(
+                SNAPSHOTS, project=st["proj"].path_with_namespace, days=days
+            )
+            line = report_mod.describe(
+                report_mod.away(batches, since.isoformat(), board=st["board"].name),
+                since,
+            )
+            if line:
+                st["status"] = Text(line, "muted")
+
         with Live(console=console, screen=True, auto_refresh=False) as live:
 
             def draw(busy=None):
@@ -2236,6 +2262,7 @@ def tui(
 
             live.update(Text(f"reading {st['path']}…", "muted"), refresh=True)
             attempt(refetch)
+            away_line()
             draw()
             while True:
                 raw = _key()
@@ -2244,6 +2271,8 @@ def tui(
                 if raw in SWITCH:  # before lowercasing turns P into plan
                     st["tip"] = None  # perch-dvq item 2: no stale guide tip
                     entry = _suite_entry(SWITCH[raw])
+                    if entry:
+                        mark()
                     if entry and not _in_suite():
                         return SWITCH[raw]
                     if entry:  # perch suite: hop, keep the board running
@@ -2258,6 +2287,7 @@ def tui(
                     continue
                 st["tip"] = guide_mod.panel(k) if st["guide"] else None
                 if k == "q":
+                    mark()
                     return
                 k = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(k, k)
                 if "proj" in st or k == "r":
