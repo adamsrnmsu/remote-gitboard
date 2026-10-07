@@ -62,21 +62,21 @@ this plan adds are marked NEW:
 
 ```python
 {
-  "iid": 12,                     # None for a spec card not yet on GitLab
-  "title": "Wire up board reader",
-  "state": "opened",             # or "closed"
-  "labels": ["Doing", "priority::1"],
-  "assignee": "alice",           # or None
-  "due_date": "2026-10-20",      # or None
-  "milestone": "Beta launch",    # or None
-  "milestone_due": "2026-11-01", # NEW, or None
-  "priority": 1,                 # NEW: lowest priority::N digit, or None
-  "blocked_by": [                # NEW
-      {"ref": "9", "state": "opened", "since": "2026-09-20T10:02:11Z"},
-      {"ref": "infra/platform#4", "state": None, "since": None},
-  ],
-  "web_url": "https://…/-/issues/12",  # or None
-  # plus whatever fetch_history already has (transitions, verdicts, notes…)
+    "iid": 12,  # None for a spec card not yet on GitLab
+    "title": "Wire up board reader",
+    "state": "opened",  # or "closed"
+    "labels": ["Doing", "priority::1"],
+    "assignee": "alice",  # or None
+    "due_date": "2026-10-20",  # or None
+    "milestone": "Beta launch",  # or None
+    "milestone_due": "2026-11-01",  # NEW, or None
+    "priority": 1,  # NEW: lowest priority::N digit, or None
+    "blocked_by": [  # NEW
+        {"ref": "9", "state": "opened", "since": "2026-09-20T10:02:11Z"},
+        {"ref": "infra/platform#4", "state": None, "since": None},
+    ],
+    "web_url": "https://…/-/issues/12",  # or None
+    # plus whatever fetch_history already has (transitions, verdicts, notes…)
 }
 ```
 
@@ -187,7 +187,9 @@ def test_norm_ref_forms():
 
 
 def test_norm_refs_sorts_numerically_and_dedupes():
-    got = links.norm_refs([10, "grp/proj#9", 9, "a/b#1", "Brand new"], P, {"Brand new": None})
+    got = links.norm_refs(
+        [10, "grp/proj#9", 9, "a/b#1", "Brand new"], P, {"Brand new": None}
+    )
     assert got == ["9", "10", "a/b#1", "new:Brand new"]
 
 
@@ -211,10 +213,12 @@ def spec(*issues):
 
 
 def test_check_accepts_iids_titles_and_externals():
-    links.check(spec(
-        {"title": "a", "iid": 1, "blocked_by": ["b", 3, "x/y#2"]},
-        {"title": "b"},
-    ))
+    links.check(
+        spec(
+            {"title": "a", "iid": 1, "blocked_by": ["b", 3, "x/y#2"]},
+            {"title": "b"},
+        )
+    )
 
 
 def test_check_rejects_unknown_title():
@@ -229,10 +233,12 @@ def test_check_rejects_self_block():
 
 def test_check_rejects_a_cycle_through_iids_and_titles():
     with pytest.raises(ValueError, match="cycle"):
-        links.check(spec(
-            {"title": "a", "iid": 1, "blocked_by": ["b"]},
-            {"title": "b", "iid": 2, "blocked_by": [1]},
-        ))
+        links.check(
+            spec(
+                {"title": "a", "iid": 1, "blocked_by": ["b"]},
+                {"title": "b", "iid": 2, "blocked_by": [1]},
+            )
+        )
 
 
 # --- read / sync on fakes ----------------------------------------------------
@@ -251,7 +257,14 @@ class FakeLinks:
     def create(self, data):
         self.created.append(data)
         kind = "relates_to" if self.downgrade else data["link_type"]
-        self.items.append(link(data["target_issue_iid"], data["target_project_id"], kind, 900 + len(self.created)))
+        self.items.append(
+            link(
+                data["target_issue_iid"],
+                data["target_project_id"],
+                kind,
+                900 + len(self.created),
+            )
+        )
         return (None, None)
 
     def delete(self, link_id):
@@ -261,7 +274,10 @@ class FakeLinks:
 
 def link(iid, project_id, kind="is_blocked_by", link_id=1, full=None):
     return types.SimpleNamespace(
-        iid=iid, project_id=project_id, link_type=kind, issue_link_id=link_id,
+        iid=iid,
+        project_id=project_id,
+        link_type=kind,
+        issue_link_id=link_id,
         link_created_at="2026-09-20T10:00:00Z",
         references={"full": full or f"other/x#{iid}"},
     )
@@ -271,14 +287,24 @@ PROJECT = types.SimpleNamespace(id=7, path_with_namespace=P)
 
 
 def issue(items=(), description="", **kw):
-    return types.SimpleNamespace(iid=12, title="t", description=description, links=FakeLinks(items, **kw))
+    return types.SimpleNamespace(
+        iid=12, title="t", description=description, links=FakeLinks(items, **kw)
+    )
 
 
 def test_read_keeps_only_is_blocked_by_and_maps_projects():
-    i = issue([link(9, 7), link(4, 8, full="infra/platform#4", link_id=2), link(5, 7, "relates_to", 3)])
+    i = issue(
+        [
+            link(9, 7),
+            link(4, 8, full="infra/platform#4", link_id=2),
+            link(5, 7, "relates_to", 3),
+        ]
+    )
     got = links.read(i, PROJECT)
     assert [(g["ref"], g["source"], g["link_id"]) for g in got] == [
-        ("9", "native", 1), ("infra/platform#4", "native", 2)]
+        ("9", "native", 1),
+        ("infra/platform#4", "native", 2),
+    ]
     assert got[0]["since"] == "2026-09-20T10:00:00Z"
 
 
@@ -297,9 +323,13 @@ def test_read_falls_back_to_footer_on_403():
 def test_sync_adds_and_removes_native_links():
     i = issue([link(9, 7, link_id=1), link(4, 8, full="infra/platform#4", link_id=2)])
     have = links.read(i, PROJECT)
-    records = links.sync(i, PROJECT, ["9", "10", "other/y#5"], have, lambda path: {"other/y": 55}[path])
+    records = links.sync(
+        i, PROJECT, ["9", "10", "other/y#5"], have, lambda path: {"other/y": 55}[path]
+    )
     assert i.links.deleted == [2]
-    assert {(d["target_issue_iid"], d["target_project_id"]) for d in i.links.created} == {(10, 7), (5, 55)}
+    assert {
+        (d["target_issue_iid"], d["target_project_id"]) for d in i.links.created
+    } == {(10, 7), (5, 55)}
     assert all(d["link_type"] == "is_blocked_by" for d in i.links.created)
     assert records == []
 
@@ -310,7 +340,9 @@ def test_sync_never_duplicates_or_removes_a_footer_ref():
     assert links.sync(i, PROJECT, ["9"], have, None) == []
     assert i.links.created == []
     records = links.sync(i, PROJECT, [], have, None)
-    assert records == [("skipped", "link", "t: blocker #9 is a footer ref — edit the description")]
+    assert records == [
+        ("skipped", "link", "t: blocker #9 is a footer ref — edit the description")
+    ]
 
 
 def test_sync_downgrade_deletes_and_raises_once():
@@ -375,15 +407,21 @@ def norm_ref(value, project_path, titles):
     if text in titles:
         iid = titles[text]
         return str(iid) if iid is not None else f"new:{text}"
-    raise ValueError(f"unknown blocker {text!r}: not an iid, a group/project#iid, or a card title")
+    raise ValueError(
+        f"unknown blocker {text!r}: not an iid, a group/project#iid, or a card title"
+    )
 
 
 def norm_refs(values, project_path, titles):
-    return sorted({norm_ref(v, project_path, titles) for v in values or []}, key=ref_key)
+    return sorted(
+        {norm_ref(v, project_path, titles) for v in values or []}, key=ref_key
+    )
 
 
 def footer_refs(description, project_path):
-    lines = [x for x in (description or "").replace("\r\n", "\n").split("\n") if x.strip()]
+    lines = [
+        x for x in (description or "").replace("\r\n", "\n").split("\n") if x.strip()
+    ]
     if not lines or not (m := FOOTER.match(lines[-1])):
         return []
     refs = [x.strip() for x in m[1].split(",") if x.strip()]
@@ -391,7 +429,11 @@ def footer_refs(description, project_path):
 
 
 def priority(labels):
-    digits = [int(x[len(PRIORITY):]) for x in labels or [] if x.startswith(PRIORITY) and x[len(PRIORITY):].isdigit()]
+    digits = [
+        int(x[len(PRIORITY) :])
+        for x in labels or []
+        if x.startswith(PRIORITY) and x[len(PRIORITY) :].isdigit()
+    ]
     return min(digits) if digits else None
 
 
@@ -399,7 +441,9 @@ def check(spec):
     """Unknown title refs, self-blocks and cycles among the spec's cards."""
     project = spec["project"]
     titles = {i["title"].strip(): i.get("iid") for i in spec["issues"]}
-    key_of = {t: (str(iid) if iid is not None else f"new:{t}") for t, iid in titles.items()}
+    key_of = {
+        t: (str(iid) if iid is not None else f"new:{t}") for t, iid in titles.items()
+    }
     graph = {}
     for i in spec["issues"]:
         if "blocked_by" not in i:
@@ -430,8 +474,12 @@ def read(issue, project):
     path = project.path_with_namespace
     try:
         native = [
-            {"ref": _ref_of(x, project), "since": getattr(x, "link_created_at", None),
-             "link_id": x.issue_link_id, "source": "native"}
+            {
+                "ref": _ref_of(x, project),
+                "since": getattr(x, "link_created_at", None),
+                "link_id": x.issue_link_id,
+                "source": "native",
+            }
             for x in issue.links.list(all=True)
             if getattr(x, "link_type", None) == BLOCKED_BY
         ]
@@ -440,12 +488,17 @@ def read(issue, project):
             raise
         if path not in _warned:
             _warned.add(path)
-            log.warning("%s: issue links unavailable (%s); reading footer refs only", path, e.response_code)
+            log.warning(
+                "%s: issue links unavailable (%s); reading footer refs only",
+                path,
+                e.response_code,
+            )
         native = []
     seen = {x["ref"] for x in native}
     footer = [
         {"ref": r, "since": None, "link_id": None, "source": "footer"}
-        for r in footer_refs(getattr(issue, "description", None), path) if r not in seen
+        for r in footer_refs(getattr(issue, "description", None), path)
+        if r not in seen
     ]
     return sorted(native, key=lambda x: ref_key(x["ref"])) + footer
 
@@ -460,7 +513,13 @@ def sync(issue, project, want, have, project_id_of):
             continue
         if x["source"] == "footer":
             shown = f"#{ref}" if ref.isdigit() else ref
-            records.append(("skipped", "link", f"{issue.title}: blocker {shown} is a footer ref — edit the description"))
+            records.append(
+                (
+                    "skipped",
+                    "link",
+                    f"{issue.title}: blocker {shown} is a footer ref — edit the description",
+                )
+            )
         else:
             issue.links.delete(x["link_id"])
     added = []
@@ -472,11 +531,18 @@ def sync(issue, project, want, have, project_id_of):
         else:
             path, iid = ref.rsplit("#", 1)
             target_project, iid = project_id_of(path), int(iid)
-        issue.links.create({"target_project_id": target_project, "target_issue_iid": iid, "link_type": BLOCKED_BY})
+        issue.links.create(
+            {
+                "target_project_id": target_project,
+                "target_issue_iid": iid,
+                "link_type": BLOCKED_BY,
+            }
+        )
         added.append((target_project, iid))
     if added:
         wrong = [
-            x for x in issue.links.list(all=True)
+            x
+            for x in issue.links.list(all=True)
             if (x.project_id, x.iid) in added and x.link_type != BLOCKED_BY
         ]
         for x in wrong:
@@ -797,12 +863,29 @@ from rich.console import Console
 from gitboard import graph
 
 
-def card(iid, title=None, *, labels=(), blocked_by=(), milestone=None, milestone_due=None,
-         assignee="alice", due=None, priority=None, state="opened"):
+def card(
+    iid,
+    title=None,
+    *,
+    labels=(),
+    blocked_by=(),
+    milestone=None,
+    milestone_due=None,
+    assignee="alice",
+    due=None,
+    priority=None,
+    state="opened",
+):
     return {
-        "iid": iid, "title": title or f"card {iid}", "state": state, "labels": list(labels),
-        "assignee": assignee, "due_date": due, "milestone": milestone,
-        "milestone_due": milestone_due, "priority": priority,
+        "iid": iid,
+        "title": title or f"card {iid}",
+        "state": state,
+        "labels": list(labels),
+        "assignee": assignee,
+        "due_date": due,
+        "milestone": milestone,
+        "milestone_due": milestone_due,
+        "priority": priority,
         "blocked_by": [{"ref": r, "state": s, "since": None} for r, s in blocked_by],
         "web_url": None,
     }
@@ -813,7 +896,12 @@ CARDS = [
     card(1),
     card(2, blocked_by=[("1", "opened")]),
     card(3),
-    card(4, blocked_by=[("2", "opened"), ("3", "opened")], milestone="Beta", milestone_due="2026-11-01"),
+    card(
+        4,
+        blocked_by=[("2", "opened"), ("3", "opened")],
+        milestone="Beta",
+        milestone_due="2026-11-01",
+    ),
     card(5, blocked_by=[("x/y#7", None)], milestone="Beta", milestone_due="2026-11-01"),
 ]
 
@@ -852,35 +940,56 @@ def test_closed_same_project_blocker_absent_from_cards():
 def test_flags():
     cards = [
         card(1, priority=3, due="2026-11-05", assignee=None),
-        card(2, labels=["Doing"], priority=1, due="2026-10-20", blocked_by=[("1", "opened")], milestone="Beta"),
+        card(
+            2,
+            labels=["Doing"],
+            priority=1,
+            due="2026-10-20",
+            blocked_by=[("1", "opened")],
+            milestone="Beta",
+        ),
         card(3, labels=["Blocked"], blocked_by=[("9", "closed")]),
     ]
     f = graph.flags(cards, ["Doing", "Blocked", "Verify"])
     assert [x["iid"] for x in f["blocked_stale"]] == [3]
     assert [x["iid"] for x in f["blocked_unmarked"]] == [2]
     assert f["priority_inversion"][0]["detail"] == "#2 (P1) waits on #1 (P3)"
-    assert f["date_inversion"][0]["detail"] == "#2 due 2026-10-20 waits on #1 due 2026-11-05"
+    assert (
+        f["date_inversion"][0]["detail"]
+        == "#2 due 2026-10-20 waits on #1 due 2026-11-05"
+    )
     assert f["unowned_blocker"][0]["iid"] == 1
     assert f["unowned_blocker"][0]["detail"] == "#1 (unassigned) blocks #2 in Beta"
 
 
 def test_no_blocked_flags_without_a_blocked_column():
-    f = graph.flags([card(3, labels=["Doing"], blocked_by=[("9", "opened")])], ["Doing"])
+    f = graph.flags(
+        [card(3, labels=["Doing"], blocked_by=[("9", "opened")])], ["Doing"]
+    )
     assert f["blocked_stale"] == [] and f["blocked_unmarked"] == []
 
 
 def test_closed_blocker_raises_no_inversion():
-    cards = [card(1, priority=4, state="closed"), card(2, priority=1, blocked_by=[("1", "closed")])]
+    cards = [
+        card(1, priority=4, state="closed"),
+        card(2, priority=1, blocked_by=[("1", "closed")]),
+    ]
     assert graph.flags(cards, ["Doing"])["priority_inversion"] == []
 
 
 SPEC = {
-    "project": "grp/proj", "board": "b",
+    "project": "grp/proj",
+    "board": "b",
     "columns": [{"name": "Doing"}, {"name": "Done"}],
     "milestones": [{"title": "Beta", "due_date": datetime.date(2026, 11, 1)}],
     "issues": [
-        {"title": "reader", "iid": 12, "labels": ["priority::1"], "milestone": "Beta",
-         "blocked_by": [9, "Token rotation", "infra/platform#4", "Brand new"]},
+        {
+            "title": "reader",
+            "iid": 12,
+            "labels": ["priority::1"],
+            "milestone": "Beta",
+            "blocked_by": [9, "Token rotation", "infra/platform#4", "Brand new"],
+        },
         {"title": "Token rotation", "iid": 14, "labels": ["Done"]},
         {"title": "Brand new"},
     ],
@@ -892,7 +1001,11 @@ def test_cards_from_spec():
     r = cards["reader"]
     assert r["priority"] == 1 and r["milestone_due"] == "2026-11-01"
     assert [(b["ref"], b["state"]) for b in r["blocked_by"]] == [
-        ("9", "closed"), ("14", "closed"), ("infra/platform#4", None), ("new:Brand new", "opened")]
+        ("9", "closed"),
+        ("14", "closed"),
+        ("infra/platform#4", None),
+        ("new:Brand new", "opened"),
+    ]
     assert cards["Brand new"]["iid"] is None
 
 
@@ -908,15 +1021,21 @@ def _text(renderable):
 
 
 def test_tree_prints_shared_blocker_once():
-    shared = [card(1), card(2, blocked_by=[("1", "opened")], milestone="Beta"),
-              card(3, blocked_by=[("1", "opened")], milestone="Beta")]
+    shared = [
+        card(1),
+        card(2, blocked_by=[("1", "opened")], milestone="Beta"),
+        card(3, blocked_by=[("1", "opened")], milestone="Beta"),
+    ]
     text = _text(graph.render_tree(graph.build(shared), "2026-09-27"))
     assert "◆ Beta" in text
     assert text.count("#1 card 1") == 1 and "(see #1 above)" in text
 
 
 def test_mermaid_escapes_hostile_titles():
-    cards = [card(1, 'say "hi" <script>#x'), card(2, blocked_by=[("1", "closed")], milestone="Beta")]
+    cards = [
+        card(1, 'say "hi" <script>#x'),
+        card(2, blocked_by=[("1", "closed")], milestone="Beta"),
+    ]
     cards[0]["state"] = "closed"
     text = graph.render_mermaid(graph.build(cards))
     assert text.startswith("flowchart LR")
@@ -1022,14 +1141,20 @@ def test_page_is_self_contained():
 
 
 def test_titles_are_escaped():
-    cards = [card(1, '<script>alert(1)</script> & "q"'), card(2, blocked_by=[("1", "opened")], milestone="Beta")]
+    cards = [
+        card(1, '<script>alert(1)</script> & "q"'),
+        card(2, blocked_by=[("1", "opened")], milestone="Beta"),
+    ]
     page = graph_html.render_html(graph.build(cards), "t")
     assert "<script>alert(1)" not in page
     assert "&lt;script&gt;" in page
 
 
 def test_flagged_and_closed_classes():
-    cards = [card(1, state="closed"), card(2, blocked_by=[("1", "closed")], milestone="Beta")]
+    cards = [
+        card(1, state="closed"),
+        card(2, blocked_by=[("1", "closed")], milestone="Beta"),
+    ]
     page = graph_html.render_html(graph.build(cards), "t", flagged={"2"})
     assert 'class="node closed' in page and "flag" in page
 ```
@@ -1162,13 +1287,22 @@ first):
 def test_load_rejects_blocked_by_cycle(tmp_path): ...
 def test_load_rejects_unknown_milestone(tmp_path): ...
 def test_load_rejects_two_priorities(tmp_path): ...
-def test_absent_blocked_by_is_unmanaged(monkeypatch): ...
+def test_absent_blocked_by_is_unmanaged(monkeypatch):
+    ...
     # live issue has links, spec entry has no blocked_by key -> diff == [] and apply calls no links.create/delete
+
+
 def test_empty_blocked_by_removes_native_links(monkeypatch): ...
-def test_blocked_by_three_way_skipped_and_drift(): ...
+def test_blocked_by_three_way_skipped_and_drift():
+    ...
     # issue_changes: base [9], live [9, 11], yaml [9] -> skipped; base [9], live [11], yaml [10] -> drift
-def test_new_title_ref_links_after_create(monkeypatch): ...
+
+
+def test_new_title_ref_links_after_create(monkeypatch):
+    ...
     # yaml: A blocked_by ["B"], B has no iid -> apply creates B, then A.links.create(target_issue_iid=B.iid)
+
+
 def test_milestone_created_and_assigned(monkeypatch): ...
 def test_milestone_clear_with_null(monkeypatch): ...
 def test_plan_reports_milestone_changes(monkeypatch): ...
@@ -1233,10 +1367,14 @@ def test_downgrade_raises_one_problem(monkeypatch): ...
 **Required tests:**
 
 ```python
-def test_columns_follow_board_order_after_overdue(): ...
+def test_columns_follow_board_order_after_overdue():
+    ...
     # three issues: rp 3, rp 1, rp None; one overdue with rp 9 -> [overdue, rp1, rp3, None]
+
+
 def test_columns_from_spec_use_yaml_order(): ...
-def test_history_carries_blocked_by_priority_and_milestone_due(): ...
+def test_history_carries_blocked_by_priority_and_milestone_due():
+    ...
     # HistIssue gains links (FakeLinks-like) + milestone {"title","due_date"}; blocker #9 open -> "opened",
     # blocker #8 closed in seen -> "closed", #77 not in seen -> "closed", other/x#4 -> None
 ```
@@ -1290,7 +1428,7 @@ delete them.
 **Required tests:**
 
 ```python
-def test_summarise_flags_blockers(): ...          # history with Blocked column + cards like test_graph.test_flags
+def test_summarise_flags_blockers(): ...  # history with Blocked column + cards like test_graph.test_flags
 def test_old_dump_without_blocked_by_has_no_flags(): ...
 def test_for_person_filters_flags(): ...
 def test_three_moves_includes_unblock_after_overdue(): ...
@@ -1354,12 +1492,18 @@ def test_mail_blockers_block_renders_and_is_outlook_safe(): ...
 
 ```python
 def test_pull_writes_issues_in_board_order(): ...
-def test_order_unmanaged_without_base(monkeypatch): ...   # yaml reordered, no base -> no order records, no reorder()
-def test_order_write_uses_minimal_moves(monkeypatch): ... # base [1,2,3,4], live same, yaml [4,1,2,3] -> one reorder of 4 before 1
+def test_order_unmanaged_without_base(
+    monkeypatch,
+): ...  # yaml reordered, no base -> no order records, no reorder()
+def test_order_write_uses_minimal_moves(
+    monkeypatch,
+): ...  # base [1,2,3,4], live same, yaml [4,1,2,3] -> one reorder of 4 before 1
 def test_order_skipped_when_only_gitlab_moved(monkeypatch): ...
 def test_order_drift_refused_then_forced(monkeypatch): ...
 def test_pull_then_plan_is_empty_with_order(monkeypatch): ...
-def test_order_rerun_after_partial_failure(monkeypatch): ...  # reorder raises on 2nd call; rerun finishes
+def test_order_rerun_after_partial_failure(
+    monkeypatch,
+): ...  # reorder raises on 2nd call; rerun finishes
 ```
 
 The fake `reorder(move_after_id=None, move_before_id=None)` mutates the

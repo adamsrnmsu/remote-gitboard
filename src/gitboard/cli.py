@@ -1005,6 +1005,8 @@ def _report(path, days, db, repo, since_ts=None, history=None):
         batches = report_mod.load(db, project=path, days=days)
         window = f"within {days} day(s)"
     console = out()
+    as_blocks = blocks_mod.wanted()
+    found = []
     if not batches:
         err().print(
             f"[muted]no snapshot of {path} {window} in {db} — run "
@@ -1016,17 +1018,83 @@ def _report(path, days, db, repo, since_ts=None, history=None):
             f"[muted]need two snapshots of {path} {window} in {db} — run "
             "`gitboard snapshot`, wait for movement, run it again[/]"
         )
+    elif as_blocks:
+        found = [
+            blocks_mod.heading(f"{path} — {len(batches)} snapshots {window}", 2),
+            *_movement_blocks(batches, days, repo, verifiers),
+        ]
     else:
         console.print(f"[bold]{path}[/] — {len(batches)} snapshots {window}")
         _movement(console, batches, days, repo, verifiers)
     latest = batches[-1]
     hits = report_mod.stuck(report_mod.column_ages(batches))
-    if hits:
+    if as_blocks:
+        if hits:
+            found += [
+                blocks_mod.heading("stuck — past the column's threshold", 3),
+                blocks_mod.bullets(
+                    [f"#{i} {latest[i]['title']}  {c} for {a}d" for i, c, a in hits]
+                ),
+            ]
+        blocks_mod.emit(found)
+    elif hits:
         console.print("[bold red]stuck[/] [muted]— past the column's threshold[/]")
         for iid, col, age in hits:
             console.print(
                 f"  [muted]#{iid}[/] {latest[iid]['title']}  [muted]{col} for {age}d[/]"
             )
+
+
+def _movement_blocks(batches, days, repo, verifiers=None):
+    """`_movement` as blocks: figures, what moved, the tally in name order."""
+    changes = report_mod.diff(batches)
+    keys = ("moved", "new", "closed", "unchanged")
+    found = [
+        blocks_mod.figures([blocks_mod.figure(k, str(len(changes[k]))) for k in keys])
+    ]
+    rows = [
+        [
+            f"#{a['iid']}",
+            f"{a['title']}  {'+'.join(b['columns'])} -> {'+'.join(a['columns'])}",
+        ]
+        for b, a in changes["moved"]
+    ]
+    rows += [
+        [f"#{r['iid']}", f"{r['title']}  new in {'+'.join(r['columns'])}"]
+        for r in changes["new"]
+    ]
+    rows += [[f"#{r['iid']}", f"{r['title']}  closed"] for r in changes["closed"]]
+    if rows:
+        found.append(blocks_mod.table(["issue", "what"], rows))
+    else:
+        found.append(blocks_mod.text("no movement in the window", "dim"))
+    tally = report_mod.by_assignee(changes)
+    if not tally and not verifiers:
+        return found
+    authors = report_mod.commit_counts(repo, days) if repo else {}
+    head = ["assignee", "moved", "new", "closed"]
+    head += ["commits"] if repo else []
+    head += ["verified"] if verifiers is not None else []
+    rows = []
+    for name in sorted(tally):  # name order: the tally is never a ranking
+        row = [name] + [str(tally[name][c] or "") for c in head[1:4]]
+        if repo:
+            author = report_mod.match_author(name, authors)
+            row.append(str(authors.pop(author)) if author else "?")
+        if verifiers is not None:
+            row.append(str(verifiers.pop(name, "") or ""))
+        rows.append(row)
+    found.append(blocks_mod.table(head, rows, align=["l"] + ["r"] * (len(head) - 1)))
+    notes = [
+        f"{c} commit(s) by {a} <{e}> matched no assignee"
+        for (a, e), c in sorted(authors.items())
+    ] + [
+        f"{c} verdict(s) by {n} matched no assignee"
+        for n, c in sorted((verifiers or {}).items())
+    ]
+    if notes:
+        found.append(blocks_mod.bullets(notes))
+    return found
 
 
 def _movement(console, batches, days, repo, verifiers=None):
@@ -2409,6 +2477,25 @@ def status(
             )
         if not rows:
             err().print("[muted]no boards/*.yaml here — `gitboard pull` one[/]")
+            return
+        if blocks_mod.wanted():
+            plain = []
+            for name, pulled, staged, notes, questions, verify, overdue, last in rows:
+                plain.append(
+                    [
+                        name,
+                        _ago(pulled, now) if pulled else "never",
+                        "-" if staged is None else str(staged),
+                        str(notes),
+                        "-" if questions is None else str(questions),
+                        f"{max(verify)}d" if verify else "-",
+                        str(overdue),
+                        _ago(last, now) if last else "never",
+                    ]
+                )
+            head = [c.header for c in table.columns]
+            align = ["l", "l", "r", "r", "r", "r", "r", "l"]
+            blocks_mod.emit([blocks_mod.table(head, plain, align=align)])
             return
         out().print(table)
 

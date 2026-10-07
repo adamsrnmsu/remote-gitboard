@@ -162,6 +162,8 @@ gitboard config                          # what URL and tokens resolved
 gitboard --help
 ```
 
+`stats`, `status` and `report` print JSON-lines blocks instead of text when `PI_BLOCKS=1` (what `perch tui` sets).
+
 `show` sorts overdue work to the top of each column and truncates to 5 issues
 each, so a 200-issue board still fits on a screen and the truncation never
 hides the part you were looking for. The footer counts issues, unassigned and
