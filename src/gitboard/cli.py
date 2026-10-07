@@ -335,6 +335,12 @@ def show(
     from_file: str | None = typer.Option(
         None, "--from", help="Render a board YAML instead of GitLab. No network."
     ),
+    filter_: str | None = typer.Option(
+        None,
+        "--filter",
+        help="Only matching cards: @user, ~label, %milestone, other words "
+        "match the title; all must match.",
+    ),
 ):
     """Print an issue board, grouped into its columns."""
 
@@ -352,6 +358,10 @@ def show(
                 path, board_name or get_config().board
             )
             spec_path = find_spec(path)
+        if filter_:
+            if columns is None:
+                columns = board_mod.board_columns(project_obj, board_obj)
+            columns = board_mod.filter_columns(columns, filter_)
         ages = _ages(project_obj.path_with_namespace)
         if markdown:
             print(
@@ -1555,6 +1565,7 @@ def tui(
             "cursor": None,
             "limit": 5,
             "staged": [],
+            "filter": "",
             "guide": get_config().guide and not no_guide,
             "path": from_file or _need(project, "project", "project"),
             "name": board_name or get_config().board,
@@ -1575,8 +1586,12 @@ def tui(
             st.update(proj=proj, board=board, columns=columns, spec=found, ages=ages)
             if held is not None:
                 st["cursor"] = _find_card(
-                    st["columns"], held, st["limit"], prefer=st["cursor"][0]
+                    shown(), held, st["limit"], prefer=st["cursor"][0]
                 )
+
+        def shown():
+            """The columns as the user sees them: the / filter applied."""
+            return board_mod.filter_columns(st["columns"], st["filter"])
 
         def staged(parsed, write=False):
             return _staged(parsed, st["spec"], offline, write)
@@ -1599,7 +1614,7 @@ def tui(
             return bar
 
         def view():
-            cols = st["columns"]
+            cols = shown()
             # ponytail: naive fit — one header + one spare line per column,
             # the rest split evenly. Uneven boards waste a little; fine
             # until someone complains.
@@ -1624,9 +1639,16 @@ def tui(
                 subtitle = f"defined by {spec} — e edits, a pushes"
             else:
                 subtitle = "no YAML yet — e pulls the board into one"
+            title = None
+            if st["filter"]:
+                n = board_mod.summarise(cols)["issues"]
+                total = board_mod.summarise(st["columns"])["issues"]
+                title = Text(f"filter: {st['filter']} · {n} of {total}", "bold yellow")
             parts = [
                 Panel(
                     body,
+                    title=title,
+                    title_align="left",
                     subtitle=Text(subtitle, "muted"),
                     subtitle_align="left",
                     border_style="cyan",
@@ -1688,10 +1710,11 @@ def tui(
         def selected_issue():
             """The card under the cursor, or None (no cursor, or it went stale)."""
             cur = st["cursor"]
-            if cur is None or cur[0] >= len(st["columns"]):
+            cols = shown()
+            if cur is None or cur[0] >= len(cols):
                 return None
-            shown = st["columns"][cur[0]][1][: st["limit"] or None]
-            return shown[cur[1]] if cur[1] < len(shown) else None
+            visible = cols[cur[0]][1][: st["limit"] or None]
+            return visible[cur[1]] if cur[1] < len(visible) else None
 
         def read_card(label):
             """The card to act on: the one under the cursor, else a typed
@@ -1869,6 +1892,8 @@ def tui(
                 ("", "estimate from the assignee's finished history"),
                 ("c", "stage a comment on a card; a pushes it"),
                 ("n", "new card: a title, then a column"),
+                ("/", "filter cards: @user ~label %milestone, other words"),
+                ("", "match the title; esc (no selection) clears it"),
                 ("g", "show or hide the guide panels"),
                 ("P", "perch, B Budgie: switch app (when opened from perch tui)"),
                 ("q", "quit"),
@@ -1912,12 +1937,20 @@ def tui(
                 """One key's action, the board loaded."""
                 if k in ("up", "down", "left", "right"):
                     sizes = [
-                        len(issues[: st["limit"] or None])
-                        for _, issues in st["columns"]
+                        len(issues[: st["limit"] or None]) for _, issues in shown()
                     ]
                     st["cursor"] = _move_cursor(st["cursor"], k, sizes)
                 elif k == "\x1b":
+                    if st["cursor"] is None:
+                        st["filter"] = ""
                     st["cursor"] = None
+                elif k == "/":
+                    got = read_line(
+                        "filter", "@user ~label %milestone words; empty clears"
+                    )
+                    if got is not None or st["filter"]:
+                        st["filter"] = got or ""
+                        st["cursor"] = None
                 elif k == "g":
                     st["guide"] = not st["guide"]
                     st["status"] = Text(

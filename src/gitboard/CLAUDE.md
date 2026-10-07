@@ -183,7 +183,10 @@ missing, diff shown on return) / plan / push-with-y/n /
 sync (push, snapshot, refresh the YAML: `_refresh_spec`, shared with the
 `sync` command) / pull (`_pull_board`, shared with `pull`; warns and asks y/n
 before overwriting, listing `_staged_edits`; online only) /
-migrate-with-close-y/n / help. The per-column truncation limit is computed
+migrate-with-close-y/n / help. `/` sets `st["filter"]`; `shown()` is
+`board.filter_columns` over the full columns and is what `view`, the cursor and
+`_find_card` use (`live_issue` and people lists stay on the full board);
+`show --filter` uses the same function. The per-column truncation limit is computed
 from terminal height each draw, and SIGWINCH redraws, so resizing works.
 Raw input is `_key()` (termios cbreak, dies without a tty); all prompts
 render inside the layout — `read_iid` echoes digits into the prompt line
