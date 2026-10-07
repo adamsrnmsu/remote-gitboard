@@ -1432,3 +1432,28 @@ def test_pull_lists_only_columns_with_a_label_and_sorts_undated_milestones_last(
     spec = apply.spec_from_board(project, board, [*columns, ("Ghost", [])])
     assert [c["name"] for c in spec["columns"]] == ["Doing"]
     assert [m["title"] for m in spec["milestones"]] == ["A", "B", "Z"]
+
+
+def test_show_filter_keeps_only_matching_cards(tmp_path):
+    from typer.testing import CliRunner
+
+    from gitboard import cli
+
+    path = tmp_path / "e.yaml"
+    path.write_text(
+        apply.dump(
+            {
+                **SPEC,
+                "issues": [
+                    {"title": "one", "iid": 1, "assignee": "alice"},
+                    {"title": "two", "iid": 2},
+                ],
+            }
+        )
+    )
+    res = CliRunner().invoke(
+        cli.app, ["show", "--from", str(path), "--markdown", "--filter", "@alice"]
+    )
+    assert res.exit_code == 0, res.output
+    assert "#1 one" in res.output
+    assert "#2 two" not in res.output

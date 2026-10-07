@@ -56,26 +56,62 @@ BOARDS = {
     ),
 }
 COLORS = [
-    "crimson", "gitlab blue", "teal", "carrot orange", "dark violet",
-    "medium sea green", "charcoal", "rose red", "blue gray", "aztec gold",
+    "crimson",
+    "gitlab blue",
+    "teal",
+    "carrot orange",
+    "dark violet",
+    "medium sea green",
+    "charcoal",
+    "rose red",
+    "blue gray",
+    "aztec gold",
 ]
 VERBS = [
-    "Fix", "Investigate", "Refactor", "Document", "Migrate", "Automate",
-    "Benchmark", "Redesign", "Remove", "Upgrade", "Audit", "Prototype",
+    "Fix",
+    "Investigate",
+    "Refactor",
+    "Document",
+    "Migrate",
+    "Automate",
+    "Benchmark",
+    "Redesign",
+    "Remove",
+    "Upgrade",
+    "Audit",
+    "Prototype",
 ]
 THINGS = [
-    "the retry queue", "webhook signatures", "session storage",
-    "the nightly job", "rate limiting", "the onboarding flow",
-    "stale cache invalidation", "flaky CI on darwin", "the metrics exporter",
-    "TLS cert rotation", "the search indexer", "duplicate event delivery",
-    "the admin audit log", "cold-start latency", "the feature-flag service",
+    "the retry queue",
+    "webhook signatures",
+    "session storage",
+    "the nightly job",
+    "rate limiting",
+    "the onboarding flow",
+    "stale cache invalidation",
+    "flaky CI on darwin",
+    "the metrics exporter",
+    "TLS cert rotation",
+    "the search indexer",
+    "duplicate event delivery",
+    "the admin audit log",
+    "cold-start latency",
+    "the feature-flag service",
 ]
 LONG = (
     " across every region we deploy to, including the two legacy "
     "environments nobody wants to touch"
 )
-DUES = [None, None, None, "2026-08-10", "2026-08-19", "2026-08-25",
-        "2026-09-05", "2026-09-30"]
+DUES = [
+    None,
+    None,
+    None,
+    "2026-08-10",
+    "2026-08-19",
+    "2026-08-25",
+    "2026-09-05",
+    "2026-09-30",
+]
 SNIPPETS = [
     "Repro'd on staging — only happens when the retry lands on a cold shard.",
     "Blocked on the vendor ticket, ETA next week.",
@@ -89,8 +125,11 @@ SNIPPETS = [
 
 def write_spec(slug, board, cols, tags, issues):
     lines = [
-        f"project: test/{slug}", f"board: {board}", "create_project: true",
-        "", "columns:",
+        f"project: test/{slug}",
+        f"board: {board}",
+        "create_project: true",
+        "",
+        "columns:",
     ]
     for i, col in enumerate(cols):
         lines += [f"  - name: {col}", f"    color: {COLORS[i % len(COLORS)]}"]
@@ -159,7 +198,9 @@ def main():
         print(f"applying {os.path.relpath(path, ROOT)}…")
         subprocess.run(
             [PYTHON, "-m", "gitboard.cli", "push", path, "--yes"],
-            cwd=ROOT, env=env, check=True,
+            cwd=ROOT,
+            env=env,
+            check=True,
         )
 
     print(f"commenting the first issues of {COMMENTED}…")

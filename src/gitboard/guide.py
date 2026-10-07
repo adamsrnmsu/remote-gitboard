@@ -24,11 +24,12 @@ CARD_KEYS = [
     ("d", "due"),
     ("c", "comment"),
     ("n", "new"),
+    ("/", "filter"),
 ]
 TAIL_KEYS = [("m", "migrate"), ("g", "guide"), ("?", "help"), ("q", "quit")]
 OFFLINE_KEYS = [("r", "reload"), ("e", "edit"), ("p", "diff")]
 NO_GUIDE = {"g", "?", "q", "↑↓"}  # they explain themselves
-PROMPTS = set("bevudcnma")  # keys that ask for input: their text needs an example
+PROMPTS = set("bevudcnma/")  # keys that ask for input: their text needs an example
 
 
 def rows(offline, has_spec):
@@ -116,6 +117,15 @@ GUIDE = {
             "empty prompt runs it. b first picks another project for the next one.",
             "Then y closes #12 with a `superseded by` note; n leaves it open.",
             "Writes to GitLab at once. Nothing is deleted; a rerun copies nothing new.",
+        ],
+    ),
+    "/": (
+        "filter",
+        [
+            "Shows only matching cards; columns stay. Nothing is written.",
+            "Example: `@alice ~bug %v2 token` — assignee alice, label bug,",
+            "milestone v2, title has `token`; all must match. Enter on an empty",
+            "prompt, or esc with no card selected, clears it. r keeps it.",
         ],
     ),
     "v": (

@@ -13,7 +13,7 @@ from rich.console import Group
 from rich.text import Text
 from rich.tree import Tree
 
-from gitboard import client, links, stats
+from gitboard import client, links, report, stats
 from gitboard.apply import MARKER
 from gitboard.ingest import VERDICT
 from gitboard.log import out
@@ -255,7 +255,8 @@ def as_markdown(project, board, columns=None, ages=None):
 def issue_line(issue, column, ages=None):
     """One issue as a styled line. Extra labels are the ones from *other*
     columns — the column's own label is redundant inside it. `ages`
-    ({iid: (column, days)}, from report.age_days) adds ` · Verify 3d`."""
+    ({iid: (column, days)}, from report.age_days) adds ` · Verify 3d`, amber
+    once past the column's `report.STUCK` threshold."""
     line = Text.assemble(
         (f"{ref(issue)} ", "muted"),
         issue.title,
@@ -275,7 +276,8 @@ def issue_line(issue, column, ages=None):
         line.append(f"  {' '.join(extra)}", "magenta")
     if ages and issue.iid in ages:
         col, days = ages[issue.iid]
-        line.append(f" · {col} {days}d", "muted")
+        late = any(days >= report.STUCK.get(c, days + 1) for c in col.split("+"))
+        line.append(f" · {col} {days}d", "dark_orange" if late else "muted")
     return line
 
 
@@ -295,6 +297,38 @@ def summarise(columns):
         "unassigned": sum(1 for i in issues if not i.assignee),
         "overdue": sum(1 for i in issues if is_overdue(i)),
     }
+
+
+def filter_columns(columns, query):
+    """`columns` keeping only the cards that match every term of `query`.
+
+    `@user` assignee username, `~label`, `%milestone` (all case-insensitive
+    substrings), any other word a title substring. Every column is kept, even
+    empty, so the shape never changes. Duck-typed: python-gitlab issues and
+    `columns_from_spec` stand-ins both work; a missing field matches nothing.
+    """
+    terms = query.lower().split()
+    if not terms:
+        return columns
+
+    def hit(issue, term):
+        sign, want = term[0], term[1:]
+        if sign == "@":
+            who = getattr(issue, "assignee", None)
+            return bool(who) and want in who["username"].lower()
+        if sign == "~":
+            return any(
+                want in lab.lower() for lab in getattr(issue, "labels", None) or []
+            )
+        if sign == "%":
+            ms = getattr(issue, "milestone", None)
+            return bool(ms) and want in ms["title"].lower()
+        return term in (getattr(issue, "title", "") or "").lower()
+
+    return [
+        (name, [i for i in issues if all(hit(i, t) for t in terms)])
+        for name, issues in columns
+    ]
 
 
 def snapshot_records(project, board, ts):
@@ -323,7 +357,26 @@ def snapshot_records(project, board, ts):
     return list(records.values())
 
 
-def board_view(project, board, limit=5, columns=None, ages=None, selected=None):
+def moved(old, new):
+    """iids in `new` columns that are new or sit in different columns than in
+    `old` (both `[(name, issues)]`). A card gone from the board is not marked;
+    an offline `(new)` card has no iid and is skipped."""
+
+    def where(columns):
+        out = {}
+        for name, issues in columns:
+            for i in issues:
+                if i.iid is not None:
+                    out.setdefault(i.iid, set()).add(name)
+        return out
+
+    before = where(old)
+    return {iid for iid, cols in where(new).items() if before.get(iid) != cols}
+
+
+def board_view(
+    project, board, limit=5, columns=None, ages=None, selected=None, marked=()
+):
     """Tree + totals as one renderable, plus the hidden count.
 
     `show` prints it once; `tui` redraws it on every keypress and resize.
@@ -333,7 +386,8 @@ def board_view(project, board, limit=5, columns=None, ages=None, selected=None):
     caller already has them; `ages` (see issue_line) adds time-in-column.
     `selected` is the TUI's cursor, `(column name, index among the shown
     cards)`: a position, not an iid, because a two-column card is on screen
-    twice and an offline `(new)` card has no number.
+    twice and an offline `(new)` card has no number. `marked` is a set of
+    iids (see `moved`) drawn with a `●` until the next reload.
     """
     columns = board_columns(project, board) if columns is None else columns
     tree = Tree(
@@ -353,6 +407,8 @@ def board_view(project, board, limit=5, columns=None, ages=None, selected=None):
         shown = issues if limit == 0 else issues[:limit]
         for at, issue in enumerate(shown):
             line = issue_line(issue, name, ages)
+            if issue.iid in marked:
+                line = Text("● ", "bold cyan") + line
             if selected == (name, at):
                 line = Text("▶ ", "bold") + line
                 line.stylize("reverse", 2)

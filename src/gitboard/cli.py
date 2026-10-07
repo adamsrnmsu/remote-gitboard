@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -39,6 +40,7 @@ from gitboard import guide as guide_mod
 from gitboard import ingest as ingest_mod
 from gitboard import mail as mail_mod
 from gitboard import migrate as migrate_mod
+from gitboard import replay as replay_mod
 from gitboard import report as report_mod
 from gitboard import stats as stats_mod
 from gitboard.config import (
@@ -51,7 +53,6 @@ from gitboard.config import (
 from gitboard.log import err, get_logger, out, set_verbose
 
 app = typer.Typer(
-    add_completion=False,
     no_args_is_help=True,
     rich_markup_mode="rich",
     help=__doc__.split("\n\n")[0],
@@ -267,6 +268,32 @@ def local_specs():
     return found
 
 
+def _candidates(ctx, pick):
+    """Completion candidates from local files only: never the network or keychain,
+    and never an exception (a broken shell prompt is worse than no candidates)."""
+    try:
+        cfg = get_config()
+        specs = [s for _, s in local_specs()]
+        if (project := ctx.params.get("project")) is not None:
+            specs = [s for s in specs if s["project"] == project]
+        pairs = [(s["project"], s["board"]) for s in specs]
+        if cfg.project and project in (None, cfg.project):
+            pairs.append((cfg.project, cfg.board))
+        return pick(pairs)
+    except Exception:
+        return []
+
+
+def _complete_project(ctx: typer.Context, incomplete: str):
+    names = _candidates(ctx, lambda pairs: [p for p, _ in pairs if p])
+    return sorted({n for n in names if n.startswith(incomplete)})
+
+
+def _complete_board(ctx: typer.Context, incomplete: str):
+    names = _candidates(ctx, lambda pairs: [b for _, b in pairs if b])
+    return sorted({n for n in names if n.startswith(incomplete)})
+
+
 def find_spec(project_path):
     """The boards/*.yaml that defines this project, for the "go look here"
     footer — None means no footer."""
@@ -321,8 +348,12 @@ def _for_each(fn, items):
 
 @app.command()
 def show(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     markdown: bool = typer.Option(
         False, "--markdown", "-m", help="Stable markdown, for piping or the AI pass."
     ),
@@ -334,6 +365,12 @@ def show(
     ),
     from_file: str | None = typer.Option(
         None, "--from", help="Render a board YAML instead of GitLab. No network."
+    ),
+    filter_: str | None = typer.Option(
+        None,
+        "--filter",
+        help="Only matching cards: @user, ~label, %milestone, other words "
+        "match the title; all must match.",
     ),
 ):
     """Print an issue board, grouped into its columns."""
@@ -352,6 +389,10 @@ def show(
                 path, board_name or get_config().board
             )
             spec_path = find_spec(path)
+        if filter_:
+            if columns is None:
+                columns = board_mod.board_columns(project_obj, board_obj)
+            columns = board_mod.filter_columns(columns, filter_)
         ages = _ages(project_obj.path_with_namespace)
         if markdown:
             print(
@@ -648,8 +689,12 @@ def migrate_comments(
 
 @app.command()
 def snapshot(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     out_path: str = typer.Option(
         SNAPSHOTS, "--out", "-o", help="JSONL file to append to."
     ),
@@ -737,8 +782,12 @@ def _pull_board(path, name, target, force, discard_edits, base, notes, no_snapsh
 
 @app.command()
 def pull(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     out: str | None = typer.Option(
         None, "--out", "-o", help="Where to write. Default: boards/<project>.yaml"
     ),
@@ -921,8 +970,81 @@ def ingest(
 
 
 @app.command()
-def report(
+def replay(
     project: str | None = typer.Argument(None, help="group/project"),
+    days: int = typer.Option(30, "--days", "-d", help="Window, in days."),
+    db: str = typer.Option(SNAPSHOTS, "--db", help="Snapshot log to read."),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        metavar="SPEC",
+        help="Window starts at the pull: SPEC.base's mtime. Replaces --days.",
+    ),
+    out_path: str = typer.Option("replay.html", "--out", "-o", help="Page to write."),
+    board_name: str | None = typer.Option(
+        None, "--board", "-b", help="Which board, when the log holds several."
+    ),
+):
+    """A timelapse of the board from the snapshot log, as one HTML page.
+
+    Local files only: no network, no token. Cards slide between columns and
+    fade when they leave the open set.
+    """
+
+    def go():
+        ts = None
+        path = project
+        if since:
+            base_file = Path(f"{since}.base")
+            if not base_file.exists():
+                raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
+            mtime = datetime.fromtimestamp(base_file.stat().st_mtime, UTC)
+            ts = mtime.isoformat(timespec="seconds")
+            spec = apply_mod.load(since)
+            path, name = project or spec["project"], board_name or spec["board"]
+        else:
+            name = board_name
+        batches = report_mod.load(db, project=path, days=AGE_WINDOW if ts else days)
+        if ts:
+            batches = report_mod.since(batches, ts)
+        projects = sorted({r["project"] for b in batches for r in b.values()})
+        if len(projects) > 1:
+            raise ConfigError(f"several projects in {db}: {', '.join(projects)}")
+        boards = sorted({r.get("board") or "" for b in batches for r in b.values()})
+        if name is None and len(boards) > 1:
+            raise ConfigError(
+                f"several boards in {db}: {', '.join(boards)} — pass --board"
+            )
+        if name is not None:
+            # each board is snapshotted with its own ts, so a batch is one board
+            kept = (
+                {i: r for i, r in b.items() if r.get("board") == name} for b in batches
+            )
+            batches = [b for b in kept if b]
+        if len(batches) < 2:
+            raise ConfigError(
+                f"need at least 2 snapshots in the window; have {len(batches)}"
+            )
+        frames, cards = replay_mod.frames(batches)
+        try:
+            url = get_config().url
+        except ConfigError:
+            url = None
+        title = f"{projects[0]} replay"
+        page = replay_mod.render_html(frames, cards, title, url, projects[0])
+        Path(out_path).write_text(page)
+        err().print(
+            f"[muted]wrote {out_path} — {len(frames)} frame(s), {len(cards)} card(s)[/]"
+        )
+
+    _run(go)
+
+
+@app.command()
+def report(
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
     days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
     db: str = typer.Option("snapshots.jsonl", "--db", help="Snapshot log to read."),
     repo: str | None = typer.Option(
@@ -1005,6 +1127,8 @@ def _report(path, days, db, repo, since_ts=None, history=None):
         batches = report_mod.load(db, project=path, days=days)
         window = f"within {days} day(s)"
     console = out()
+    as_blocks = blocks_mod.wanted()
+    found = []
     if not batches:
         err().print(
             f"[muted]no snapshot of {path} {window} in {db} — run "
@@ -1016,17 +1140,83 @@ def _report(path, days, db, repo, since_ts=None, history=None):
             f"[muted]need two snapshots of {path} {window} in {db} — run "
             "`gitboard snapshot`, wait for movement, run it again[/]"
         )
+    elif as_blocks:
+        found = [
+            blocks_mod.heading(f"{path} — {len(batches)} snapshots {window}", 2),
+            *_movement_blocks(batches, days, repo, verifiers),
+        ]
     else:
         console.print(f"[bold]{path}[/] — {len(batches)} snapshots {window}")
         _movement(console, batches, days, repo, verifiers)
     latest = batches[-1]
     hits = report_mod.stuck(report_mod.column_ages(batches))
-    if hits:
+    if as_blocks:
+        if hits:
+            found += [
+                blocks_mod.heading("stuck — past the column's threshold", 3),
+                blocks_mod.bullets(
+                    [f"#{i} {latest[i]['title']}  {c} for {a}d" for i, c, a in hits]
+                ),
+            ]
+        blocks_mod.emit(found)
+    elif hits:
         console.print("[bold red]stuck[/] [muted]— past the column's threshold[/]")
         for iid, col, age in hits:
             console.print(
                 f"  [muted]#{iid}[/] {latest[iid]['title']}  [muted]{col} for {age}d[/]"
             )
+
+
+def _movement_blocks(batches, days, repo, verifiers=None):
+    """`_movement` as blocks: figures, what moved, the tally in name order."""
+    changes = report_mod.diff(batches)
+    keys = ("moved", "new", "closed", "unchanged")
+    found = [
+        blocks_mod.figures([blocks_mod.figure(k, str(len(changes[k]))) for k in keys])
+    ]
+    rows = [
+        [
+            f"#{a['iid']}",
+            f"{a['title']}  {'+'.join(b['columns'])} -> {'+'.join(a['columns'])}",
+        ]
+        for b, a in changes["moved"]
+    ]
+    rows += [
+        [f"#{r['iid']}", f"{r['title']}  new in {'+'.join(r['columns'])}"]
+        for r in changes["new"]
+    ]
+    rows += [[f"#{r['iid']}", f"{r['title']}  closed"] for r in changes["closed"]]
+    if rows:
+        found.append(blocks_mod.table(["issue", "what"], rows))
+    else:
+        found.append(blocks_mod.text("no movement in the window", "dim"))
+    tally = report_mod.by_assignee(changes)
+    if not tally and not verifiers:
+        return found
+    authors = report_mod.commit_counts(repo, days) if repo else {}
+    head = ["assignee", "moved", "new", "closed"]
+    head += ["commits"] if repo else []
+    head += ["verified"] if verifiers is not None else []
+    rows = []
+    for name in sorted(tally):  # name order: the tally is never a ranking
+        row = [name] + [str(tally[name][c] or "") for c in head[1:4]]
+        if repo:
+            author = report_mod.match_author(name, authors)
+            row.append(str(authors.pop(author)) if author else "?")
+        if verifiers is not None:
+            row.append(str(verifiers.pop(name, "") or ""))
+        rows.append(row)
+    found.append(blocks_mod.table(head, rows, align=["l"] + ["r"] * (len(head) - 1)))
+    notes = [
+        f"{c} commit(s) by {a} <{e}> matched no assignee"
+        for (a, e), c in sorted(authors.items())
+    ] + [
+        f"{c} verdict(s) by {n} matched no assignee"
+        for n, c in sorted((verifiers or {}).items())
+    ]
+    if notes:
+        found.append(blocks_mod.bullets(notes))
+    return found
 
 
 def _movement(console, batches, days, repo, verifiers=None):
@@ -1153,8 +1343,12 @@ def _weekly(project, board=None, log=STATS_LOG):
 
 @app.command()
 def stats(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
     from_file: str | None = typer.Option(
         None, "--from", help="Read a --dump file instead of GitLab. No network."
@@ -1207,8 +1401,12 @@ def stats(
 
 @app.command()
 def digest(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
     out_dir: str = typer.Option("reports", "--out", help="Directory to write under."),
     all_boards: bool = typer.Option(
@@ -1358,8 +1556,12 @@ def _flagged(found):
 
 @app.command()
 def graph(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     from_file: str | None = typer.Option(
         None, "--from", help="Draw a board YAML instead of GitLab. No network."
     ),
@@ -1448,19 +1650,24 @@ def _split_keys(text):
     return out
 
 
-def _key():
-    """One keypress. The whole input layer of the TUI.
+def _key(timeout=None):
+    """One keypress. The whole input layer of the TUI. With `timeout`
+    (seconds), None when nothing arrives in time (a key already in
+    `_pending` is still returned first).
 
     Reads the fd directly: an arrow arrives as three bytes in one read, and
     `sys.stdin.read(1)` would hand them over as ESC plus two stray letters.
     A paste or fast typing arrives as several keys at once; the rest wait
     in `_pending`.
     """
+    import select
     import termios
     import tty
 
     fd = sys.stdin.fileno()
     while not _pending:
+        if timeout is not None and not select.select([fd], [], [], timeout)[0]:
+            return None
         old = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
@@ -1514,8 +1721,12 @@ def _move_cursor(cursor, key, sizes):
 
 @app.command()
 def tui(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     from_file: str | None = typer.Option(
         None,
         "--from",
@@ -1528,6 +1739,13 @@ def tui(
         "--no-guide",
         help="Hide the per-mode guide panels (also: guide = false in "
         "gitboard.toml, GITBOARD_GUIDE=0, or g inside).",
+    ),
+    watch: float | None = typer.Option(
+        None,
+        "--watch",
+        min=0.25,
+        help="Reload the board every MINUTES (read only). Offline, reloads "
+        "when the YAML changes, checked every MINUTES (default 2 seconds).",
     ),
 ):
     """The board, interactively: card keys stage into the YAML, a pushes it."""
@@ -1555,12 +1773,24 @@ def tui(
             "cursor": None,
             "limit": 5,
             "staged": [],
+            "filter": "",
             "guide": get_config().guide and not no_guide,
             "path": from_file or _need(project, "project", "project"),
             "name": board_name or get_config().board,
+            "marked": set(),
+            "last": None,
         }
+        # ponytail: offline polls the file's mtime every 2s, online refetches
+        # every --watch minutes; no --watch online means no auto-reload.
+        tick = watch * 60 if watch else (2.0 if offline else None)
 
-        def refetch():
+        def mtime():
+            try:
+                return os.stat(offline).st_mtime_ns
+            except OSError:
+                return None
+
+        def refetch(tick=False):
             held = selected_issue() if "columns" in st else None
             # all or nothing: a failed read leaves the last board whole
             if offline:
@@ -1572,11 +1802,26 @@ def tui(
                 proj, board = board_mod.fetch(st["path"], st["name"])
                 columns = board_mod.board_columns(proj, board)
                 found, ages = find_spec(st["path"]), _ages(proj.path_with_namespace)
+            # first load marks nothing; later ones mark what moved since. An
+            # idle tick adds to the marks, so a move made while the lead looked
+            # away is still marked when they come back; r, a push or a stage
+            # starts over.
+            moved = (
+                board_mod.moved(st["columns"], columns) if "columns" in st else set()
+            )
+            st["marked"] = (st.get("marked") or set()) | moved if tick else moved
             st.update(proj=proj, board=board, columns=columns, spec=found, ages=ages)
+            st["last"] = datetime.now().strftime("%H:%M")
+            if offline:
+                st["mtime"] = mtime()
             if held is not None:
                 st["cursor"] = _find_card(
-                    st["columns"], held, st["limit"], prefer=st["cursor"][0]
+                    shown(), held, st["limit"], prefer=st["cursor"][0]
                 )
+
+        def shown():
+            """The columns as the user sees them: the / filter applied."""
+            return board_mod.filter_columns(st["columns"], st["filter"])
 
         def staged(parsed, write=False):
             return _staged(parsed, st["spec"], offline, write)
@@ -1599,11 +1844,11 @@ def tui(
             return bar
 
         def view():
-            cols = st["columns"]
+            cols = shown()
             # ponytail: naive fit — one header + one spare line per column,
             # the rest split evenly. Uneven boards waste a little; fine
             # until someone complains.
-            usable = console.size.height - 9 - (2 * len(cols))
+            usable = console.size.height - 9 - (2 * len(cols)) - (1 if tick else 0)
             limit = st["limit"] = max(2, usable // max(len(cols), 1))
             cur = st["cursor"]
             body, hidden = board_mod.board_view(
@@ -1613,6 +1858,7 @@ def tui(
                 columns=cols,
                 ages=st["ages"],
                 selected=(cols[cur[0]][0], cur[1]) if selected_issue() else None,
+                marked=st["marked"],
             )
             spec = st["spec"]
             if offline:
@@ -1624,9 +1870,16 @@ def tui(
                 subtitle = f"defined by {spec} — e edits, a pushes"
             else:
                 subtitle = "no YAML yet — e pulls the board into one"
+            title = None
+            if st["filter"]:
+                n = board_mod.summarise(cols)["issues"]
+                total = board_mod.summarise(st["columns"])["issues"]
+                title = Text(f"filter: {st['filter']} · {n} of {total}", "bold yellow")
             parts = [
                 Panel(
                     body,
+                    title=title,
+                    title_align="left",
                     subtitle=Text(subtitle, "muted"),
                     subtitle_align="left",
                     border_style="cyan",
@@ -1639,6 +1892,11 @@ def tui(
                 parts.append(st["extra"])
             if st["status"] is not None:
                 parts.append(Text("  ") + st["status"])
+            if tick and st["last"]:
+                every = f"{watch:g}m" if watch else "file change"
+                parts.append(
+                    Text(f"  auto-reload every {every} · last {st['last']}", "muted")
+                )
             parts.append(keybar())
             return Group(*parts)
 
@@ -1688,10 +1946,11 @@ def tui(
         def selected_issue():
             """The card under the cursor, or None (no cursor, or it went stale)."""
             cur = st["cursor"]
-            if cur is None or cur[0] >= len(st["columns"]):
+            cols = shown()
+            if cur is None or cur[0] >= len(cols):
                 return None
-            shown = st["columns"][cur[0]][1][: st["limit"] or None]
-            return shown[cur[1]] if cur[1] < len(shown) else None
+            visible = cols[cur[0]][1][: st["limit"] or None]
+            return visible[cur[1]] if cur[1] < len(visible) else None
 
         def read_card(label):
             """The card to act on: the one under the cursor, else a typed
@@ -1869,6 +2128,8 @@ def tui(
                 ("", "estimate from the assignee's finished history"),
                 ("c", "stage a comment on a card; a pushes it"),
                 ("n", "new card: a title, then a column"),
+                ("/", "filter cards: @user ~label %milestone, other words"),
+                ("", "match the title; esc (no selection) clears it"),
                 ("g", "show or hide the guide panels"),
                 ("P", "perch, B Budgie: switch app (when opened from perch tui)"),
                 ("q", "quit"),
@@ -1879,6 +2140,31 @@ def tui(
             for key, text in lines:
                 grid.add_row(f" {key} " if key else "", text)
             return Panel(grid, title="keys", border_style="muted", padding=(0, 1))
+
+        def seen_key():
+            return f"{st['proj'].path_with_namespace}/{st['board'].name}"
+
+        def mark():
+            """Stamp this board as seen now (the next start's 'since')."""
+            if "proj" in st:
+                report_mod.mark_seen(seen_key())
+
+        def away_line():
+            """Status line: what changed since this board was last left."""
+            if "proj" not in st:
+                return
+            since = report_mod.last_seen(seen_key())
+            if since is None or not Path(SNAPSHOTS).exists():
+                return
+            batches = report_mod.load(
+                SNAPSHOTS, project=st["proj"].path_with_namespace, days=AGE_WINDOW
+            )
+            line = report_mod.describe(
+                report_mod.away(batches, since.isoformat(), board=st["board"].name),
+                since,
+            )
+            if line:
+                st["status"] = Text(line, "muted")
 
         with Live(console=console, screen=True, auto_refresh=False) as live:
 
@@ -1912,12 +2198,22 @@ def tui(
                 """One key's action, the board loaded."""
                 if k in ("up", "down", "left", "right"):
                     sizes = [
-                        len(issues[: st["limit"] or None])
-                        for _, issues in st["columns"]
+                        len(issues[: st["limit"] or None]) for _, issues in shown()
                     ]
                     st["cursor"] = _move_cursor(st["cursor"], k, sizes)
                 elif k == "\x1b":
+                    if st["cursor"] is None:
+                        st["filter"] = ""
                     st["cursor"] = None
+                elif k == "/":
+                    got = read_buf(
+                        "filter",
+                        "@user ~label %milestone words; empty clears, esc cancels",
+                        str.isprintable,
+                    )
+                    if got is not None:  # None is esc: keep the filter as it was
+                        st["filter"] = got.strip()
+                        st["cursor"] = None
                 elif k == "g":
                     st["guide"] = not st["guide"]
                     st["status"] = Text(
@@ -2236,14 +2532,23 @@ def tui(
 
             live.update(Text(f"reading {st['path']}…", "muted"), refresh=True)
             attempt(refetch)
+            away_line()
             draw()
             while True:
-                raw = _key()
+                raw = _key(tick) if tick else _key()
+                if raw is None:  # idle tick: reload, keep what is on screen
+                    if not offline or mtime() != st.get("mtime"):
+                        st["extra"] = None  # a change table would be stale now
+                        attempt(refetch, True)
+                    draw()
+                    continue
                 k = raw.lower()
                 st["status"] = st["extra"] = st["prompt"] = None
                 if raw in SWITCH:  # before lowercasing turns P into plan
                     st["tip"] = None  # perch-dvq item 2: no stale guide tip
                     entry = _suite_entry(SWITCH[raw])
+                    if entry:
+                        mark()
                     if entry and not _in_suite():
                         return SWITCH[raw]
                     if entry:  # perch suite: hop, keep the board running
@@ -2258,6 +2563,7 @@ def tui(
                     continue
                 st["tip"] = guide_mod.panel(k) if st["guide"] else None
                 if k == "q":
+                    mark()
                     return
                 k = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(k, k)
                 if "proj" in st or k == "r":
@@ -2410,9 +2716,83 @@ def status(
         if not rows:
             err().print("[muted]no boards/*.yaml here — `gitboard pull` one[/]")
             return
+        if blocks_mod.wanted():
+            plain = []
+            for name, pulled, staged, notes, questions, verify, overdue, last in rows:
+                plain.append(
+                    [
+                        name,
+                        _ago(pulled, now) if pulled else "never",
+                        "-" if staged is None else str(staged),
+                        str(notes),
+                        "-" if questions is None else str(questions),
+                        f"{max(verify)}d" if verify else "-",
+                        str(overdue),
+                        _ago(last, now) if last else "never",
+                    ]
+                )
+            head = [c.header for c in table.columns]
+            align = ["l", "l", "r", "r", "r", "r", "r", "l"]
+            blocks_mod.emit([blocks_mod.table(head, plain, align=align)])
+            return
         out().print(table)
 
     _run(go)
+
+
+def _doctor_http(path, token):
+    """(status, JSON or None) for one GET against the configured instance."""
+    import requests
+
+    r = requests.get(
+        get_config().url.rstrip("/") + path,
+        headers={"PRIVATE-TOKEN": token} if token else {},
+        timeout=10,
+        # requests strips Authorization on a cross-host redirect, not
+        # PRIVATE-TOKEN: a 3xx comes back as its status instead
+        allow_redirects=False,
+    )
+    try:
+        return r.status_code, r.json()
+    except ValueError:
+        return r.status_code, None
+
+
+@app.command()
+def doctor(
+    offline: bool = typer.Option(False, "--offline", help="Skip every network check."),
+):
+    """Check config, tokens, board files and snapshots; exit 1 if anything fails.
+
+    Read only. Warnings print their fix but do not fail. Output goes to stderr
+    (like logs), so a pipe sees nothing.
+    """
+    from gitboard import doctor as doctor_mod
+
+    cfg = _run(get_config)
+    root = cfg.source.parent if cfg.source else Path.cwd()
+    specs = sorted((root / "boards").glob("*.yaml"))
+    if cfg.spec and Path(cfg.spec) not in specs:
+        specs.insert(0, Path(cfg.spec))
+    checks = doctor_mod.run(
+        cfg,
+        http=_doctor_http,
+        resolve=lambda project, board: board_mod.fetch(project, board),
+        root=root,
+        specs=specs,
+        offline=offline,
+    )
+    mark = {
+        "ok": "[added]ok  [/]",
+        "warn": "[bold yellow]warn[/]",
+        "fail": "[logging.level.error]FAIL[/]",
+    }
+    for c in checks:
+        err().print(f"{mark[c.status]}  {escape(c.what)}")
+        if c.status != "ok" and c.fix:
+            err().print(f"      [muted]fix: {escape(c.fix)}[/]")
+    if any(c.status == "fail" for c in checks):
+        raise typer.Exit(1)
 
 
 @app.command()

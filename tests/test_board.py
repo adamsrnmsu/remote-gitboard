@@ -295,6 +295,13 @@ def test_issue_line_and_board_view_show_age():
     assert "urgent" in own and "Doing" not in own, "column's own label omitted"
     line = board.issue_line(FakeIssue(1, ["Verify"]), "Verify", {1: ("Verify", 3)})
     assert line.plain.endswith("· Verify 3d")
+    assert line.spans[-1].style == "dark_orange", "past Verify's 1-day threshold"
+    calm = board.issue_line(FakeIssue(1, ["Doing"]), "Doing", {1: ("Doing", 2)})
+    assert calm.spans[-1].style == "muted", "under Doing's 3 days"
+    two = board.issue_line(FakeIssue(1, ["Doing"]), "Doing", {1: ("Doing+Verify", 1)})
+    assert two.spans[-1].style == "dark_orange", "any column over threshold counts"
+    other = board.issue_line(FakeIssue(1, ["Backlog"]), "Backlog", {1: ("Backlog", 90)})
+    assert other.spans[-1].style == "muted", "no threshold, never amber"
     assert "·" not in board.issue_line(FakeIssue(1, ["Verify"]), "Verify").plain
     view, _ = board.board_view(
         FakeProject([FakeIssue(1, ["Verify"])]),
@@ -510,3 +517,98 @@ def test_board_view_limit_zero_shows_everything_and_limit_n_truncates():
     _, hidden = board.board_view(project, lists, limit=0)
     assert hidden == 0
     assert board.board_view(project, lists, limit=1)[1] == 2
+
+
+def _filter_world():
+    def card(iid, title, who=None, labels=(), ms=None):
+        return types.SimpleNamespace(
+            iid=iid,
+            title=title,
+            labels=list(labels),
+            assignee={"username": who} if who else None,
+            milestone={"title": ms} if ms else None,
+        )
+
+    return [
+        (
+            "Doing",
+            [
+                card(1, "Fix Login", "alice", ["bug", "Doing"], "v2"),
+                card(2, "Rotate token", "bob", ["Doing"]),
+            ],
+        ),
+        ("Review", [card(3, "Login docs", "alice", ["docs"], "v3")]),
+        ("Done", []),
+    ]
+
+
+def _iids(cols):
+    return [[i.iid for i in issues] for _, issues in cols]
+
+
+def test_filter_columns_each_token_kind_keeps_every_column():
+    cols = _filter_world()
+    assert _iids(board.filter_columns(cols, "@ALICE")) == [[1], [3], []]
+    assert _iids(board.filter_columns(cols, "~bug")) == [[1], [], []]
+    assert _iids(board.filter_columns(cols, "%v3")) == [[], [3], []]
+    assert _iids(board.filter_columns(cols, "login")) == [[1], [3], []]
+    assert [n for n, _ in board.filter_columns(cols, "zzz")] == [
+        "Doing",
+        "Review",
+        "Done",
+    ]
+
+
+def test_filter_columns_terms_are_anded_and_empty_query_is_a_noop():
+    cols = _filter_world()
+    assert _iids(board.filter_columns(cols, "@alice login ~bug")) == [[1], [], []]
+    assert _iids(board.filter_columns(cols, "@bob login")) == [[], [], []]
+    assert board.filter_columns(cols, "  ") is cols
+
+
+def test_filter_columns_on_offline_spec_stand_ins():
+    spec = {
+        "project": "g/p",
+        "board": "b",
+        "columns": [{"name": "Doing"}],
+        "issues": [
+            {"iid": 1, "title": "one", "assignee": "alice", "labels": ["Doing"]},
+            {"title": "two", "milestone": "v1"},
+        ],
+    }
+    cols = board.columns_from_spec(spec, "http://gl")
+    assert _iids(board.filter_columns(cols, "@alice")) == [[], [1]]
+    assert _iids(board.filter_columns(cols, "%v1")) == [[None], []]
+    assert _iids(board.filter_columns(cols, "@nobody")) == [[], []]
+
+
+def test_moved_marks_new_and_changed_columns_only():
+    def cols(**kw):
+        return [(n, [FakeIssue(i, [n], "t") for i in ids]) for n, ids in kw.items()]
+
+    old = cols(Todo=[1, 2, 3], Doing=[4])
+    new = cols(Todo=[1, 3], Doing=[2, 5])  # 2 moved, 5 new, 4 closed
+    assert board.moved(old, new) == {2, 5}
+    assert board.moved(old, old) == set()
+    # a two-column card changing its set of columns is moved; unchanged is not
+    two = [("A", [FakeIssue(7, ["A"], "t")]), ("B", [FakeIssue(7, ["B"], "t")])]
+    assert board.moved(two, two) == set()
+    assert board.moved(two[:1], two) == {7}
+    # offline (new) cards have no iid
+    assert board.moved([], [("A", [FakeIssue(None, ["A"], "t")])]) == set()
+
+
+def test_board_view_draws_a_dot_before_marked_cards():
+    from io import StringIO
+
+    from rich.console import Console
+
+    from gitboard.log import THEME
+
+    proj = FakeProject([FakeIssue(1, ["Doing"], "one"), FakeIssue(2, ["Doing"], "two")])
+    lists = FakeBoard([FakeList("Doing", 1)])
+    c = Console(width=120, file=StringIO(), theme=THEME)
+    c.print(board.board_view(proj, lists, marked={2})[0])
+    lines = c.file.getvalue().splitlines()
+    assert {("two" in x) for x in lines if "●" in x} == {True}
+    assert sum("●" in x for x in lines) == 1

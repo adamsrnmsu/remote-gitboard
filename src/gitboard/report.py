@@ -7,6 +7,7 @@ minimum anyway.
 """
 
 import json
+import os
 import subprocess
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
@@ -110,6 +111,86 @@ def match_author(assignee, authors):
 def since(batches, ts):
     """Batches taken at or after `ts` (an ISO string; snapshots compare as text)."""
     return [b for b in batches if b and next(iter(b.values()))["ts"] >= ts]
+
+
+def away(batches, since_ts, now=None, board=None):
+    """Counts of what changed since `since_ts` (ISO text), or {} for nothing.
+
+    Compares the last batch at or before `since_ts` (the board as you left it)
+    with the latest one. Counts only; no assignee, no names. `board` limits
+    to one board of the project, as `load` only filters by project.
+    """
+    now = now or datetime.now(UTC)
+    if board:
+        batches = [{i: r for i, r in b.items() if r["board"] == board} for b in batches]
+    batches = [b for b in batches if b]
+    then = [b for b in batches if next(iter(b.values()))["ts"] <= since_ts]
+    if not then or batches[-1] is then[-1]:
+        return {}
+    before, after = then[-1], batches[-1]
+    was = datetime.fromisoformat(since_ts).date().isoformat()
+    today = now.date().isoformat()
+    moved = [
+        i
+        for i in before.keys() & after.keys()
+        if before[i]["columns"] != after[i]["columns"]
+    ]
+    counts = {
+        "moved": len(moved),
+        "new": len(after.keys() - before.keys()),
+        "to Done": sum(
+            "Done" in after[i]["columns"] and "Done" not in before[i]["columns"]
+            for i in moved
+        ),
+        "closed": len(before.keys() - after.keys()),
+        "newly overdue": sum(
+            bool(r["due_date"]) and was <= str(r["due_date"]) < today
+            for r in after.values()
+        ),
+    }
+    return {k: n for k, n in counts.items() if n}
+
+
+def describe(counts, since):
+    """`since Tue 14:02: 6 moved · 2 new`, or None when there is nothing."""
+    if not counts:
+        return None
+    at = since.astimezone().strftime("%a %H:%M")
+    return f"since {at}: " + " · ".join(f"{n} {k}" for k, n in counts.items())
+
+
+def seen_path():
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "gitboard", "seen.json")
+
+
+def _seen():
+    try:
+        with open(seen_path()) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def last_seen(key):
+    """When this board (`project/board`) was last left, or None."""
+    try:
+        return datetime.fromisoformat(_seen()[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def mark_seen(key, at=None):
+    """Record `at` (default now, UTC) for `key`; never raises."""
+    data = _seen()
+    data[key] = (at or datetime.now(UTC)).isoformat(timespec="seconds")
+    try:
+        os.makedirs(os.path.dirname(seen_path()), exist_ok=True)
+        with open(seen_path(), "w") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
 
 
 def column_ages(batches):

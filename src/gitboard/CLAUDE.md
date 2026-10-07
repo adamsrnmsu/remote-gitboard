@@ -24,6 +24,11 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   as one line and exits 1. No tracebacks for a typo'd path.
   `write_errors()` turns a 401/403 during `push` into a message naming the
   scope, since a `read_api` token reads fine and fails only there.
+- **`doctor.py`** — `gitboard doctor`: `Check(status, what, fix)` with status
+  ok/warn/fail (warns never fail the exit code). Read only; `http` and `resolve`
+  are injected so tests fake them and `--offline` skips both. Messages never carry
+  a token. A 404 on `personal_access_tokens/self` is "scope unknown", a warn;
+  the MCP endpoint is info only.
 - **`board.py`** — reading. `board_columns()` is why this repo exists: **no MCP
   server exposes board structure.** A board list is bound to a label and
   membership is "has that label", so the mapping is reassembled from
@@ -31,6 +36,21 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
 - **`report.py`** — reads `snapshots.jsonl`, no network: batches -> first/last
   diff -> per-assignee tally; `commit_counts` shells to `git log` and
   `match_author` joins heuristically (name or email local part).
+  `away`/`describe` give the TUI's "since you were away" line (counts only,
+  no person); `last_seen`/`mark_seen` keep one UTC stamp per `project/board`
+  in `$XDG_CACHE_HOME/gitboard/seen.json` (its only write; a corrupt file
+  reads as empty). The TUI stamps on `q` and on a switch away, never on start.
+- **`replay.py`** — `gitboard replay` (one board: `snapshot` stamps each board
+  with its own ts, so the CLI refuses a mixed log without `--board`):
+  `frames(batches)` -> `(frames, cards)`
+  (pure; columns Backlog-first then first-seen in every frame, a two-column
+  card in both lanes, consecutive identical frames collapsed, moved/new/closed
+  counts per frame, no per-person figure) and `render_html(frames, cards,
+  title, base_url, project)`, a graph_html-style page (inline CSS/JS, no CDN,
+  lane colours from `mail.COLUMN_COLORS`, CSS transitions between frames).
+  Data goes in via graph_html's `_json`; JS writes text with `textContent`;
+  a card links only when `base_url` is http(s) (snapshots carry no web_url).
+  Spec: `docs/superpowers/specs/2026-10-06-replay-design.md`.
 - **`stats.py`** — pure, stdlib: `summarise(history, ...)` over the dicts
   `board.fetch_history` returns (issues incl. recently closed, label
   transitions from `resource_label_events`, verdict and question notes);
@@ -49,6 +69,9 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   `tests/golden_team_md.json`). `PI_BLOCKS=1` makes `stats` emit JSON-lines
   blocks for perch tui; contract at
   `perch/docs/superpowers/specs/2026-10-02-tui-blocks-design.md`.
+  `status` (one table, the text columns and order) and `report`
+  (`_movement_blocks`: figures, moved/new/closed table, per-assignee tally in
+  name order, stuck list) also emit blocks; their text paths are unchanged.
 - **`mail.py`** — the HTML digest, stdlib only. Outlook on Windows renders
   with Word, so: 600px tables, inline styles, px widths, no images, no SVG,
   every `td` with `bgcolor` and every text run with a `color` (that is what
@@ -183,9 +206,12 @@ missing, diff shown on return) / plan / push-with-y/n /
 sync (push, snapshot, refresh the YAML: `_refresh_spec`, shared with the
 `sync` command) / pull (`_pull_board`, shared with `pull`; warns and asks y/n
 before overwriting, listing `_staged_edits`; online only) /
-migrate-with-close-y/n / help. The per-column truncation limit is computed
+migrate-with-close-y/n / help. `/` sets `st["filter"]`; `shown()` is
+`board.filter_columns` over the full columns and is what `view`, the cursor and
+`_find_card` use (`live_issue` and people lists stay on the full board);
+`show --filter` uses the same function. The per-column truncation limit is computed
 from terminal height each draw, and SIGWINCH redraws, so resizing works.
-Raw input is `_key()` (termios cbreak, dies without a tty); all prompts
+Raw input is `_key(timeout=None)` (termios cbreak, dies without a tty; with a timeout it `select`s the fd and returns None, which the main loop treats as an auto-reload tick: `--watch MINUTES`, or offline a 2 s mtime poll; prompts call `_key()` with no timeout so they block and never reload; reload only reads). `board.moved` diffs columns on every refetch and `board_view(marked=)` draws `●` before those cards; an idle tick unions into `st["marked"]`, any other reload (r, push, stage) replaces it (first load marks nothing); a tick that reloads drops `st["extra"]`; all prompts
 render inside the layout — `read_iid` echoes digits into the prompt line
 and takes single-key escapes (b = pick a destination project in `m`).
 Card keys `v u d c n` stage into the YAML through `stage()` -> `edit.py`:

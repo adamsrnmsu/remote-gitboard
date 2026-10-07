@@ -27,6 +27,7 @@ defined by boards/test.yaml — edit it, then `gitboard plan`
 make install                       # venv + dependencies
 make link                          # optional: `gitboard` in ~/.local/bin
 make show PROJECT=group/project
+gitboard --install-completion      # tab-complete projects and boards from boards/*.yaml
 ```
 
 `make install` is idempotent and every other target depends on it, so
@@ -140,6 +141,7 @@ gitboard show group/project "Dev Board"  # a named board
 gitboard show --all                      # do not truncate long columns
 gitboard show -n 20                      # 20 issues per column
 gitboard show --markdown                 # stable output, for pipes and the AI
+gitboard show --filter "@alice ~bug %v2 token"  # only matching cards; all terms must match
 gitboard tui group/project               # interactive: reload, snapshot, push
 gitboard pull group/project              # save the board as boards/<name>.yaml
 gitboard pull group/project --base       # …and an untouched .base copy, for offline
@@ -158,9 +160,21 @@ gitboard migrate-comments 12 other/proj#7 # …or into another project (writes)
 gitboard snapshot group/project          # append board state to snapshots.jsonl
 gitboard report group/project --repo .   # what moved, what is stuck; correlate with commits
 gitboard report group/project --since boards/team.yaml  # …since that pull
+gitboard replay group/project --days 30  # timelapse of the board as one HTML page
 gitboard config                          # what URL and tokens resolved
+gitboard doctor [--offline]              # config, tokens, scopes, board files, snapshots; exit 1 on a failure
 gitboard --help
 ```
+
+`doctor` is read only: it checks the config file and URL, that GitLab answers, the
+read token (valid, scopes) and whether `push` has an `api`-scope token, that the
+configured project and board resolve, that every `boards/*.yaml` loads, each
+`.base` (warn past 7 days), and the last snapshot (warn past a day: `make cron`).
+Warnings print their fix but do not fail; a 404 on the token-scope endpoint is
+"scope unknown", a warning. `--offline` makes no network calls. Output is stderr.
+
+`stats`, `status` and `report` print JSON-lines blocks instead of text when
+`PI_BLOCKS=1` (what `perch tui` sets).
 
 `show` sorts overdue work to the top of each column and truncates to 5 issues
 each, so a 200-issue board still fits on a screen and the truncation never
@@ -210,7 +224,16 @@ with `ingest`: open tasks land in `Verify`, checked ones in `Done`, feedback
 becomes an attributed note, and every issue gets a `Source:` footer. Full
 runbook: `make docs`, then `docs/_build/html/airgap.html`.
 
+<<<<<<< HEAD
+`tui` is the interactive loop: `r` reload (`--watch MINUTES` reloads on a timer, read only; offline it reloads when the YAML changes, polled every 2 s; a `●` marks cards new or moved; idle reloads add to the marks, `r` or a push starts over), `b` switch board — the
+=======
+`tui` opens with one status line of counts from `snapshots.jsonl` since you
+last quit that board (`since Tue 14:02: 6 moved · 2 new · 3 to Done`; nothing
+to say, no line). Last-seen is kept per board in
+`$XDG_CACHE_HOME/gitboard/seen.json` (default `~/.cache`).
+
 `tui` is the interactive loop: `r` reload, `b` switch board — the
+>>>>>>> worktree-agent-ad3f97f540625f61b
 project's own, plus any board a `boards/*.yaml` defines, other projects
 included, `s` snapshot, `e` edit the YAML
 in `$EDITOR` (pulling the board into one first if none exists) with the diff
@@ -219,7 +242,9 @@ refresh the YAML from GitLab), `f` pull (replace the YAML with the live board,
 asking first), `m`
 migrate comments between issues, `?` help, `q` quit. Arrows (or `h j k l`) select a card; card keys stage a
 change into the YAML without an editor — `v` move, `u` assign, `d` due date
-(`e` there asks the estimate), `c` comment, `n` new card — and a guide panel
+(`e` there asks the estimate), `c` comment, `n` new card — `/` filters the cards shown (`@user`, `~label`,
+`%milestone`, other words match the title; `esc` or an empty enter clears; `r`
+keeps it) — and a guide panel
 explains each mode with an example as you enter it (`g` hides it;
 `guide = false` in `gitboard.toml` for good).
 
@@ -244,6 +269,15 @@ per-assignee tally. `--repo path` adds a commits column from `git log` over
 the same window, matching GitLab usernames to git authors by name or email
 local part — who ships what they pick up, and whose board activity has no
 commits behind it.
+
+`replay` plays the same log back: one self-contained HTML file (`--out`,
+default `replay.html`; `--days` or `--since SPEC` pick the window; `--board`
+when the log holds several boards of the project) with a lane
+per column, cards that slide as they move, fade in when new and out when they
+close, a play/pause button, a scrubber, a speed control and per-frame counts
+of moved, new and closed. It reads only `snapshots.jsonl` (no network, no
+token), needs at least two snapshots, and shows no per-person numbers. Cards
+link to GitLab when `GITLAB_URL` is set.
 
 `migrate-comments --close-source` closes the source issue after copying,
 leaving a "superseded by …" note; the TUI's `m` offers the same as a y/n,

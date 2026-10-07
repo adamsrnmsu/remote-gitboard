@@ -25,6 +25,7 @@ from gitboard import apply as apply_mod
 from gitboard import board as board_mod
 from gitboard import cli, client, config
 from gitboard import graph as graph_mod
+from gitboard import report as report_mod
 from gitboard.cli import SIGN, STYLE, _changes_table, app
 from gitboard.log import THEME
 
@@ -63,6 +64,7 @@ COLUMNS = [
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     for var in ("GITBOARD_CONFIG", "GITLAB_URL", "GITLAB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GITLAB_READ_TOKEN", "read-tok")
@@ -1713,7 +1715,7 @@ class Tui:
         self.edits = []
         self.on_edit = None
 
-    def _key(self):
+    def _key(self, timeout=None):
         assert self.keys, "script ran out of keys (no q?)"
         return self.keys.pop(0)
 
@@ -1883,7 +1885,7 @@ def test_tui_reload_picks_up_an_outside_edit(tui, tmp_path):
     path = write_spec(tmp_path)
     orig_key = tui._key
 
-    def key():
+    def key(timeout=None):
         if tui.keys[0] == "r":  # someone edits the file just before the reload
             spec = apply_mod.load(path)
             spec["issues"].append({"title": "from outside"})
@@ -2449,7 +2451,7 @@ def test_tui_unreachable_shift_p_still_switches(down, monkeypatch, execs):
 def test_tui_gitlab_lost_mid_session_stays_up(down):
     down.state["up"] = True
 
-    def key():
+    def key(timeout=None):
         k = down.keys.pop(0)
         down.state["up"] = k != "r"  # r finds GitLab gone
         return k
@@ -2474,3 +2476,136 @@ def test_tui_failed_board_switch_keeps_the_old_board_for_r(live_tui, gl, monkeyp
     monkeypatch.setattr(board_mod, "fetch", fetch)
     live_tui.run(["b", "2", "r", "q"], "grp/proj", "--no-guide")
     assert asked == [None, "Other", None]  # r retried the board on screen
+
+
+def test_completion_projects_and_boards(tmp_path):
+    write_spec(tmp_path)
+    other = {**SPEC, "project": "grp/other", "board": "Ops"}
+    write_spec(tmp_path, "boards/y.yaml", other)
+    (tmp_path / "boards/bad.yaml").write_text("project: [unclosed\n")
+    ctx = types.SimpleNamespace(params={})
+    assert cli._complete_project(ctx, "") == ["grp/other", "grp/proj"]
+    assert cli._complete_project(ctx, "grp/p") == ["grp/proj"]
+    assert cli._complete_board(ctx, "") == ["Dev Board", "Ops"]
+    ctx = types.SimpleNamespace(params={"project": "grp/other"})
+    assert cli._complete_board(ctx, "") == ["Ops"]
+
+
+def test_completion_never_raises(monkeypatch):
+    monkeypatch.setattr(cli, "local_specs", lambda: 1 / 0)
+    assert cli._complete_project(types.SimpleNamespace(params={}), "") == []
+
+
+def test_completion_flags_in_help():
+    out = runner.invoke(app, ["--help"]).output
+    assert "--install-completion" in out and "--show-completion" in out
+
+
+def test_key_timeout_returns_none_when_nothing_arrives(monkeypatch):
+    import select
+
+    monkeypatch.setattr(
+        cli, "sys", types.SimpleNamespace(stdin=types.SimpleNamespace(fileno=lambda: 0))
+    )
+    monkeypatch.setattr(select, "select", lambda r, w, x, t: ([], [], []))
+    cli._pending.clear()
+    assert cli._key(0.1) is None
+    cli._pending.append("x")  # a queued key beats the timeout
+    assert cli._key(0.1) == "x"
+
+
+def test_tui_idle_tick_reloads_and_marks_what_moved(tui, tmp_path):
+    path = write_spec(tmp_path)
+    orig = tui._key
+
+    def key(timeout=None):
+        if tui.keys[0] is None:  # the file changes, then the tick fires
+            spec = apply_mod.load(path)
+            spec["issues"].append({"iid": 99, "title": "arrived"})
+            (tmp_path / path).write_text(apply_mod.dump(spec))
+            os.utime(tmp_path / path, ns=(1, 1))  # mtime differs
+        return orig()
+
+    tui.mp.setattr(cli, "_key", key)
+    tui.run([None, "q"], "--from", path, "--no-guide")
+    assert "auto-reload every file change" in tui.last
+    assert "● #99" in tui.last
+
+
+def test_tui_idle_tick_offline_skips_when_the_file_is_unchanged(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run([None, "q"], "--from", path, "--no-guide")
+    assert "●" not in tui.last
+
+
+def test_tui_start_says_what_changed_since_last_seen(tui, tmp_path):
+    path = write_spec(tmp_path)
+    key = "grp/proj/Dev Board"
+    then = datetime.now(UTC) - timedelta(hours=5)
+    report_mod.mark_seen(key, then)
+    rows = [
+        {
+            "ts": ts.isoformat(),
+            "project": "grp/proj",
+            "board": "Dev Board",
+            "iid": 1,
+            "title": "one",
+            "assignee": None,
+            "due_date": None,
+            "columns": [col],
+        }
+        for ts, col in [
+            (then - timedelta(hours=1), "Backlog"),
+            (datetime.now(UTC), "Doing"),
+        ]
+    ]
+    (tmp_path / "snapshots.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows)
+    )
+    tui.run(["q"], "--from", path, "--no-guide")
+    assert "1 moved" in tui.text
+    assert report_mod.last_seen(key) > then  # quitting re-stamped it
+
+
+def test_tui_first_run_has_no_line_but_records(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["q"], "--from", path, "--no-guide")
+    assert "since" not in tui.text
+    assert report_mod.last_seen("grp/proj/Dev Board") is not None
+
+
+def test_tui_filter_esc_keeps_it_and_empty_enter_clears(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["/", *"one", "\r", "/", "\x1b", "q"], "--from", path, "--no-guide")
+    assert "filter: one" in tui.last
+    tui.run(["/", *"one", "\r", "/", "\r", "q"], "--from", path, "--no-guide")
+    assert "filter:" not in tui.last
+
+
+def _arrivals(tui, tmp_path, path, iids):
+    orig, todo = tui._key, iter(iids)
+
+    def key(timeout=None):
+        if tui.keys[0] is None:  # the file changes, then the tick fires
+            n = next(todo)
+            spec = apply_mod.load(path)
+            spec["issues"].append({"iid": n, "title": f"arrived {n}"})
+            (tmp_path / path).write_text(apply_mod.dump(spec))
+            os.utime(tmp_path / path, ns=(n, n))  # mtime differs each time
+        return orig()
+
+    tui.mp.setattr(cli, "_key", key)
+
+
+def test_tui_marks_pile_up_across_idle_ticks(tui, tmp_path):
+    path = write_spec(tmp_path)
+    _arrivals(tui, tmp_path, path, [98, 99])
+    tui.run([None, None, "q"], "--from", path, "--no-guide")
+    assert "● #98" in tui.last and "● #99" in tui.last
+
+
+def test_tui_r_starts_the_marks_over(tui, tmp_path):
+    path = write_spec(tmp_path)
+    _arrivals(tui, tmp_path, path, [98])
+    tui.run([None, "r", "q"], "--from", path, "--no-guide")
+    assert "●" not in tui.last
