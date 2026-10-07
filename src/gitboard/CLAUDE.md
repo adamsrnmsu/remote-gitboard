@@ -24,6 +24,11 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   as one line and exits 1. No tracebacks for a typo'd path.
   `write_errors()` turns a 401/403 during `push` into a message naming the
   scope, since a `read_api` token reads fine and fails only there.
+- **`doctor.py`** — `gitboard doctor`: `Check(status, what, fix)` with status
+  ok/warn/fail (warns never fail the exit code). Read only; `http` and `resolve`
+  are injected so tests fake them and `--offline` skips both. Messages never carry
+  a token. A 404 on `personal_access_tokens/self` is "scope unknown", a warn;
+  the MCP endpoint is info only.
 - **`board.py`** — reading. `board_columns()` is why this repo exists: **no MCP
   server exposes board structure.** A board list is bound to a label and
   membership is "has that label", so the mapping is reassembled from
