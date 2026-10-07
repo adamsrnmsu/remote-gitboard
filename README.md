@@ -225,7 +225,7 @@ becomes an attributed note, and every issue gets a `Source:` footer. Full
 runbook: `make docs`, then `docs/_build/html/airgap.html`.
 
 <<<<<<< HEAD
-`tui` is the interactive loop: `r` reload (`--watch MINUTES` reloads on a timer, read only; offline it reloads when the YAML changes, polled every 2 s; a `●` marks cards new or moved since the last reload), `b` switch board — the
+`tui` is the interactive loop: `r` reload (`--watch MINUTES` reloads on a timer, read only; offline it reloads when the YAML changes, polled every 2 s; a `●` marks cards new or moved; idle reloads add to the marks, `r` or a push starts over), `b` switch board — the
 =======
 `tui` opens with one status line of counts from `snapshots.jsonl` since you
 last quit that board (`since Tue 14:02: 6 moved · 2 new · 3 to Done`; nothing
@@ -271,7 +271,8 @@ local part — who ships what they pick up, and whose board activity has no
 commits behind it.
 
 `replay` plays the same log back: one self-contained HTML file (`--out`,
-default `replay.html`; `--days` or `--since SPEC` pick the window) with a lane
+default `replay.html`; `--days` or `--since SPEC` pick the window; `--board`
+when the log holds several boards of the project) with a lane
 per column, cards that slide as they move, fade in when new and out when they
 close, a play/pause button, a scrubber, a speed control and per-frame counts
 of moved, new and closed. It reads only `snapshots.jsonl` (no network, no

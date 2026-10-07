@@ -154,3 +154,29 @@ def test_cli_several_projects_need_a_name(tmp_path):
     write_log(log, [batch(t1, rec(1), rec(2, project="g/q")), batch(t2, rec(1))])
     r = runner.invoke(app, ["replay", "--db", str(log)])
     assert r.exit_code == 1 and "g/q" in r.output
+
+
+def test_cli_several_boards_need_board_and_board_keeps_one(tmp_path):
+    now = datetime.now(UTC)
+    t = [(now - timedelta(hours=h)).isoformat() for h in (4, 3, 2, 1)]
+
+    def on(board, ts, *recs):
+        return batch(ts, *({**r, "board": board} for r in recs))
+
+    log, out = tmp_path / "s.jsonl", tmp_path / "r.html"
+    write_log(
+        log,
+        [
+            on("A", t[0], rec(1)),
+            on("B", t[1], rec(2)),
+            on("A", t[2], rec(1, ["Review"])),
+            on("B", t[3], rec(2)),
+        ],
+    )
+    r = runner.invoke(app, ["replay", "--db", str(log), "--out", str(out)])
+    assert r.exit_code == 1 and "--board" in r.output
+    r = runner.invoke(
+        app, ["replay", "--db", str(log), "--out", str(out), "--board", "A"]
+    )
+    assert r.exit_code == 0, r.output
+    assert "issue 2" not in out.read_text(), "board B's cards stay out"

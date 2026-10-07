@@ -40,7 +40,9 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   no person); `last_seen`/`mark_seen` keep one UTC stamp per `project/board`
   in `$XDG_CACHE_HOME/gitboard/seen.json` (its only write; a corrupt file
   reads as empty). The TUI stamps on `q` and on a switch away, never on start.
-- **`replay.py`** — `gitboard replay`: `frames(batches)` -> `(frames, cards)`
+- **`replay.py`** — `gitboard replay` (one board: `snapshot` stamps each board
+  with its own ts, so the CLI refuses a mixed log without `--board`):
+  `frames(batches)` -> `(frames, cards)`
   (pure; columns Backlog-first then first-seen in every frame, a two-column
   card in both lanes, consecutive identical frames collapsed, moved/new/closed
   counts per frame, no per-person figure) and `render_html(frames, cards,
@@ -209,7 +211,7 @@ migrate-with-close-y/n / help. `/` sets `st["filter"]`; `shown()` is
 `_find_card` use (`live_issue` and people lists stay on the full board);
 `show --filter` uses the same function. The per-column truncation limit is computed
 from terminal height each draw, and SIGWINCH redraws, so resizing works.
-Raw input is `_key(timeout=None)` (termios cbreak, dies without a tty; with a timeout it `select`s the fd and returns None, which the main loop treats as an auto-reload tick: `--watch MINUTES`, or offline a 2 s mtime poll; prompts call `_key()` with no timeout so they block and never reload; reload only reads). `board.moved` diffs columns on every refetch and `board_view(marked=)` draws `●` before those cards until the next reload (first load marks nothing); all prompts
+Raw input is `_key(timeout=None)` (termios cbreak, dies without a tty; with a timeout it `select`s the fd and returns None, which the main loop treats as an auto-reload tick: `--watch MINUTES`, or offline a 2 s mtime poll; prompts call `_key()` with no timeout so they block and never reload; reload only reads). `board.moved` diffs columns on every refetch and `board_view(marked=)` draws `●` before those cards; an idle tick unions into `st["marked"]`, any other reload (r, push, stage) replaces it (first load marks nothing); a tick that reloads drops `st["extra"]`; all prompts
 render inside the layout — `read_iid` echoes digits into the prompt line
 and takes single-key escapes (b = pick a destination project in `m`).
 Card keys `v u d c n` stage into the YAML through `stage()` -> `edit.py`:

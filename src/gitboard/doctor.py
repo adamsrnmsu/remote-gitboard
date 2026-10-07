@@ -111,7 +111,7 @@ def _spec_checks(specs: list[Path], now: datetime) -> list[Check]:
     for path in specs:
         try:
             apply_mod.load(str(path))
-        except apply_mod.SpecError as e:
+        except Exception as e:  # SpecError, YAML, OS: doctor reports, never dies
             checks.append(Check(FAIL, f"{path}: does not load ({e})", f"fix {path}"))
             continue
         loaded += 1
@@ -143,10 +143,14 @@ def _snapshot_check(db: Path, now: datetime) -> Check:
     fix = "cron not running? make cron"
     stamp = None
     try:
-        for line in db.read_text().splitlines():
+        lines = db.read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
             stamp = datetime.fromisoformat(json.loads(line)["ts"])
-    except (OSError, ValueError, KeyError, TypeError):
-        stamp = None
+        except (ValueError, KeyError, TypeError):
+            continue
     if stamp is None:
         return Check(WARN, f"{db}: no readable snapshots", fix)
     if stamp.tzinfo is None:

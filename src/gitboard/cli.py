@@ -981,6 +981,9 @@ def replay(
         help="Window starts at the pull: SPEC.base's mtime. Replaces --days.",
     ),
     out_path: str = typer.Option("replay.html", "--out", "-o", help="Page to write."),
+    board_name: str | None = typer.Option(
+        None, "--board", "-b", help="Which board, when the log holds several."
+    ),
 ):
     """A timelapse of the board from the snapshot log, as one HTML page.
 
@@ -997,13 +1000,27 @@ def replay(
                 raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
             mtime = datetime.fromtimestamp(base_file.stat().st_mtime, UTC)
             ts = mtime.isoformat(timespec="seconds")
-            path = project or apply_mod.load(since)["project"]
+            spec = apply_mod.load(since)
+            path, name = project or spec["project"], board_name or spec["board"]
+        else:
+            name = board_name
         batches = report_mod.load(db, project=path, days=AGE_WINDOW if ts else days)
         if ts:
             batches = report_mod.since(batches, ts)
         projects = sorted({r["project"] for b in batches for r in b.values()})
         if len(projects) > 1:
             raise ConfigError(f"several projects in {db}: {', '.join(projects)}")
+        boards = sorted({r.get("board") or "" for b in batches for r in b.values()})
+        if name is None and len(boards) > 1:
+            raise ConfigError(
+                f"several boards in {db}: {', '.join(boards)} — pass --board"
+            )
+        if name is not None:
+            # each board is snapshotted with its own ts, so a batch is one board
+            kept = (
+                {i: r for i, r in b.items() if r.get("board") == name} for b in batches
+            )
+            batches = [b for b in kept if b]
         if len(batches) < 2:
             raise ConfigError(
                 f"need at least 2 snapshots in the window; have {len(batches)}"
@@ -1773,7 +1790,7 @@ def tui(
             except OSError:
                 return None
 
-        def refetch():
+        def refetch(tick=False):
             held = selected_issue() if "columns" in st else None
             # all or nothing: a failed read leaves the last board whole
             if offline:
@@ -1785,10 +1802,14 @@ def tui(
                 proj, board = board_mod.fetch(st["path"], st["name"])
                 columns = board_mod.board_columns(proj, board)
                 found, ages = find_spec(st["path"]), _ages(proj.path_with_namespace)
-            # first load marks nothing; later ones mark what moved since
-            st["marked"] = (
+            # first load marks nothing; later ones mark what moved since. An
+            # idle tick adds to the marks, so a move made while the lead looked
+            # away is still marked when they come back; r, a push or a stage
+            # starts over.
+            moved = (
                 board_mod.moved(st["columns"], columns) if "columns" in st else set()
             )
+            st["marked"] = (st.get("marked") or set()) | moved if tick else moved
             st.update(proj=proj, board=board, columns=columns, spec=found, ages=ages)
             st["last"] = datetime.now().strftime("%H:%M")
             if offline:
@@ -1827,7 +1848,7 @@ def tui(
             # ponytail: naive fit — one header + one spare line per column,
             # the rest split evenly. Uneven boards waste a little; fine
             # until someone complains.
-            usable = console.size.height - 9 - (2 * len(cols))
+            usable = console.size.height - 9 - (2 * len(cols)) - (1 if tick else 0)
             limit = st["limit"] = max(2, usable // max(len(cols), 1))
             cur = st["cursor"]
             body, hidden = board_mod.board_view(
@@ -2135,9 +2156,8 @@ def tui(
             since = report_mod.last_seen(seen_key())
             if since is None or not Path(SNAPSHOTS).exists():
                 return
-            days = (datetime.now(UTC) - since).days + 1
             batches = report_mod.load(
-                SNAPSHOTS, project=st["proj"].path_with_namespace, days=days
+                SNAPSHOTS, project=st["proj"].path_with_namespace, days=AGE_WINDOW
             )
             line = report_mod.describe(
                 report_mod.away(batches, since.isoformat(), board=st["board"].name),
@@ -2186,11 +2206,13 @@ def tui(
                         st["filter"] = ""
                     st["cursor"] = None
                 elif k == "/":
-                    got = read_line(
-                        "filter", "@user ~label %milestone words; empty clears"
+                    got = read_buf(
+                        "filter",
+                        "@user ~label %milestone words; empty clears, esc cancels",
+                        str.isprintable,
                     )
-                    if got is not None or st["filter"]:
-                        st["filter"] = got or ""
+                    if got is not None:  # None is esc: keep the filter as it was
+                        st["filter"] = got.strip()
                         st["cursor"] = None
                 elif k == "g":
                     st["guide"] = not st["guide"]
@@ -2516,7 +2538,8 @@ def tui(
                 raw = _key(tick) if tick else _key()
                 if raw is None:  # idle tick: reload, keep what is on screen
                     if not offline or mtime() != st.get("mtime"):
-                        attempt(refetch)
+                        st["extra"] = None  # a change table would be stale now
+                        attempt(refetch, True)
                     draw()
                     continue
                 k = raw.lower()
@@ -2725,6 +2748,9 @@ def _doctor_http(path, token):
         get_config().url.rstrip("/") + path,
         headers={"PRIVATE-TOKEN": token} if token else {},
         timeout=10,
+        # requests strips Authorization on a cross-host redirect, not
+        # PRIVATE-TOKEN: a 3xx comes back as its status instead
+        allow_redirects=False,
     )
     try:
         return r.status_code, r.json()
@@ -2743,7 +2769,7 @@ def doctor(
     """
     from gitboard import doctor as doctor_mod
 
-    cfg = get_config()
+    cfg = _run(get_config)
     root = cfg.source.parent if cfg.source else Path.cwd()
     specs = sorted((root / "boards").glob("*.yaml"))
     if cfg.spec and Path(cfg.spec) not in specs:

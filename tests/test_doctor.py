@@ -166,3 +166,22 @@ def test_cli_offline_no_calls(tmp_path, env, monkeypatch):
     monkeypatch.setattr(cli, "_doctor_http", http_for(calls=calls))
     CliRunner().invoke(cli.app, ["doctor", "--offline"])
     assert calls == []
+
+
+def test_snapshot_check_skips_a_bad_line(tmp_path):
+    db = tmp_path / "s.jsonl"
+    ts = (NOW - timedelta(hours=1)).isoformat()
+    db.write_text(f'{{"ts": "{ts}"}}\n\nnot json\n')
+    assert doctor._snapshot_check(db, NOW).status == doctor.OK
+
+
+def test_unreadable_board_file_is_a_fail_row(tmp_path):
+    d = tmp_path / "d.yaml"
+    d.mkdir()
+    assert doctor._spec_checks([d], NOW)[0].status == doctor.FAIL
+
+
+def test_cli_bad_config_is_one_line_not_a_traceback(tmp_path, env):
+    (tmp_path / "gitboard.toml").write_text("url = [oops\n")
+    r = CliRunner().invoke(cli.app, ["doctor", "--offline"])
+    assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.exception

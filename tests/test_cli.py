@@ -2572,3 +2572,40 @@ def test_tui_first_run_has_no_line_but_records(tui, tmp_path):
     tui.run(["q"], "--from", path, "--no-guide")
     assert "since" not in tui.text
     assert report_mod.last_seen("grp/proj/Dev Board") is not None
+
+
+def test_tui_filter_esc_keeps_it_and_empty_enter_clears(tui, tmp_path):
+    path = write_spec(tmp_path)
+    tui.run(["/", *"one", "\r", "/", "\x1b", "q"], "--from", path, "--no-guide")
+    assert "filter: one" in tui.last
+    tui.run(["/", *"one", "\r", "/", "\r", "q"], "--from", path, "--no-guide")
+    assert "filter:" not in tui.last
+
+
+def _arrivals(tui, tmp_path, path, iids):
+    orig, todo = tui._key, iter(iids)
+
+    def key(timeout=None):
+        if tui.keys[0] is None:  # the file changes, then the tick fires
+            n = next(todo)
+            spec = apply_mod.load(path)
+            spec["issues"].append({"iid": n, "title": f"arrived {n}"})
+            (tmp_path / path).write_text(apply_mod.dump(spec))
+            os.utime(tmp_path / path, ns=(n, n))  # mtime differs each time
+        return orig()
+
+    tui.mp.setattr(cli, "_key", key)
+
+
+def test_tui_marks_pile_up_across_idle_ticks(tui, tmp_path):
+    path = write_spec(tmp_path)
+    _arrivals(tui, tmp_path, path, [98, 99])
+    tui.run([None, None, "q"], "--from", path, "--no-guide")
+    assert "● #98" in tui.last and "● #99" in tui.last
+
+
+def test_tui_r_starts_the_marks_over(tui, tmp_path):
+    path = write_spec(tmp_path)
+    _arrivals(tui, tmp_path, path, [98])
+    tui.run([None, "r", "q"], "--from", path, "--no-guide")
+    assert "●" not in tui.last
