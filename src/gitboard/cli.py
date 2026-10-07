@@ -51,7 +51,6 @@ from gitboard.config import (
 from gitboard.log import err, get_logger, out, set_verbose
 
 app = typer.Typer(
-    add_completion=False,
     no_args_is_help=True,
     rich_markup_mode="rich",
     help=__doc__.split("\n\n")[0],
@@ -267,6 +266,32 @@ def local_specs():
     return found
 
 
+def _candidates(ctx, pick):
+    """Completion candidates from local files only: never the network or keychain,
+    and never an exception (a broken shell prompt is worse than no candidates)."""
+    try:
+        cfg = get_config()
+        specs = [s for _, s in local_specs()]
+        if (project := ctx.params.get("project")) is not None:
+            specs = [s for s in specs if s["project"] == project]
+        pairs = [(s["project"], s["board"]) for s in specs]
+        if cfg.project and project in (None, cfg.project):
+            pairs.append((cfg.project, cfg.board))
+        return pick(pairs)
+    except Exception:
+        return []
+
+
+def _complete_project(ctx: typer.Context, incomplete: str):
+    names = _candidates(ctx, lambda pairs: [p for p, _ in pairs if p])
+    return sorted({n for n in names if n.startswith(incomplete)})
+
+
+def _complete_board(ctx: typer.Context, incomplete: str):
+    names = _candidates(ctx, lambda pairs: [b for _, b in pairs if b])
+    return sorted({n for n in names if n.startswith(incomplete)})
+
+
 def find_spec(project_path):
     """The boards/*.yaml that defines this project, for the "go look here"
     footer — None means no footer."""
@@ -321,8 +346,12 @@ def _for_each(fn, items):
 
 @app.command()
 def show(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     markdown: bool = typer.Option(
         False, "--markdown", "-m", help="Stable markdown, for piping or the AI pass."
     ),
@@ -648,8 +677,12 @@ def migrate_comments(
 
 @app.command()
 def snapshot(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     out_path: str = typer.Option(
         SNAPSHOTS, "--out", "-o", help="JSONL file to append to."
     ),
@@ -737,8 +770,12 @@ def _pull_board(path, name, target, force, discard_edits, base, notes, no_snapsh
 
 @app.command()
 def pull(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     out: str | None = typer.Option(
         None, "--out", "-o", help="Where to write. Default: boards/<project>.yaml"
     ),
@@ -922,7 +959,9 @@ def ingest(
 
 @app.command()
 def report(
-    project: str | None = typer.Argument(None, help="group/project"),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
     days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
     db: str = typer.Option("snapshots.jsonl", "--db", help="Snapshot log to read."),
     repo: str | None = typer.Option(
@@ -1153,8 +1192,12 @@ def _weekly(project, board=None, log=STATS_LOG):
 
 @app.command()
 def stats(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
     from_file: str | None = typer.Option(
         None, "--from", help="Read a --dump file instead of GitLab. No network."
@@ -1207,8 +1250,12 @@ def stats(
 
 @app.command()
 def digest(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     days: int = typer.Option(7, "--days", "-d", help="Window, in days."),
     out_dir: str = typer.Option("reports", "--out", help="Directory to write under."),
     all_boards: bool = typer.Option(
@@ -1358,8 +1405,12 @@ def _flagged(found):
 
 @app.command()
 def graph(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     from_file: str | None = typer.Option(
         None, "--from", help="Draw a board YAML instead of GitLab. No network."
     ),
@@ -1514,8 +1565,12 @@ def _move_cursor(cursor, key, sizes):
 
 @app.command()
 def tui(
-    project: str | None = typer.Argument(None, help="group/project"),
-    board_name: str | None = typer.Argument(None, help="Board name, if several."),
+    project: str | None = typer.Argument(
+        None, help="group/project", autocompletion=_complete_project
+    ),
+    board_name: str | None = typer.Argument(
+        None, help="Board name, if several.", autocompletion=_complete_board
+    ),
     from_file: str | None = typer.Option(
         None,
         "--from",

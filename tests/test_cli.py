@@ -2474,3 +2474,26 @@ def test_tui_failed_board_switch_keeps_the_old_board_for_r(live_tui, gl, monkeyp
     monkeypatch.setattr(board_mod, "fetch", fetch)
     live_tui.run(["b", "2", "r", "q"], "grp/proj", "--no-guide")
     assert asked == [None, "Other", None]  # r retried the board on screen
+
+
+def test_completion_projects_and_boards(tmp_path):
+    write_spec(tmp_path)
+    other = {**SPEC, "project": "grp/other", "board": "Ops"}
+    write_spec(tmp_path, "boards/y.yaml", other)
+    (tmp_path / "boards/bad.yaml").write_text("project: [unclosed\n")
+    ctx = types.SimpleNamespace(params={})
+    assert cli._complete_project(ctx, "") == ["grp/other", "grp/proj"]
+    assert cli._complete_project(ctx, "grp/p") == ["grp/proj"]
+    assert cli._complete_board(ctx, "") == ["Dev Board", "Ops"]
+    ctx = types.SimpleNamespace(params={"project": "grp/other"})
+    assert cli._complete_board(ctx, "") == ["Ops"]
+
+
+def test_completion_never_raises(monkeypatch):
+    monkeypatch.setattr(cli, "local_specs", lambda: 1 / 0)
+    assert cli._complete_project(types.SimpleNamespace(params={}), "") == []
+
+
+def test_completion_flags_in_help():
+    out = runner.invoke(app, ["--help"]).output
+    assert "--install-completion" in out and "--show-completion" in out

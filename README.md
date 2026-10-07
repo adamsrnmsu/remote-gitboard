@@ -27,6 +27,7 @@ defined by boards/test.yaml — edit it, then `gitboard plan`
 make install                       # venv + dependencies
 make link                          # optional: `gitboard` in ~/.local/bin
 make show PROJECT=group/project
+gitboard --install-completion      # tab-complete projects and boards from boards/*.yaml
 ```
 
 `make install` is idempotent and every other target depends on it, so
