@@ -517,3 +517,66 @@ def test_board_view_limit_zero_shows_everything_and_limit_n_truncates():
     _, hidden = board.board_view(project, lists, limit=0)
     assert hidden == 0
     assert board.board_view(project, lists, limit=1)[1] == 2
+
+
+def _filter_world():
+    def card(iid, title, who=None, labels=(), ms=None):
+        return types.SimpleNamespace(
+            iid=iid,
+            title=title,
+            labels=list(labels),
+            assignee={"username": who} if who else None,
+            milestone={"title": ms} if ms else None,
+        )
+
+    return [
+        (
+            "Doing",
+            [
+                card(1, "Fix Login", "alice", ["bug", "Doing"], "v2"),
+                card(2, "Rotate token", "bob", ["Doing"]),
+            ],
+        ),
+        ("Review", [card(3, "Login docs", "alice", ["docs"], "v3")]),
+        ("Done", []),
+    ]
+
+
+def _iids(cols):
+    return [[i.iid for i in issues] for _, issues in cols]
+
+
+def test_filter_columns_each_token_kind_keeps_every_column():
+    cols = _filter_world()
+    assert _iids(board.filter_columns(cols, "@ALICE")) == [[1], [3], []]
+    assert _iids(board.filter_columns(cols, "~bug")) == [[1], [], []]
+    assert _iids(board.filter_columns(cols, "%v3")) == [[], [3], []]
+    assert _iids(board.filter_columns(cols, "login")) == [[1], [3], []]
+    assert [n for n, _ in board.filter_columns(cols, "zzz")] == [
+        "Doing",
+        "Review",
+        "Done",
+    ]
+
+
+def test_filter_columns_terms_are_anded_and_empty_query_is_a_noop():
+    cols = _filter_world()
+    assert _iids(board.filter_columns(cols, "@alice login ~bug")) == [[1], [], []]
+    assert _iids(board.filter_columns(cols, "@bob login")) == [[], [], []]
+    assert board.filter_columns(cols, "  ") is cols
+
+
+def test_filter_columns_on_offline_spec_stand_ins():
+    spec = {
+        "project": "g/p",
+        "board": "b",
+        "columns": [{"name": "Doing"}],
+        "issues": [
+            {"iid": 1, "title": "one", "assignee": "alice", "labels": ["Doing"]},
+            {"title": "two", "milestone": "v1"},
+        ],
+    }
+    cols = board.columns_from_spec(spec, "http://gl")
+    assert _iids(board.filter_columns(cols, "@alice")) == [[], [1]]
+    assert _iids(board.filter_columns(cols, "%v1")) == [[None], []]
+    assert _iids(board.filter_columns(cols, "@nobody")) == [[], []]

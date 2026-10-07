@@ -141,6 +141,7 @@ gitboard show group/project "Dev Board"  # a named board
 gitboard show --all                      # do not truncate long columns
 gitboard show -n 20                      # 20 issues per column
 gitboard show --markdown                 # stable output, for pipes and the AI
+gitboard show --filter "@alice ~bug %v2 token"  # only matching cards; all terms must match
 gitboard tui group/project               # interactive: reload, snapshot, push
 gitboard pull group/project              # save the board as boards/<name>.yaml
 gitboard pull group/project --base       # …and an untouched .base copy, for offline
@@ -220,7 +221,9 @@ refresh the YAML from GitLab), `f` pull (replace the YAML with the live board,
 asking first), `m`
 migrate comments between issues, `?` help, `q` quit. Arrows (or `h j k l`) select a card; card keys stage a
 change into the YAML without an editor — `v` move, `u` assign, `d` due date
-(`e` there asks the estimate), `c` comment, `n` new card — and a guide panel
+(`e` there asks the estimate), `c` comment, `n` new card — `/` filters the cards shown (`@user`, `~label`,
+`%milestone`, other words match the title; `esc` or an empty enter clears; `r`
+keeps it) — and a guide panel
 explains each mode with an example as you enter it (`g` hides it;
 `guide = false` in `gitboard.toml` for good).
 

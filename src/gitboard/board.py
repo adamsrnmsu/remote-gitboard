@@ -299,6 +299,38 @@ def summarise(columns):
     }
 
 
+def filter_columns(columns, query):
+    """`columns` keeping only the cards that match every term of `query`.
+
+    `@user` assignee username, `~label`, `%milestone` (all case-insensitive
+    substrings), any other word a title substring. Every column is kept, even
+    empty, so the shape never changes. Duck-typed: python-gitlab issues and
+    `columns_from_spec` stand-ins both work; a missing field matches nothing.
+    """
+    terms = query.lower().split()
+    if not terms:
+        return columns
+
+    def hit(issue, term):
+        sign, want = term[0], term[1:]
+        if sign == "@":
+            who = getattr(issue, "assignee", None)
+            return bool(who) and want in who["username"].lower()
+        if sign == "~":
+            return any(
+                want in lab.lower() for lab in getattr(issue, "labels", None) or []
+            )
+        if sign == "%":
+            ms = getattr(issue, "milestone", None)
+            return bool(ms) and want in ms["title"].lower()
+        return term in (getattr(issue, "title", "") or "").lower()
+
+    return [
+        (name, [i for i in issues if all(hit(i, t) for t in terms)])
+        for name, issues in columns
+    ]
+
+
 def snapshot_records(project, board, ts):
     """One dict per distinct open issue, ready for a JSONL progress log.
 
