@@ -1,5 +1,8 @@
 # Development
 
+To use gitboard, install perch (`git clone https://github.com/adamsrnmsu/perch.git
+&& cd perch && make install`); the commands below are for working on this repo.
+
 ```bash
 make test        # PYTHONPATH=src .venv/bin/pytest -q
 make lint        # ruff check

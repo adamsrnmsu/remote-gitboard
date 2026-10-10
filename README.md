@@ -23,19 +23,18 @@ defined by boards/test.yaml — edit it, then `gitboard plan`
 
 ## Quick start
 
+gitboard installs through perch, which clones it next to budgie and links
+everything:
+
 ```bash
-make install                       # venv + dependencies
-make link                          # optional: `gitboard` in ~/.local/bin
-make show PROJECT=group/project
-gitboard --install-completion      # tab-complete projects and boards from boards/*.yaml
+git clone https://github.com/adamsrnmsu/perch.git && cd perch && make install
+perch gb show group/project        # gitboard, run from the perch checkout
 ```
 
-`make install` is idempotent and every other target depends on it, so
-`make show` on a fresh checkout does the right thing.
-
-Without `make link`, use the `make` targets (`make show`, `make plan`,
-`make push`) or `PYTHONPATH=src .venv/bin/python -m gitboard.cli`. The rest of
-this README writes `gitboard` for brevity.
+The rest of this README writes `gitboard` for `perch gb`. Working on gitboard
+itself (this repo, at `apps/remote-gitboard` in a perch checkout): `make
+install` builds this repo's `.venv`, and the targets (`make show`, `make plan`,
+`make push`) run `PYTHONPATH=src .venv/bin/python -m gitboard.cli`.
 
 ## Pointing it at your instance
 
@@ -506,7 +505,7 @@ with one handler, or `click` alongside typer would all be weight without a job.
 Plain virtualenv and pip — no uv, no Poetry, no lockfile.
 
 ```bash
-make install      # python3 -m venv .venv && pip install ".[dev]"
+make install      # this repo's .venv, for gitboard development
 make activate     # subshell with .venv active (exit to leave)
 make test         # pytest
 make lint         # ruff
@@ -523,8 +522,7 @@ make fmt          # ruff format (black-equivalent)
   story.
 - **`make link`** writes a `~/.local/bin/gitboard` wrapper that execs this
   repo, so the global command runs current source with nothing to keep in sync.
-  `make unlink` removes it. (`pipx install .` works too, if you would rather
-  have an independent copy — but it goes stale when you edit the source.)
+  `make unlink` removes it.
 
 ### Do not use an editable install here
 

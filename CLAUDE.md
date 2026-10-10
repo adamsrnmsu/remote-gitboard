@@ -14,6 +14,9 @@ or verification cheaper, it does not belong here.
 
 ## Commands
 
+Install is perch's: `git clone https://github.com/adamsrnmsu/perch.git && cd perch &&
+make install`. This repo's `make install` only builds its own `.venv` for development.
+
 ```bash
 make up wait install && scripts/seed.py   # local GitLab + demo board
 scripts/bulk_demo.py                # 5 stress boards on the local instance

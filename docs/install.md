@@ -1,20 +1,25 @@
 # Install
 
+gitboard installs through perch, one path for all three apps:
+
 ```bash
-make install     # python3 -m venv .venv && pip install ".[dev,docs]"
-make link        # optional: ~/.local/bin/gitboard, execs this checkout
+git clone https://github.com/adamsrnmsu/perch.git && cd perch && make install
+perch gb show group/project
 ```
 
-Every `make` target depends on `install`, so `make show PROJECT=g/p` on a
-fresh clone works.
+`make install` in perch clones this repo into `apps/remote-gitboard`, builds
+the environments and links the commands. Nothing here is installed by hand.
 
-Without `make link`, the CLI is:
+## Working on gitboard
+
+In `apps/remote-gitboard`, `make install` builds this repo's own `.venv` and
+every `make` target depends on it. The CLI from a checkout is:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m gitboard.cli show group/project
 ```
 
-That is not a shortcut to tidy up. `pip install -e .` stops resolving on this
+Do not tidy that up into an editable install. `pip install -e .` stops resolving on this
 machine seconds after install (see {doc}`development`), so every target names
 `src/` directly. It also means edits are live with no reinstall.
 
