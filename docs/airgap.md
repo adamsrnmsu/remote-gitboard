@@ -37,8 +37,8 @@ refuses rather than lose them; `--discard-edits` is the explicit override.
 copy `.beads/` in. Inside, `bd metrics off`, set `BD_NON_INTERACTIVE=1`, and
 do not run `bd doctor` (it wants the network).
 
-**Python dependencies.** If the container has a pip index, `make install`
-works as usual. If not, vendor wheels on the host:
+**Python dependencies (the airgap exception).** If the container has a pip
+index, `make install` works as usual. If not, vendor wheels on the host:
 
 ```bash
 .venv/bin/python -m pip download --dest wheels --platform manylinux2014_x86_64 --only-binary=:all: --python-version 3.11 --implementation cp python-gitlab pyyaml typer rich python-dotenv
