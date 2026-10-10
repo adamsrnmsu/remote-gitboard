@@ -388,6 +388,7 @@ def run(project, board_name, from_file, no_guide, watch):
         if not st["spec"]:
             spec = f"boards/{st['path'].rsplit('/', 1)[-1]}.yaml"
             _pull_spec(st["proj"], st["board"], st["columns"], spec)
+            _pull_spec(st["proj"], st["board"], st["columns"], f"{spec}.base")
             st["spec"] = spec
         return st["spec"]
 
@@ -489,7 +490,7 @@ def run(project, board_name, from_file, no_guide, watch):
             ("e", "edit the YAML in $EDITOR (pulled from the board if there"),
             ("", "is none yet); the diff is shown when you come back"),
             ("p", "diff the YAML against the board — never writes"),
-            ("a", "push the YAML to the board — additive only, y/n first"),
+            ("a", "push the YAML to the board — y/n first"),
             ("y", "sync: push, snapshot, then refresh the YAML from GitLab"),
             ("f", "pull: replace the YAML with the live board (asks first)"),
             ("m", "copy a finished issue's comments onto one or more"),
@@ -817,7 +818,6 @@ def run(project, board_name, from_file, no_guide, watch):
                         spec,
                         True,
                         True,
-                        Path(f"{spec}.base").exists(),
                         any("discussion" in i for i in existing["issues"]),
                         False,
                     )

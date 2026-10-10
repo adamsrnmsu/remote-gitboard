@@ -12,6 +12,7 @@ import pytest
 from gitlab.exceptions import GitlabGetError
 
 from gitboard import apply, client
+from gitboard.board import board_columns
 
 
 class FakeIssue:
@@ -1609,3 +1610,22 @@ def test_closed_and_drop_in_one_push_close_first(monkeypatch):
         ("closed", "issue", "one (closed from the board file)"),
         ("oneway", "drop_column", "Review (0 cards)"),
     ]
+
+
+def test_pull_omits_closed_issues_so_the_next_plan_has_no_close_row():
+    open_issue = FakeIssue("one", labels=["Doing"], iid=7)
+    shut = FakeIssue("two", labels=["Doing"], iid=8, state="closed")
+    project = FakeProject(
+        labels=["Doing"], boards=["Dev Board"], issues=[open_issue, shut]
+    )
+    project.labels.list()[0].color = "#428bca"
+    project.issues.list = lambda state="opened", **_: [
+        i for i in [open_issue, shut] if i.state == state
+    ]
+    lists = [types.SimpleNamespace(label={"name": "Doing"}, position=0)]
+    board = types.SimpleNamespace(name="Dev Board", lists=_lister(lists))
+    spec = apply.spec_from_board(project, board, board_columns(project, board))
+    assert [i["title"] for i in spec["issues"]] == ["one"]
+    spec["issues"][0]["closed"] = True  # now closed via the file, pushed, re-pulled
+    pulled = apply.spec_from_board(project, board, board_columns(project, board))
+    assert apply.diff(pulled, apply.have_from_spec(pulled), pulled) == []

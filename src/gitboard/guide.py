@@ -84,8 +84,9 @@ GUIDE = {
     "a": (
         "push",
         [
-            "Sends your staged YAML edits to GitLab after a y/n. It only adds and",
-            "changes; it never deletes or closes a card. Labels: push only manages",
+            "Sends your staged YAML edits to GitLab after a y/n. It adds and",
+            "changes; `closed: true` closes a card and a removed column drops its",
+            "list. It never deletes a card. Labels: push only manages",
             "column labels and labels your YAML uses. Any other label a card has in",
             "GitLab stays on it.",
             "Example: a card tagged `security` in GitLab keeps that tag even when",

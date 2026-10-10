@@ -55,13 +55,21 @@ app = typer.Typer(
 )
 log = get_logger()
 
-SIGN = {"added": "+", "changed": "~", "skipped": "-", "drift": "!", "oneway": "!"}
+SIGN = {
+    "added": "+",
+    "changed": "~",
+    "skipped": "-",
+    "drift": "!",
+    "oneway": "!",
+    "closed": "x",
+}
 STYLE = {
     "added": "added",
     "changed": "changed",
     "skipped": "muted",
     "drift": "bold red",
     "oneway": "bold red",  # same glyph as drift, same meaning: look first
+    "closed": "bold red",  # a close is written to GitLab: look first
 }
 SNAPSHOTS = "snapshots.jsonl"
 STATS_LOG = "reports/stats.jsonl"  # one summary row per board per stats/digest run
@@ -415,18 +423,15 @@ def plan(
     against: str | None = typer.Option(
         None,
         "--against",
-        help="Diff against another board YAML (a pull --base copy) instead of "
+        help="Diff against another board YAML (a <spec>.base copy) instead of "
         "GitLab. No network.",
     ),
-    base: str | None = typer.Option(
-        None,
-        "--base",
-        help="The pull's untouched copy. Fields GitLab changed since it show as "
-        "drift (!), fields it already has as skipped (-). Default: <spec>.base "
-        "when it exists.",
-    ),
 ):
-    """Show what push would change. Never writes."""
+    """Show what push would change. Never writes.
+
+    Fields GitLab changed since the pull (<spec>.base) show as drift (!),
+    fields it already has as skipped (-).
+    """
 
     def go():
         spec_path = _need(spec, "spec", "spec file")
@@ -435,12 +440,12 @@ def plan(
             have = apply_mod.have_from_spec(apply_mod.load(against))
             _print_changes(apply_mod.diff(parsed, have), f"pending against {against}")
             return
-        base_spec = apply_mod.load(base) if base else _base_of(spec_path)
+        base_spec = _base_of(spec_path)
         with err().status(f"reading {parsed['project']}…"):
             pending = apply_mod.plan(client.gitlab(), parsed, base=base_spec)
         title = f"pending against {get_config().url}"
         if base_spec:
-            title += f" — drift is what moved since {base or spec_path + '.base'}"
+            title += f" — drift is what moved since {spec_path}.base"
         _print_changes(pending, title)
 
     _run(go)
@@ -456,7 +461,7 @@ IGNORE_DRIFT = typer.Option(
 def _confirm_writes(pending, title, yes, ignore_drift):
     """Table, drift guard, y/n. The rows that will be written; [] for none."""
     drift = [c for c in pending if c[0] == "drift"]
-    writes = [c for c in pending if c[0] in ("added", "changed")]
+    writes = [c for c in pending if c[0] in ("added", "changed", "closed", "oneway")]
     _print_changes(pending, title)
     if drift and not ignore_drift:
         err().print(
@@ -541,7 +546,7 @@ def push(
 ):
     """Make the board match the YAML. Writes — needs an api-scope token.
 
-    With a <spec>.base from `pull --base`, a field the team changed on GitLab
+    With the <spec>.base `pull` writes, a field the team changed on GitLab
     since the pull is drift: shown, and refused unless --ignore-drift.
     """
 
@@ -558,6 +563,11 @@ def sync(
     spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
     ignore_drift: bool = IGNORE_DRIFT,
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        help="group/project: pull SPEC first when the file does not exist yet.",
+    ),
 ):
     """push, snapshot, then refresh the YAML and <spec>.base from GitLab.
 
@@ -570,6 +580,23 @@ def sync(
 
     def go():
         spec_path = _need(spec, "spec", "spec file")
+        if not Path(spec_path).exists():
+            if not project:
+                raise ConfigError(
+                    f"no such board file {spec_path}; give --project GROUP/PROJECT "
+                    "to pull it first"
+                )
+            with err().status(f"reading {project}…"):
+                _pull_board(
+                    project,
+                    get_config().board,
+                    spec_path,
+                    False,
+                    False,
+                    False,
+                    True,  # sync writes the snapshot itself
+                )
+            err().print(f"[added]pulled {spec_path}[/] — nothing staged yet")
         parsed = apply_mod.load(spec_path)
         base = _base_of(spec_path)
         _, proj, board = _write_spec(parsed, base, yes, ignore_drift)
@@ -745,7 +772,7 @@ def _staged_edits(target, existing):
     return apply_mod.diff(existing, have)
 
 
-def _pull_board(path, name, target, force, discard_edits, base, notes, no_snapshot):
+def _pull_board(path, name, target, force, discard_edits, notes, no_snapshot):
     """pull's body for one board: the guards, then the write. Prints nothing,
     so the TUI can call it under its live display."""
     if Path(target).exists():
@@ -766,12 +793,11 @@ def _pull_board(path, name, target, force, discard_edits, base, notes, no_snapsh
     proj, board = board_mod.fetch(path, name)
     columns = board_mod.board_columns(proj, board)
     _pull_spec(proj, board, columns, target, notes=notes, force=force)
-    if base:
-        # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
-        # and the /board command may only edit *.yaml — the copy
-        # stays pristine. The previous one becomes .base.old.
-        _rotate_base(target)
-        _pull_spec(proj, board, columns, f"{target}.base", notes=notes)
+    # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
+    # and the /board command may only edit *.yaml — the copy
+    # stays pristine. The previous one becomes .base.old.
+    _rotate_base(target)
+    _pull_spec(proj, board, columns, f"{target}.base", notes=notes)
     if not no_snapshot:
         _write_snapshot(proj, board)
 
@@ -786,12 +812,6 @@ def pull(
     ),
     out: str | None = typer.Option(
         None, "--out", "-o", help="Where to write. Default: boards/<project>.yaml"
-    ),
-    base: bool = typer.Option(
-        False,
-        "--base",
-        help="Also keep an untouched copy as <out>.base, for `plan --against` "
-        "somewhere with no network.",
     ),
     notes: bool = typer.Option(
         False,
@@ -822,12 +842,10 @@ def pull(
 
     def one(path, name, target, force):
         with err().status(f"reading {path}…"):
-            _pull_board(
-                path, name, target, force, discard_edits, base, notes, no_snapshot
-            )
+            _pull_board(path, name, target, force, discard_edits, notes, no_snapshot)
         err().print(
-            f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
-            + (f" --against {target}.base" if base else "")
+            f"[added]wrote {target} and {target}.base[/] — edit {target}, then "
+            f"`gitboard plan {target}`"
         )
 
     def go():
@@ -993,7 +1011,7 @@ def replay(
         if since:
             base_file = Path(f"{since}.base")
             if not base_file.exists():
-                raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
+                raise ConfigError(f"no {since}.base — `gitboard pull` first")
             mtime = datetime.fromtimestamp(base_file.stat().st_mtime, UTC)
             ts = mtime.isoformat(timespec="seconds")
             spec = apply_mod.load(since)
@@ -1093,7 +1111,7 @@ def report(
         if since:
             ts = since_ts(since)
             if ts is None:
-                raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
+                raise ConfigError(f"no {since}.base — `gitboard pull` first")
             path = project or apply_mod.load(since)["project"]
         else:
             path = _need(project, "project", "project")
@@ -1664,12 +1682,14 @@ def tui(
 
 
 def _review_first(row):
-    """Notes, then link removals and reorders: what the lead reads before a
-    go-ahead goes above the routine label and date churn."""
-    _, what, detail = row
+    """Notes, then link removals, reorders, closes and column drops: what the
+    lead reads before a go-ahead goes above the routine label and date churn."""
+    kind, what, detail = row
     if what == "note":
         return 0
-    return 1 if what in ("link", "order") or ": blocked_by " in detail else 2
+    if kind == "closed" or what in ("link", "order", "drop_column"):
+        return 1
+    return 1 if ": blocked_by " in detail else 2
 
 
 def _changes_table(pending, title):
