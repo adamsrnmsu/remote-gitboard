@@ -452,8 +452,11 @@ def plan(
         spec_path = _need(spec, "spec", "spec file")
         parsed = apply_mod.load(spec_path)
         if against:
-            have = apply_mod.have_from_spec(apply_mod.load(against))
-            _print_changes(apply_mod.diff(parsed, have), f"pending against {against}")
+            old = apply_mod.load(against)
+            _print_changes(
+                apply_mod.diff(parsed, apply_mod.have_from_spec(old), old),
+                f"pending against {against}",
+            )
             return
         base_spec = _base_of(spec_path)
         with err().status(f"reading {parsed['project']}…"):
@@ -504,7 +507,7 @@ def _staged(parsed, spec_path, offline=None, write=False):
         return apply_mod.plan(client.gitlab(write=write), parsed, base=base)
     if base is None:
         return None
-    return apply_mod.diff(parsed, apply_mod.have_from_spec(base))
+    return apply_mod.diff(parsed, apply_mod.have_from_spec(base), base)
 
 
 def _drift_refusal(pending):
@@ -789,8 +792,8 @@ def _staged_edits(target, existing):
     base_file = Path(f"{target}.base")
     if not base_file.exists():
         return []
-    have = apply_mod.have_from_spec(apply_mod.load(str(base_file)))
-    return apply_mod.diff(existing, have)
+    base = apply_mod.load(str(base_file))
+    return apply_mod.diff(existing, apply_mod.have_from_spec(base), base)
 
 
 def _pull_board(
