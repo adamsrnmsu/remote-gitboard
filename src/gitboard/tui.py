@@ -390,7 +390,9 @@ def run(project, board_name, from_file, no_guide, watch, db=SNAPSHOTS, boards_di
             name = f"{st['path'].rsplit('/', 1)[-1]}.yaml"
             spec = str(Path(boards_dir or "boards") / name)
             _pull_spec(st["proj"], st["board"], st["columns"], spec)
-            _pull_spec(st["proj"], st["board"], st["columns"], f"{spec}.base")
+            _pull_spec(
+                st["proj"], st["board"], st["columns"], f"{spec}.base", force=True
+            )
             st["spec"] = spec
         return st["spec"]
 

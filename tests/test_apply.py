@@ -867,7 +867,7 @@ def test_changed_fields_read_old_to_new_one_line_each():
     ]
 
 
-# --- three-way: the .base from pull --base ---------------------------------
+# --- three-way: the .base that pull writes ---------------------------------
 
 
 def three_way(edited_labels, live_labels, old_labels=("Doing",), force=False):
@@ -1513,6 +1513,15 @@ def test_close_writes_note_and_state_event():
     assert issue.state_event == "close" and issue.saved
     body = issue.notes.notes[0].body
     assert apply.MARKER in body and "Closed from the board file by gitboard." in body
+
+
+def test_closed_true_with_notes_posts_no_note(monkeypatch):
+    issue = noted_issue("one", labels=["Doing"])
+    spec = spec_with(
+        {"title": "one", "labels": ["Doing"], "closed": True, "notes": ["hi"]}
+    )
+    gl = use_project(monkeypatch, writable_project(issue))
+    assert [r[:2] for r in apply.apply(gl, spec)] == [("closed", "issue")]
 
 
 def test_closed_true_on_absent_or_closed_is_skipped():

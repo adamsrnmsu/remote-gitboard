@@ -93,10 +93,10 @@ user config leaks in — twelve tests failed before the fixture existed.
 ## What the AI pass may write
 
 `.claude/commands/board.md` may run `show`, `plan`, `report`, `push`,
-`ingest`, `estimate`, `status`, `stats`, `graph`, and edit `boards/*.yaml` (`sync` is deliberately not
-allowed). Staged `notes:` widen what `push` can write to comments — still
-additive, posted under a `*staged via gitboard*` first line, still shown in
-the plan table first. The agent may move an issue **into** Verify, never
+`ingest`, `estimate`, `status`, `stats`, `graph`, and edit the board file named in the prompt (`sync` is deliberately not
+allowed). Staged `notes:` widen what `push` can write to comments, posted under a `*staged via gitboard*` first line, still shown in
+the plan table first. `closed: true` and column drops are the non-additive
+writes, also shown in the plan table first. The agent may move an issue **into** Verify, never
 out: Done/Failed are people's verdict comments. It may stage
 `milestone`, `milestones:`, `priority::N`, `blocked_by` additions and
 removals and YAML reorders, proposing one fix per graph flag; it never

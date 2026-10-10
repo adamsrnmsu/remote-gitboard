@@ -1171,6 +1171,18 @@ def test_plan_against_diffs_two_files_without_the_network(gl, tmp_path, monkeypa
     assert "labels" in r.output
 
 
+def test_plan_against_shows_the_dropped_column(gl, tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "gitlab", lambda write=False: pytest.fail("network"))
+    old = json.loads(json.dumps(SPEC))
+    old["columns"].insert(1, {"name": "Extra"})
+    path = write_spec(tmp_path, base=False)
+    other = write_spec(tmp_path, "boards/o.yaml", spec=old, base=False)
+    r = runner.invoke(app, ["plan", path, "--against", other])
+    assert r.exit_code == 0, r.output
+    flat = "".join(r.output.split())
+    assert "drop_c" in flat and "Extra(0cards)" in flat
+
+
 def test_plan_names_the_base_in_the_title_and_passes_it(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
