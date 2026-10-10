@@ -218,3 +218,9 @@ table.docutils th {
   outline: 2px solid var(--hk-accent-hot);
   outline-offset: 2px;
 }
+
+/* The perch bird logo (docs/_static/logo.png), recoloured to the skin's green. */
+.sidebar-logo {
+  max-width: 55%;
+  filter: drop-shadow(0 0 10px rgb(57 255 106 / 0.35));
+}

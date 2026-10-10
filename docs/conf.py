@@ -25,8 +25,12 @@ html_title = "gitboard"
 # The shared pi apps terminal skin: see the header of _static/hacker.css.
 html_static_path = ["_static"]
 html_css_files = ["hacker.css"]
+html_favicon = "_static/favicon.png"
 pygments_style = pygments_dark_style = "native"
 html_theme_options = {
+    # the perch bird in the skin's green; the skin is dark-only, so one file
+    "light_logo": "logo.png",
+    "dark_logo": "logo.png",
     "source_repository": "https://github.com/adamsrnmsu/remote-gitboard",
     "source_branch": "main",
     "source_directory": "docs/",
