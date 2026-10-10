@@ -1,8 +1,8 @@
 # Migrations: reformatting a board
 
-`push` is additive on purpose: it creates and updates, never renames a
-label everywhere, never merges two labels, never removes a column or moves a
-card to another project. A reformat needs exactly those one-way moves, so
+`push` does not rename a label everywhere, merge two labels or move a card to
+another project (it does close an issue marked `closed: true` and drop a
+column removed from `columns:`, keeping its label). A reformat needs exactly those one-way moves, so
 they live in a separate file and a separate command, and the agent never
 runs it.
 
@@ -17,8 +17,8 @@ runs it.
 
 ```bash
 gitboard migrate boards/<name>.migration.yaml   # ! rows are one-way; y/n
-gitboard push boards/<name>.yaml               # the additive rest
-gitboard pull group/project --base --force -o boards/<name>.yaml
+gitboard push boards/<name>.yaml               # the rest
+gitboard pull group/project --force -o boards/<name>.yaml
 ```
 
 Every op is idempotent: running the file twice prints only `-` skipped rows.

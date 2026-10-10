@@ -269,9 +269,14 @@ Issue identity is the **iid when the entry has one, else the stripped
 title**: a retitle in a pulled YAML is a rename; on a hand-written entry it
 creates a second issue. `load()` strips titles and rejects duplicates; two
 open GitLab issues sharing a title is an error, not a coin toss. A title
-whose only live match is **closed** is skipped, never recreated. Apply is
-additive for issues and milestones: nothing is deleted or closed, removing an issue from the YAML
-leaves it on the board, and **push only manages column labels and labels the spec uses; any other label a card has in GitLab stays on it**. Per-issue `notes:` are staged comments: `push`
+whose only live match is **closed** is skipped, never recreated. A file edit never
+deletes an issue: removing one from the YAML leaves it on the board;
+`closed: true` closes it (a `closed` plan row; `_close` posts the marked note
+then closes; absent or already closed is `skipped`); a column removed from
+`columns:` (base columns minus spec columns, base required, `Verify`/`Done`/
+`Failed` refused) is a `oneway` `drop_column` row and `drop_columns` deletes
+the list, keeping the label, after `ensure_issues` so closes go first;
+milestones stay additive, and **push only manages column labels and labels the spec uses; any other label a card has in GitLab stays on it**. Per-issue `notes:` are staged comments: `push`
 posts each body not already on the issue (`ensure_notes`, same idempotency
 rule as `migrate_comments`); `discussion:` is what `pull --notes` read and is
 never written. `plan`/`diff` report notes as `("added", "note", ...)`; the
@@ -287,7 +292,7 @@ allowed, like removing a label: it is reversible metadata. `milestone`
 and `blocked_by` are two more fields of `issue_changes`, and the order
 is one more three-way field (`order_changes` over `order.merge`), so
 plan and apply still share one decision point. `ensure_milestones`
-creates and updates, never closes; titles resolve to ids before any
+creates and updates, never closes a milestone; titles resolve to ids before any
 write, like users. `pull` writes issues in board order and a
 `milestones:` entry for every milestone a card carries plus every active
 project milestone (card-less group ones stay out, gb-84c), so

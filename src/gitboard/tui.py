@@ -134,7 +134,7 @@ def _move_cursor(cursor, key, sizes):
     return (new, min(row, sizes[new] - 1))
 
 
-def run(project, board_name, from_file, no_guide, watch):
+def run(project, board_name, from_file, no_guide, watch, db=SNAPSHOTS, boards_dir=None):
     """The TUI loop; returns the suite app to switch to, or None on q."""
     if not sys.stdin.isatty():
         raise ConfigError("tui needs a terminal — use `show` in pipes")
@@ -182,11 +182,12 @@ def run(project, board_name, from_file, no_guide, watch):
             spec = apply_mod.load(offline)
             proj, board = board_mod.spec_stand_ins(spec)
             columns = board_mod.columns_from_spec(spec, get_config().url)
-            found, ages = offline, _ages(spec["project"])
+            found, ages = offline, _ages(spec["project"], db)
         else:
             proj, board = board_mod.fetch(st["path"], st["name"])
             columns = board_mod.board_columns(proj, board)
-            found, ages = find_spec(st["path"]), _ages(proj.path_with_namespace)
+            found = find_spec(st["path"], boards_dir)
+            ages = _ages(proj.path_with_namespace, db)
         # first load marks nothing; later ones mark what moved since. An
         # idle tick adds to the marks, so a move made while the lead looked
         # away is still marked when they come back; r, a push or a stage
@@ -282,7 +283,7 @@ def run(project, board_name, from_file, no_guide, watch):
     def board_choices():
         choices = [(st["path"], b.name) for b in st["proj"].boards.list(all=True)]
         seen = set(choices)
-        for _, parsed in local_specs():
+        for _, parsed in local_specs(boards_dir):
             entry = (parsed["project"], parsed["board"])
             if entry not in seen:
                 seen.add(entry)
@@ -386,8 +387,10 @@ def run(project, board_name, from_file, no_guide, watch):
     def spec_file():
         """The board's YAML, pulled from the board when there is none yet."""
         if not st["spec"]:
-            spec = f"boards/{st['path'].rsplit('/', 1)[-1]}.yaml"
+            name = f"{st['path'].rsplit('/', 1)[-1]}.yaml"
+            spec = str(Path(boards_dir or "boards") / name)
             _pull_spec(st["proj"], st["board"], st["columns"], spec)
+            _pull_spec(st["proj"], st["board"], st["columns"], f"{spec}.base")
             st["spec"] = spec
         return st["spec"]
 
@@ -489,7 +492,7 @@ def run(project, board_name, from_file, no_guide, watch):
             ("e", "edit the YAML in $EDITOR (pulled from the board if there"),
             ("", "is none yet); the diff is shown when you come back"),
             ("p", "diff the YAML against the board — never writes"),
-            ("a", "push the YAML to the board — additive only, y/n first"),
+            ("a", "push the YAML to the board — y/n first"),
             ("y", "sync: push, snapshot, then refresh the YAML from GitLab"),
             ("f", "pull: replace the YAML with the live board (asks first)"),
             ("m", "copy a finished issue's comments onto one or more"),
@@ -529,10 +532,10 @@ def run(project, board_name, from_file, no_guide, watch):
         if "proj" not in st:
             return
         since = report_mod.last_seen(seen_key())
-        if since is None or not Path(SNAPSHOTS).exists():
+        if since is None or not Path(db).exists():
             return
         batches = report_mod.load(
-            SNAPSHOTS, project=st["proj"].path_with_namespace, days=AGE_WINDOW
+            db, project=st["proj"].path_with_namespace, days=AGE_WINDOW
         )
         line = report_mod.describe(
             report_mod.away(batches, since.isoformat(), board=st["board"].name),
@@ -602,10 +605,8 @@ def run(project, board_name, from_file, no_guide, watch):
                 draw(busy=f"reading {st['path']}…")
                 refetch()
             elif k == "s":
-                n = _write_snapshot(st["proj"], st["board"])
-                st["status"] = Text(
-                    f"{n} issue(s) appended to snapshots.jsonl", "added"
-                )
+                n = _write_snapshot(st["proj"], st["board"], db)
+                st["status"] = Text(f"{n} issue(s) appended to {db}", "added")
             elif k == "?":
                 st["extra"] = help_panel()
             elif k == "b":
@@ -817,9 +818,9 @@ def run(project, board_name, from_file, no_guide, watch):
                         spec,
                         True,
                         True,
-                        Path(f"{spec}.base").exists(),
                         any("discussion" in i for i in existing["issues"]),
                         False,
+                        db,
                     )
                     refetch()
                     st["extra"] = None
@@ -862,7 +863,7 @@ def run(project, board_name, from_file, no_guide, watch):
                         refetch()
                         done = f"{len(changes)} change(s) written"
                         if k == "y":
-                            _write_snapshot(st["proj"], st["board"])
+                            _write_snapshot(st["proj"], st["board"], db)
                             _refresh_spec(
                                 spec,
                                 parsed,

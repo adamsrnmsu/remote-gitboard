@@ -55,13 +55,21 @@ app = typer.Typer(
 )
 log = get_logger()
 
-SIGN = {"added": "+", "changed": "~", "skipped": "-", "drift": "!", "oneway": "!"}
+SIGN = {
+    "added": "+",
+    "changed": "~",
+    "skipped": "-",
+    "drift": "!",
+    "oneway": "!",
+    "closed": "x",
+}
 STYLE = {
     "added": "added",
     "changed": "changed",
     "skipped": "muted",
     "drift": "bold red",
     "oneway": "bold red",  # same glyph as drift, same meaning: look first
+    "closed": "bold red",  # a close is written to GitLab: look first
 }
 SNAPSHOTS = "snapshots.jsonl"
 STATS_LOG = "reports/stats.jsonl"  # one summary row per board per stats/digest run
@@ -118,6 +126,15 @@ EXAMPLE = {
     "spec": ('spec = "boards/team.yaml"', "gitboard push boards/team.yaml"),
     "project": ('project = "group/project"', "gitboard show group/project"),
 }
+
+
+# the path flags, shared: every default is the old hard-coded path
+DB = typer.Option(SNAPSHOTS, "--db", help="Snapshot log (JSONL) to read and append to.")
+LOG = typer.Option(STATS_LOG, "--log", help="Stats log (JSONL) the trend reads.")
+SPEC = typer.Option(None, "--spec", help="The board YAML for estimates and emails.")
+BOARDS_DIR = typer.Option(
+    None, "--boards-dir", help="Look for board YAMLs here, not in ./boards."
+)
 
 
 def _need(value, key, what):
@@ -240,17 +257,21 @@ def _shortest(path):
     return rel if not rel.startswith("..") else str(path)
 
 
-def local_specs():
+def local_specs(boards_dir=None):
     """[(path, spec)] for every board YAML in reach, one per (project, board).
 
     The config's own spec first, then boards/ next to the config file, then
     boards/ under the cwd. Unreadable files are skipped: this feeds footers,
     pickers and --all, none of which should die because one YAML is broken.
+    `boards_dir` (--boards-dir) replaces all of that: only its *.yaml.
     """
-    cfg = get_config()
-    paths = [Path(cfg.spec)] if cfg.spec else []
-    for root in [p.parent for p in [cfg.source] if p] + [Path.cwd()]:
-        paths += sorted((root / "boards").glob("*.yaml"))
+    if boards_dir:
+        paths = sorted(Path(boards_dir).glob("*.yaml"))
+    else:
+        cfg = get_config()
+        paths = [Path(cfg.spec)] if cfg.spec else []
+        for root in [p.parent for p in [cfg.source] if p] + [Path.cwd()]:
+            paths += sorted((root / "boards").glob("*.yaml"))
     found, seen = [], set()
     for path in paths:
         try:
@@ -290,10 +311,10 @@ def _complete_board(ctx: typer.Context, incomplete: str):
     return sorted({n for n in names if n.startswith(incomplete)})
 
 
-def find_spec(project_path):
+def find_spec(project_path, boards_dir=None):
     """The boards/*.yaml that defines this project, for the "go look here"
     footer — None means no footer."""
-    for path, spec in local_specs():
+    for path, spec in local_specs(boards_dir):
         if spec["project"] == project_path:
             return path
     return None
@@ -368,6 +389,8 @@ def show(
         help="Only matching cards: @user, ~label, %milestone, other words "
         "match the title; all must match.",
     ),
+    db: str = DB,
+    boards_dir: str | None = BOARDS_DIR,
 ):
     """Print an issue board, grouped into its columns."""
 
@@ -384,12 +407,12 @@ def show(
             project_obj, board_obj = board_mod.fetch(
                 path, board_name or get_config().board
             )
-            spec_path = find_spec(path)
+            spec_path = find_spec(path, boards_dir)
         if filter_:
             if columns is None:
                 columns = board_mod.board_columns(project_obj, board_obj)
             columns = board_mod.filter_columns(columns, filter_)
-        ages = _ages(project_obj.path_with_namespace)
+        ages = _ages(project_obj.path_with_namespace, db)
         if markdown:
             print(
                 board_mod.as_markdown(
@@ -415,18 +438,15 @@ def plan(
     against: str | None = typer.Option(
         None,
         "--against",
-        help="Diff against another board YAML (a pull --base copy) instead of "
+        help="Diff against another board YAML (a <spec>.base copy) instead of "
         "GitLab. No network.",
     ),
-    base: str | None = typer.Option(
-        None,
-        "--base",
-        help="The pull's untouched copy. Fields GitLab changed since it show as "
-        "drift (!), fields it already has as skipped (-). Default: <spec>.base "
-        "when it exists.",
-    ),
 ):
-    """Show what push would change. Never writes."""
+    """Show what push would change. Never writes.
+
+    Fields GitLab changed since the pull (<spec>.base) show as drift (!),
+    fields it already has as skipped (-).
+    """
 
     def go():
         spec_path = _need(spec, "spec", "spec file")
@@ -435,12 +455,12 @@ def plan(
             have = apply_mod.have_from_spec(apply_mod.load(against))
             _print_changes(apply_mod.diff(parsed, have), f"pending against {against}")
             return
-        base_spec = apply_mod.load(base) if base else _base_of(spec_path)
+        base_spec = _base_of(spec_path)
         with err().status(f"reading {parsed['project']}…"):
             pending = apply_mod.plan(client.gitlab(), parsed, base=base_spec)
         title = f"pending against {get_config().url}"
         if base_spec:
-            title += f" — drift is what moved since {base or spec_path + '.base'}"
+            title += f" — drift is what moved since {spec_path}.base"
         _print_changes(pending, title)
 
     _run(go)
@@ -456,7 +476,7 @@ IGNORE_DRIFT = typer.Option(
 def _confirm_writes(pending, title, yes, ignore_drift):
     """Table, drift guard, y/n. The rows that will be written; [] for none."""
     drift = [c for c in pending if c[0] == "drift"]
-    writes = [c for c in pending if c[0] in ("added", "changed")]
+    writes = [c for c in pending if c[0] in ("added", "changed", "closed", "oneway")]
     _print_changes(pending, title)
     if drift and not ignore_drift:
         err().print(
@@ -497,7 +517,7 @@ def _drift_refusal(pending):
         )
 
 
-def _write_spec(parsed, base, yes, ignore_drift):
+def _write_spec(parsed, base, yes, ignore_drift, db=SNAPSHOTS):
     """plan -> table -> y/n -> apply -> snapshot: the core of push and sync.
 
     Returns (changes, project, board); the last two are None when nothing was
@@ -516,8 +536,8 @@ def _write_spec(parsed, base, yes, ignore_drift):
         f"gitboard show {parsed['project']}"
     )
     proj, board = board_mod.fetch(parsed["project"], parsed["board"])
-    n = _write_snapshot(proj, board)
-    err().print(f"[muted]{n} issue(s) appended to {SNAPSHOTS}[/]")
+    n = _write_snapshot(proj, board, db)
+    err().print(f"[muted]{n} issue(s) appended to {db}[/]")
     return changes, proj, board
 
 
@@ -538,17 +558,18 @@ def push(
     spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
     ignore_drift: bool = IGNORE_DRIFT,
+    db: str = DB,
 ):
     """Make the board match the YAML. Writes — needs an api-scope token.
 
-    With a <spec>.base from `pull --base`, a field the team changed on GitLab
+    With the <spec>.base `pull` writes, a field the team changed on GitLab
     since the pull is drift: shown, and refused unless --ignore-drift.
     """
 
     def go():
         spec_path = _need(spec, "spec", "spec file")
         parsed = apply_mod.load(spec_path)
-        _write_spec(parsed, _base_of(spec_path), yes, ignore_drift)
+        _write_spec(parsed, _base_of(spec_path), yes, ignore_drift, db)
 
     _run(go)
 
@@ -558,6 +579,12 @@ def sync(
     spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
     ignore_drift: bool = IGNORE_DRIFT,
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        help="group/project: pull SPEC first when the file does not exist yet.",
+    ),
+    db: str = DB,
 ):
     """push, snapshot, then refresh the YAML and <spec>.base from GitLab.
 
@@ -570,9 +597,26 @@ def sync(
 
     def go():
         spec_path = _need(spec, "spec", "spec file")
+        if not Path(spec_path).exists():
+            if not project:
+                raise ConfigError(
+                    f"no such board file {spec_path}; give --project GROUP/PROJECT "
+                    "to pull it first"
+                )
+            with err().status(f"reading {project}…"):
+                _pull_board(
+                    project,
+                    get_config().board,
+                    spec_path,
+                    False,
+                    False,
+                    False,
+                    True,  # sync writes the snapshot itself
+                )
+            err().print(f"[added]pulled {spec_path}[/] — nothing staged yet")
         parsed = apply_mod.load(spec_path)
         base = _base_of(spec_path)
-        _, proj, board = _write_spec(parsed, base, yes, ignore_drift)
+        _, proj, board = _write_spec(parsed, base, yes, ignore_drift, db)
         _refresh_spec(spec_path, parsed, base, proj, board)
         err().print(
             f"[added]refreshed {spec_path} and its .base[/] from the live board"
@@ -697,6 +741,7 @@ def snapshot(
     all_boards: bool = typer.Option(
         False, "--all", help="Every board a local boards/*.yaml defines."
     ),
+    boards_dir: str | None = BOARDS_DIR,
 ):
     """Append the board's current state to a JSONL log, one line per issue."""
 
@@ -707,7 +752,10 @@ def snapshot(
 
     def go():
         if all_boards:
-            _for_each(lambda ps: one(ps[1]["project"], ps[1]["board"]), local_specs())
+            _for_each(
+                lambda ps: one(ps[1]["project"], ps[1]["board"]),
+                local_specs(boards_dir),
+            )
             return
         one(_need(project, "project", "project"), board_name or get_config().board)
 
@@ -745,7 +793,9 @@ def _staged_edits(target, existing):
     return apply_mod.diff(existing, have)
 
 
-def _pull_board(path, name, target, force, discard_edits, base, notes, no_snapshot):
+def _pull_board(
+    path, name, target, force, discard_edits, notes, no_snapshot, db=SNAPSHOTS
+):
     """pull's body for one board: the guards, then the write. Prints nothing,
     so the TUI can call it under its live display."""
     if Path(target).exists():
@@ -766,14 +816,13 @@ def _pull_board(path, name, target, force, discard_edits, base, notes, no_snapsh
     proj, board = board_mod.fetch(path, name)
     columns = board_mod.board_columns(proj, board)
     _pull_spec(proj, board, columns, target, notes=notes, force=force)
-    if base:
-        # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
-        # and the /board command may only edit *.yaml — the copy
-        # stays pristine. The previous one becomes .base.old.
-        _rotate_base(target)
-        _pull_spec(proj, board, columns, f"{target}.base", notes=notes)
+    # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
+    # and the /board command may only edit *.yaml — the copy
+    # stays pristine. The previous one becomes .base.old.
+    _rotate_base(target)
+    _pull_spec(proj, board, columns, f"{target}.base", notes=notes)
     if not no_snapshot:
-        _write_snapshot(proj, board)
+        _write_snapshot(proj, board, db)
 
 
 @app.command()
@@ -786,12 +835,6 @@ def pull(
     ),
     out: str | None = typer.Option(
         None, "--out", "-o", help="Where to write. Default: boards/<project>.yaml"
-    ),
-    base: bool = typer.Option(
-        False,
-        "--base",
-        help="Also keep an untouched copy as <out>.base, for `plan --against` "
-        "somewhere with no network.",
     ),
     notes: bool = typer.Option(
         False,
@@ -817,24 +860,26 @@ def pull(
         help="Refresh every local boards/*.yaml in place (implies --force; the "
         "edits guard still holds).",
     ),
+    db: str = DB,
+    boards_dir: str | None = BOARDS_DIR,
 ):
     """Save the live board as YAML — the file plan/push read. Reads only."""
 
     def one(path, name, target, force):
         with err().status(f"reading {path}…"):
             _pull_board(
-                path, name, target, force, discard_edits, base, notes, no_snapshot
+                path, name, target, force, discard_edits, notes, no_snapshot, db
             )
         err().print(
-            f"[added]wrote {target}[/] — edit it, then `gitboard plan {target}`"
-            + (f" --against {target}.base" if base else "")
+            f"[added]wrote {target} and {target}.base[/] — edit {target}, then "
+            f"`gitboard plan {target}`"
         )
 
     def go():
         if all_boards:
             _for_each(
                 lambda ps: one(ps[1]["project"], ps[1]["board"], ps[0], True),
-                local_specs(),
+                local_specs(boards_dir),
             )
             return
         path = _need(project, "project", "project")
@@ -993,7 +1038,7 @@ def replay(
         if since:
             base_file = Path(f"{since}.base")
             if not base_file.exists():
-                raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
+                raise ConfigError(f"no {since}.base — `gitboard pull` first")
             mtime = datetime.fromtimestamp(base_file.stat().st_mtime, UTC)
             ts = mtime.isoformat(timespec="seconds")
             spec = apply_mod.load(since)
@@ -1059,6 +1104,7 @@ def report(
         help="Every project a local boards/*.yaml defines, each since its own "
         ".base when it has one.",
     ),
+    boards_dir: str | None = BOARDS_DIR,
     history: str | None = typer.Option(
         None,
         "--history",
@@ -1086,14 +1132,14 @@ def report(
                 lambda ps: _report(
                     ps[1]["project"], days, db, repo, since_ts(ps[0]), history
                 ),
-                local_specs(),
+                local_specs(boards_dir),
             )
             return
         ts = None
         if since:
             ts = since_ts(since)
             if ts is None:
-                raise ConfigError(f"no {since}.base — `gitboard pull --base` first")
+                raise ConfigError(f"no {since}.base — `gitboard pull` first")
             path = project or apply_mod.load(since)["project"]
         else:
             path = _need(project, "project", "project")
@@ -1308,7 +1354,7 @@ def _history(project, board_name, days, from_file=None, dump=None, history_days=
     return history, columns, meta
 
 
-def _summary(history, columns, meta, days, log=STATS_LOG):
+def _summary(history, columns, meta, days, log=STATS_LOG, spec_path=None):
     """(summary, now) for the `days` ending at the fetch.
 
     Every run leaves one row in the stats log — one per board per week, the
@@ -1318,7 +1364,7 @@ def _summary(history, columns, meta, days, log=STATS_LOG):
     summary = stats_mod.summarise(
         history, columns, now - timedelta(days=days), now, now
     )
-    spec_path = find_spec(meta["project"])
+    spec_path = spec_path or find_spec(meta["project"])
     cfg = estimate_mod.config(apply_mod.load(spec_path) if spec_path else {})
     summary["flow"]["tight"] = estimate_mod.tight(history, columns, now, cfg)
     summary["flow"]["late_milestones"] = estimate_mod.late_milestones(
@@ -1361,16 +1407,18 @@ def stats(
     weeks: int | None = typer.Option(
         None,
         "--weeks",
-        help="Only the trend table for the last N weeks, from reports/stats.jsonl. "
+        help="Only the trend table for the last N weeks, from the stats log. "
         "No network.",
     ),
+    log: str = LOG,
+    spec: str | None = SPEC,
 ):
     """Team numbers: open, done, cycle and verify times, flow. Markdown to stdout."""
 
     def go():
         if weeks:
             path = _need(project, "project", "project")
-            rows = stats_mod.weekly(stats_mod.load_rows(STATS_LOG), path, weeks)
+            rows = stats_mod.weekly(stats_mod.load_rows(log), path, weeks)
             out = f"# {path} — last {weeks} weeks\n\n" + stats_mod.render_weekly_md(
                 rows
             )
@@ -1382,11 +1430,11 @@ def stats(
         history, columns, meta = _history(
             path, board_name or get_config().board, days, from_file, dump, history_days
         )
-        summary, _ = _summary(history, columns, meta, days)
+        summary, _ = _summary(history, columns, meta, days, log, spec)
         if as_json:
             print(json.dumps(summary, default=str, indent=2))
         else:
-            weekly = _weekly(meta["project"], meta["board"])
+            weekly = _weekly(meta["project"], meta["board"], log)
             if blocks_mod.wanted():
                 blocks_mod.emit(stats_mod.team_blocks(summary, weekly))
             else:
@@ -1417,6 +1465,9 @@ def digest(
     md_only: bool = typer.Option(
         False, "--md-only", help="Markdown and plain-text .eml only; no HTML."
     ),
+    log: str = LOG,
+    spec: str | None = SPEC,
+    boards_dir: str | None = BOARDS_DIR,
 ):
     """Write the weekly digest: team.md/.html, one .md/.html per person, a
     multipart .eml where the board YAML's `emails:` names an address, and an
@@ -1424,12 +1475,12 @@ def digest(
 
     def one(path, name):
         history, columns, meta = _history(path, name, days, from_file)
-        summary, now = _summary(history, columns, meta, days)
+        spec_path = spec or find_spec(meta["project"], boards_dir)
+        summary, now = _summary(history, columns, meta, days, log, spec_path)
         folder = (
             Path(out_dir) / now.date().isoformat() / stats_mod.slug(meta["project"])
         )
         folder.mkdir(parents=True, exist_ok=True)
-        spec_path = find_spec(meta["project"])
         emails = (apply_mod.load(spec_path).get("emails") or {}) if spec_path else {}
         people = (
             set(summary["open"]["by_assignee"])
@@ -1441,7 +1492,7 @@ def digest(
             None if md_only else stats_mod.daily_series(history, columns, start, now)
         )
         week = summary["period"]["start"][:10]
-        weekly = _weekly(meta["project"], meta["board"])
+        weekly = _weekly(meta["project"], meta["board"], log)
         cfg = estimate_mod.config(apply_mod.load(spec_path) if spec_path else {})
         plan = gantt_mod.bars(history, columns, now, cfg)
         ms, today = meta.get("milestones", ()), now.date()
@@ -1522,7 +1573,10 @@ def digest(
 
     def go():
         if all_boards:
-            _for_each(lambda ps: one(ps[1]["project"], ps[1]["board"]), local_specs())
+            _for_each(
+                lambda ps: one(ps[1]["project"], ps[1]["board"]),
+                local_specs(boards_dir),
+            )
             return
         path = None if from_file else _need(project, "project", "project")
         one(path, board_name or get_config().board)
@@ -1654,22 +1708,30 @@ def tui(
         help="Reload the board every MINUTES (read only). Offline, reloads "
         "when the YAML changes, checked every MINUTES (default 2 seconds).",
     ),
+    db: str = DB,
+    boards_dir: str | None = BOARDS_DIR,
 ):
     """The board, interactively: card keys stage into the YAML, a pushes it."""
     from gitboard import tui as tui_mod
 
-    target = _run(lambda: tui_mod.run(project, board_name, from_file, no_guide, watch))
+    target = _run(
+        lambda: tui_mod.run(
+            project, board_name, from_file, no_guide, watch, db, boards_dir
+        )
+    )
     if target:
         _switch(_suite_entry(target))
 
 
 def _review_first(row):
-    """Notes, then link removals and reorders: what the lead reads before a
-    go-ahead goes above the routine label and date churn."""
-    _, what, detail = row
+    """Notes, then link removals, reorders, closes and column drops: what the
+    lead reads before a go-ahead goes above the routine label and date churn."""
+    kind, what, detail = row
     if what == "note":
         return 0
-    return 1 if what in ("link", "order") or ": blocked_by " in detail else 2
+    if kind == "closed" or what in ("link", "order", "drop_column"):
+        return 1
+    return 1 if ": blocked_by " in detail else 2
 
 
 def _changes_table(pending, title):
@@ -1717,7 +1779,8 @@ def waiting_questions(spec_issue):
 
 @app.command()
 def status(
-    db: str = typer.Option(SNAPSHOTS, "--db", help="Snapshot log to read."),
+    db: str = DB,
+    boards_dir: str | None = BOARDS_DIR,
 ):
     """Every local board YAML at a glance. No network.
 
@@ -1732,7 +1795,7 @@ def status(
         now = datetime.now(UTC)
         today = now.date().isoformat()
         rows = []
-        for path, spec in local_specs():
+        for path, spec in local_specs(boards_dir):
             base_file = Path(f"{path}.base")
             staged = pulled = None
             if base_file.exists():

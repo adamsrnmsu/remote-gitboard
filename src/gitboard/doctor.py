@@ -121,7 +121,7 @@ def _spec_checks(specs: list[Path], now: datetime) -> list[Check]:
                 Check(
                     WARN,
                     f"{path}: no .base",
-                    "gitboard pull --base --force (plan/push are two-way without it)",
+                    "gitboard pull PROJECT --force (plan/push are two-way without it)",
                 )
             )
             continue

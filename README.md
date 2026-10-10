@@ -131,7 +131,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "$GITLAB_URL/api/v4/mcp"
   pass just sees the board rather than the board plus discussion threads.
 
 **No MCP server exposes board structure**, which is why this repo exists. MCP
-is additive, never required.
+is optional, never required.
 
 ## Commands
 
@@ -144,7 +144,7 @@ gitboard show --markdown                 # stable output, for pipes and the AI
 gitboard show --filter "@alice ~bug %v2 token"  # only matching cards; all terms must match
 gitboard tui group/project               # interactive: reload, snapshot, push
 gitboard pull group/project              # save the board as boards/<name>.yaml
-gitboard pull group/project --base       # …and an untouched .base copy, for offline
+gitboard pull group/project              # …also writes an untouched .base copy (plan's ancestor, offline `plan --against`)
 gitboard pull group/project --notes --force  # …with comments; overwrite (refresh; rotates .base to .base.old)
 gitboard pull --all                      # every board with a boards/*.yaml (also snapshot, report)
 gitboard status                          # per board: pulled ago, staged, notes, oldest in Verify, overdue
@@ -192,8 +192,9 @@ every pull takes a snapshot.
 `plan` with a `.base` beside the spec is a three-way merge: `added`,
 `changed` (`old -> new`), `skipped` (closed on GitLab, never recreated) and
 `drift` (the team moved it since the pull; theirs is kept, and `push`
-refuses unless `--ignore-drift`). Labels are truly additive: what the team
-adds in the UI survives. Staged `notes:` post with a `*staged via gitboard*`
+refuses unless `--ignore-drift`). A file edit never deletes an issue;
+`closed: true` closes one and a column removed from `columns:` drops its list
+(the label stays). Labels are additive: what the team adds in the UI survives. Staged `notes:` post with a `*staged via gitboard*`
 first line.
 
 ### Offline: reason in a container, push from the host
@@ -202,7 +203,7 @@ The YAML is the staged change. When the place you think (a container with
 the repo but no network, no git) is not the place that can write:
 
 ```bash
-gitboard pull group/project --base       # host: boards/x.yaml + boards/x.yaml.base
+gitboard pull group/project              # host: boards/x.yaml + boards/x.yaml.base
 # copy boards/ (and snapshots.jsonl, if you want `report`) into the container
 /board boards/x.yaml                     # container: the AI pass, offline
 gitboard show --from boards/x.yaml       # container: the board, from the file

@@ -66,10 +66,12 @@ proposal in Staged, or say it belongs to none.
   drop a ref only the footer holds from `blocked_by`: `plan` and `push` only
   report it skipped and the ref stays. Name it
   for the lead to edit in GitLab instead.
-- Link removals and order moves go first in your summary, right after
+- Closes (`closed: true`), column drops, link removals and order moves go
+  first in your summary, right after
   notes — they are the rows the lead reads before saying yes.
 
-**Write path.** Exactly one: edit the board's YAML in `boards/`, run
+**Write path.** Exactly one: edit the board's YAML (the file named in the
+prompt), run
 `gitboard plan <spec>`, show its table, wait for a yes in this conversation,
 then `gitboard push <spec> --yes`. Never a `push` whose `plan` the user
 has not just seen; never `sync`, MCP write tools or direct API calls.
@@ -84,8 +86,10 @@ Rules for the YAML:
 - Never edit `discussion:` (the team's comments, read-only). Reply by
   appending a string to that issue's `notes:`; `push` posts each once with
   a `*staged via gitboard*` first line.
-- Never invent or edit an `iid`; new issues carry none. Never delete or
-  close anything; closed issues are skipped by `push`, not recreated.
+- Never invent or edit an `iid`; new issues carry none. Never delete an
+  issue. To close one, set `closed: true` on its entry and say so in Staged
+  (the plan table shows a `closed` row); closed issues are skipped by `push`,
+  not recreated.
 - Labels you add are additive; labels the team added in the UI survive.
   `stale` (no movement past the threshold), `re-verify` (changed after
   verification) and `followup` (a decision the lead is tracking, staged by

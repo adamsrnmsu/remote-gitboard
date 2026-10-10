@@ -139,7 +139,8 @@ def cells(stdout):
 
 
 def test_sign_and_style_cover_every_kind_and_unknown_kind_survives():
-    assert set(SIGN) == set(STYLE) == {"added", "changed", "skipped", "drift", "oneway"}
+    kinds = {"added", "changed", "skipped", "drift", "oneway", "closed"}
+    assert set(SIGN) == set(STYLE) == kinds
     assert SIGN["oneway"] == SIGN["drift"] == "!"  # both mean: look before you leap
     assert _changes_table([("weird", "issue", "x")], "t").row_count == 1
 
@@ -147,13 +148,20 @@ def test_sign_and_style_cover_every_kind_and_unknown_kind_survives():
 # --- pull ------------------------------------------------------------------
 
 
-def test_pull_base_writes_both_and_a_snapshot(gl, tmp_path):
-    r = runner.invoke(app, ["pull", "grp/proj", "--base"])
+def test_pull_always_writes_base_and_a_snapshot(gl, tmp_path):
+    r = runner.invoke(app, ["pull", "grp/proj"])
     assert r.exit_code == 0, r.output
     assert (tmp_path / "boards/proj.yaml").exists()
     assert (tmp_path / "boards/proj.yaml.base").exists()
     recs = snapshot_lines(tmp_path / "snapshots.jsonl")
     assert {rec["iid"] for rec in recs} == {1, 2}
+
+
+def test_pull_has_no_base_option(gl):
+    r = runner.invoke(app, ["pull", "grp/proj", "--base"])
+    assert r.exit_code == 2 and "No such option" in r.output
+    r = runner.invoke(app, ["plan", "x.yaml", "--base", "y"])
+    assert r.exit_code == 2 and "No such option" in r.output
 
 
 def test_pull_no_snapshot_skips_the_log(gl, tmp_path):
@@ -173,7 +181,7 @@ def test_pull_force_refuses_pending_edits(gl, tmp_path):
 def test_pull_discard_edits_overwrites_and_rotates_the_base(gl, tmp_path):
     path = write_spec(tmp_path, spec=edited())
     (tmp_path / "boards/x.yaml.base").write_text("project: grp/proj\nboard: old\n")
-    args = ["pull", "grp/proj", "--force", "--discard-edits", "--base", "-o", path]
+    args = ["pull", "grp/proj", "--force", "--discard-edits", "-o", path]
     r = runner.invoke(app, args)
     assert r.exit_code == 0, r.output
     assert apply_mod.load(path) == SPEC
@@ -236,13 +244,38 @@ def test_push_with_only_skipped_rows_writes_nothing(gl, tmp_path):
     assert not (tmp_path / "snapshots.jsonl").exists()
 
 
-def test_plan_base_option_passes_the_base(gl, tmp_path):
-    path = write_spec(tmp_path, spec=edited(), base=False)
-    other = tmp_path / "elsewhere.base"
-    other.write_text(apply_mod.dump(SPEC))
-    r = runner.invoke(app, ["plan", path, "--base", str(other)])
+def test_plan_reads_the_spec_base(gl, tmp_path):
+    path = write_spec(tmp_path, spec=edited())
+    r = runner.invoke(app, ["plan", path])
     assert r.exit_code == 0, r.output
     assert gl["plan"] == [{"base": SPEC}]
+
+
+def test_push_with_only_a_closed_row_writes(gl, tmp_path):
+    path = write_spec(tmp_path)
+    gl["pending"]["plan"] = [("closed", "issue", "one (closed from the board file)")]
+    r = runner.invoke(app, ["push", path, "--yes"])
+    assert r.exit_code == 0, r.output
+    assert len(gl["apply"]) == 1
+    assert "nothing to write" not in r.output
+
+
+def test_push_with_only_a_drop_row_writes(gl, tmp_path):
+    path = write_spec(tmp_path)
+    gl["pending"]["plan"] = [("oneway", "drop_column", "Review (2 cards)")]
+    r = runner.invoke(app, ["push", path, "--yes"])
+    assert r.exit_code == 0, r.output
+    assert len(gl["apply"]) == 1
+
+
+def test_closed_and_drop_rows_are_reviewed_first():
+    rows = [
+        ("changed", "issue", "a: labels"),
+        ("oneway", "drop_column", "Review (2 cards)"),
+        ("closed", "issue", "b (closed from the board file)"),
+    ]
+    first = sorted(rows, key=cli._review_first)
+    assert first[2][1:] == ("issue", "a: labels")
 
 
 # --- status ----------------------------------------------------------------
@@ -1256,6 +1289,26 @@ def test_sync_keeps_discussion_when_the_spec_carried_notes(gl, tmp_path, monkeyp
     assert seen == [True, True]
 
 
+def test_sync_missing_file_pulls_first(gl, tmp_path):
+    r = runner.invoke(
+        app, ["sync", "boards/new.yaml", "--project", "grp/proj", "--yes"]
+    )
+    assert r.exit_code == 0, r.output
+    assert gl["fetch"][0] == "grp/proj"
+    assert apply_mod.load(str(tmp_path / "boards/new.yaml")) == SPEC
+    assert (tmp_path / "boards/new.yaml.base").exists()
+
+
+def test_sync_missing_file_without_project_errors(gl, tmp_path):
+    r = runner.invoke(app, ["sync", "boards/new.yaml", "--yes"])
+    assert r.exit_code == 1
+    assert (
+        "no such board file boards/new.yaml; give --project GROUP/PROJECT to pull it first"
+        in " ".join(r.output.split())
+    )
+    assert not (tmp_path / "boards/new.yaml").exists()
+
+
 def test_sync_missing_file_and_gitlab_problem_exit_1(gl, tmp_path, monkeypatch):
     r = runner.invoke(app, ["sync", "boards/none.yaml", "--yes"])
     assert r.exit_code == 1 and "no such board file" in r.output
@@ -1427,14 +1480,12 @@ def test_pull_base_notes_and_force_refresh_a_clean_file(gl, tmp_path, monkeypatc
         lambda p, b, c, notes=False: seen.append(notes) or dict(SPEC),
     )
     path = write_spec(tmp_path)  # file == base: nothing staged, force is fine
-    r = runner.invoke(
-        app, ["pull", "grp/proj", "-o", path, "--force", "--base", "--notes"]
-    )
+    r = runner.invoke(app, ["pull", "grp/proj", "-o", path, "--force", "--notes"])
     assert r.exit_code == 0, r.output
     assert seen == [True, True]
     assert (tmp_path / "boards/x.yaml.base.old").exists()
     flat = "".join(r.output.split())  # the line wraps
-    assert f"gitboardplan{path}`--against{path}.base" in flat
+    assert f"gitboardplan{path}`" in flat and f"{path}.base" in flat
 
 
 def test_pull_unknown_board_name_is_a_gitlab_problem(monkeypatch):
@@ -1529,7 +1580,7 @@ def test_report_since_without_a_base_is_an_error(gl, tmp_path):
     path = write_spec(tmp_path, base=False)
     r = runner.invoke(app, ["report", "--since", path])
     assert r.exit_code == 1
-    assert f"no {path}.base" in r.output and "pull --base" in r.output
+    assert f"no {path}.base" in r.output and "gitboard pull" in r.output
 
 
 def test_report_since_the_pull_reads_the_window_from_the_base(gl, tmp_path):
@@ -2035,6 +2086,7 @@ def test_tui_without_a_yaml_says_so_and_e_pulls_one(live_tui, gl, tmp_path):
     live_tui.run(["p", "e", "q"], "grp/proj", "--no-guide")  # p: no spec, no-op
     assert "no YAML yet — e pulls the board into one" in live_tui.text
     assert apply_mod.load(str(tmp_path / "boards/proj.yaml")) == SPEC
+    assert apply_mod.load(str(tmp_path / "boards/proj.yaml.base")) == SPEC
     assert live_tui.edits == [["vim", "boards/proj.yaml"]]
 
 
@@ -2612,3 +2664,79 @@ def test_tui_r_starts_the_marks_over(tui, tmp_path):
     _arrivals(tui, tmp_path, path, [98])
     tui.run([None, "r", "q"], "--from", path, "--no-guide")
     assert "●" not in tui.last
+
+
+# --- explicit path flags: --log, --spec, --db, --boards-dir ----------------
+
+
+def test_stats_log_and_spec_flags(tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path, _ = history_file(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    spec = elsewhere / "b.yaml"
+    spec.write_text(apply_mod.dump(SPEC))
+    log = elsewhere / "s.jsonl"
+    r = runner.invoke(
+        app, ["stats", "--from", path, "--log", str(log), "--spec", str(spec)]
+    )
+    assert r.exit_code == 0, r.output
+    assert len(log.read_text().splitlines()) == 1
+    assert not (tmp_path / "reports").exists()
+    r = runner.invoke(app, ["stats", "grp/proj", "--weeks", "8", "--log", str(log)])
+    assert r.exit_code == 0 and "2026-09-14" in r.stdout
+    assert not (tmp_path / "reports").exists()
+
+
+def test_digest_uses_log_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path, _ = history_file(tmp_path)
+    boards = tmp_path / "mine"
+    boards.mkdir()
+    (boards / "b.yaml").write_text(apply_mod.dump({**SPEC, "emails": {"alice": "a@x"}}))
+    log, out = tmp_path / "s.jsonl", tmp_path / "out"
+    r = runner.invoke(
+        app,
+        ["digest", "--from", path, "--md-only", "--out", str(out)]
+        + ["--log", str(log), "--boards-dir", str(boards)],
+    )
+    assert r.exit_code == 0, r.output
+    assert log.exists() and not (tmp_path / "reports").exists()
+    assert (
+        out / "2026-09-14/grp-proj/alice.eml"
+    ).exists()  # spec found in --boards-dir
+
+
+def test_status_boards_dir(gl, tmp_path, monkeypatch):
+    write_spec(tmp_path, spec=edited())  # ./boards/x.yaml: must be ignored
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    (mine / "y.yaml").write_text(apply_mod.dump({**SPEC, "project": "other/proj"}))
+    r = runner.invoke(app, ["status", "--boards-dir", str(mine)])
+    assert r.exit_code == 0, r.output
+    assert "other/proj" in r.stdout and "grp/proj" not in r.stdout
+
+
+def test_report_db_flag(gl, tmp_path):
+    now = datetime.now(UTC)
+    db = tmp_path / "elsewhere.jsonl"
+    log_snapshots(tmp_path, [snap(1, ["Doing"], now)])  # ./snapshots.jsonl: a decoy
+    db.write_text((tmp_path / "snapshots.jsonl").read_text())
+    (tmp_path / "snapshots.jsonl").unlink()
+    r = runner.invoke(app, ["report", "grp/proj", "--db", str(db)])
+    assert r.exit_code == 0, r.output
+    assert "need two snapshots of grp/proj" in r.output
+
+
+def test_pull_and_push_write_their_snapshot_to_db(gl, tmp_path):
+    db = tmp_path / "x" / "s.jsonl"
+    db.parent.mkdir()
+    r = runner.invoke(app, ["pull", "grp/proj", "--db", str(db)])
+    assert r.exit_code == 0, r.output
+    assert db.exists() and not (tmp_path / "snapshots.jsonl").exists()
+    path = write_spec(tmp_path)
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    db.unlink()
+    r = runner.invoke(app, ["push", path, "--yes", "--db", str(db)])
+    assert r.exit_code == 0, r.output
+    assert db.exists() and not (tmp_path / "snapshots.jsonl").exists()

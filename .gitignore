@@ -39,7 +39,7 @@ uv.lock
 .beads/proxieddb/
 *.gate.lock*
 
-# untouched copies from `pull --base`, only for offline `plan --against`
+# untouched copies `pull` writes, the ancestor of `plan` and offline `plan --against`
 boards/*.yaml.base
 
 # weekly digests (data, like snapshots.jsonl)
