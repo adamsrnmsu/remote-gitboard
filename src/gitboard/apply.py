@@ -141,6 +141,8 @@ def load(path):
                     f"{path}: milestone {name!r} (issue {title!r}) is not under "
                     "milestones:"
                 )
+        if not isinstance(issue.get("closed", False), bool):
+            raise SpecError(f"{path}: issue {title!r}: closed must be true or false")
         if not isinstance(issue.get("blocked_by") or [], list):
             raise SpecError(f"{path}: issue {title!r}: blocked_by must be a list")
         labels = issue.get("labels") or []
@@ -165,11 +167,33 @@ def close_issue(gl, path, iid, superseded_by=()):
     issue = client.get_issue(project, iid)
     if issue.state == "closed":
         return False
-    if superseded_by:
-        issue.notes.create({"body": "superseded by " + ", ".join(superseded_by)})
+    _close(issue, "superseded by " + ", ".join(superseded_by) if superseded_by else "")
+    return True
+
+
+CLOSE_NOTE = "Closed from the board file by gitboard."
+FIXED = ("Verify", "Done", "Failed")
+
+
+def _close(issue, note):
+    """Post `note` (verbatim, when given), then close. The one close path."""
+    if note:
+        issue.notes.create({"body": note})
     issue.state_event = "close"
     issue.save()
-    return True
+
+
+def drops(spec, base):
+    """Column names to drop: the base's columns the file no longer has. Only
+    with a base (a hand-written file never drops). The fixed columns refuse."""
+    if base is None:
+        return []
+    gone = [c["name"] for c in base["columns"]]
+    gone = [n for n in gone if n not in {c["name"] for c in spec["columns"]}]
+    for name in gone:
+        if name in FIXED:
+            raise SpecError(f"column {name} is fixed and cannot be dropped")
+    return gone
 
 
 def discussion(issue):
@@ -317,7 +341,7 @@ def order_changes(spec, live, base, force=False):
     """
     if base is None:
         return [], []
-    edited = [i["iid"] for i in spec["issues"] if i.get("iid")]
+    edited = [i["iid"] for i in spec["issues"] if i.get("iid") and not i.get("closed")]
     old = [i["iid"] for i in base["issues"] if i.get("iid")]
     kind = order.merge(edited, live, old)
     if kind == "drift" and (force or _stopped_partway(edited, live, old)):
@@ -795,6 +819,13 @@ def ensure_issues(
         if is_closed:
             record("skipped", "issue", f"{title}: closed on GitLab")
             continue
+        if spec_i.get("closed"):
+            if live_title is None:
+                record("skipped", "issue", f"{title}: not on GitLab, nothing to close")
+            else:
+                _close(opened[live_title], marked(CLOSE_NOTE))
+                record("closed", "issue", f"{title} (closed from the board file)")
+            continue
         if live_title is None:
             live[title] = project.issues.create(
                 {"title": title, **_payload(want, users, milestones)}
@@ -896,6 +927,27 @@ def ensure_notes(project, issues, record, live=None):
             record("added", "note", note_line(title, body))
 
 
+def drop_columns(project, spec, base, record):
+    """Delete the board list of each column the file dropped; the label stays.
+    Runs after ensure_issues, so a card closed in the same file closes first."""
+    names = drops(spec, base)
+    if not names:
+        return
+    board = next(
+        (b for b in project.boards.list(all=True) if b.name == spec["board"]), None
+    )
+    lists = board and project.boards.get(board.id).lists.list(all=True)
+    opened = project.issues.list(state="opened", all=True)
+    for name in names:
+        lst = next((x for x in lists or [] if x.label["name"] == name), None)
+        if lst is None:
+            record("skipped", "drop_column", f"{name}: list already gone")
+            continue
+        lst.delete()
+        n = sum(1 for i in opened if name in i.labels and i.state != "closed")
+        record("oneway", "drop_column", f"{name} ({n} cards)")
+
+
 def apply(gl, spec, base=None, force=False, on_change=None):
     """Write the spec. Returns the list of (kind, what, detail) changes.
 
@@ -921,6 +973,7 @@ def apply(gl, spec, base=None, force=False, on_change=None):
     live = ensure_issues(
         project, spec, record, users, base, force, milestones, _project_id_of(gl)
     )
+    drop_columns(project, spec, base, record)
     ensure_order(project, spec, base, record, force)
     ensure_notes(project, spec["issues"], record, live)
     return changes
@@ -945,6 +998,7 @@ def plan(gl, spec, base=None):
             for x in labels
         },
         "boards": {b.name for b in project.boards.list(all=True)},
+        "lists": _live_lists(project, spec, base),
         "issues": {title: current_issue(i) for title, i in opened.items()},
         "iids": iids,
         "closed": closed,
@@ -977,6 +1031,22 @@ def plan(gl, spec, base=None):
     return diff(spec, have, base) + skips
 
 
+def _live_lists(project, spec, base):
+    """Board lists on GitLab, narrowed to the base's columns: a list the base
+    never had is not ours to drop. Only read when a column was dropped."""
+    if not drops(spec, base):
+        return set()
+    board = next(
+        (b for b in project.boards.list(all=True) if b.name == spec["board"]), None
+    )
+    if board is None:
+        return set()
+    lists = project.boards.get(board.id).lists.list(all=True)
+    return {x.label["name"] for x in lists if getattr(x, "label", None)} & {
+        c["name"] for c in base["columns"]
+    }
+
+
 def have_from_spec(base):
     """A pulled spec as the `have` side of diff() — plan with no network.
 
@@ -996,6 +1066,7 @@ def have_from_spec(base):
             for x in labels
         },
         "boards": {base["board"]},
+        "lists": {c["name"] for c in base["columns"]},
         "issues": {
             title: wanted_issue(i, base["project"], titles) for title, i in issues
         },
@@ -1074,11 +1145,23 @@ def diff(spec, have, base=None, force=False):
     if spec["board"] not in have["boards"]:
         pending.append(("added", "board", spec["board"]))
     titles = _titles(spec, have)
+    closing = set()
     for spec_i in spec["issues"]:
         title = spec_i["title"]
         live_title, is_closed = _find(spec_i, have)
         if is_closed:
             pending.append(("skipped", "issue", f"{title}: closed on GitLab"))
+            continue
+        if spec_i.get("closed"):
+            if live_title is None:
+                pending.append(
+                    ("skipped", "issue", f"{title}: not on GitLab, nothing to close")
+                )
+            else:
+                closing.add(live_title)
+                pending.append(
+                    ("closed", "issue", f"{title} (closed from the board file)")
+                )
             continue
         if live_title is None:
             pending.append(("added", "issue", title))
@@ -1094,13 +1177,23 @@ def diff(spec, have, base=None, force=False):
             force,
         )
         pending += records
+    for name in drops(spec, base):
+        if name not in have.get("lists", ()):
+            pending.append(("skipped", "drop_column", f"{name}: list already gone"))
+            continue
+        n = sum(
+            1
+            for t, i in have["issues"].items()
+            if name in i["labels"] and t not in closing
+        )
+        pending.append(("oneway", "drop_column", f"{name} ({n} cards)"))
     if "order" in have:  # offline, have_from_spec(.base) is the old order too
         old = base or {"issues": [{"iid": i} for i in have["order"]]}
         pending += order_changes(spec, have["order"], old, force)[0]
     posted = have.get("notes", {})
     for spec_i in spec["issues"]:
         live_title, is_closed = _find(spec_i, have)
-        if is_closed:
+        if is_closed or spec_i.get("closed"):
             continue
         for body in staged_notes(spec_i):
             if marked(body) not in posted.get(live_title, set()):

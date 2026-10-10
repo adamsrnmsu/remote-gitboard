@@ -1457,3 +1457,155 @@ def test_show_filter_keeps_only_matching_cards(tmp_path):
     assert res.exit_code == 0, res.output
     assert "#1 one" in res.output
     assert "#2 two" not in res.output
+
+
+# --- closed: true and dropped columns --------------------------------------
+
+
+def spec_with(*issues, columns=("Doing", "Blocked")):
+    return {
+        **SPEC,
+        "columns": [{"name": c} for c in columns],
+        "issues": list(issues),
+    }
+
+
+def have_one(title="one", labels=("Doing",)):
+    return apply.have_from_spec(spec_with({"title": title, "labels": list(labels)}))
+
+
+def test_closed_true_plans_a_closed_row():
+    spec = spec_with({"title": "one", "labels": ["Doing"], "closed": True})
+    rows = apply.diff(spec, have_one())
+    assert rows == [("closed", "issue", "one (closed from the board file)")]
+
+
+def test_closed_must_be_a_bool(tmp_path):
+    f = tmp_path / "b.yaml"
+    f.write_text(
+        "project: g/p\nboard: B\nissues:\n  - title: one\n    closed: yes please\n"
+    )
+    with pytest.raises(apply.SpecError, match="closed"):
+        apply.load(str(f))
+
+
+def test_closed_entry_does_not_break_order():
+    base = spec_with(
+        {"title": "a", "iid": 1, "labels": ["Doing"]},
+        {"title": "b", "iid": 2, "labels": ["Doing"]},
+    )
+    edited = spec_with(
+        {"title": "b", "iid": 2, "labels": ["Doing"]},
+        {"title": "a", "iid": 1, "labels": ["Doing"], "closed": True},
+    )
+    rows = apply.diff(edited, apply.have_from_spec(base), base)
+    assert [r[:2] for r in rows] == [("closed", "issue")]
+
+
+def test_omitting_an_issue_still_deletes_nothing():
+    assert apply.diff(spec_with(), have_one()) == []
+
+
+def test_close_writes_note_and_state_event():
+    issue = FakeIssue("one")
+    apply._close(issue, apply.marked(apply.CLOSE_NOTE))
+    assert issue.state_event == "close" and issue.saved
+    body = issue.notes.notes[0].body
+    assert apply.MARKER in body and "Closed from the board file by gitboard." in body
+
+
+def test_closed_true_on_absent_or_closed_is_skipped():
+    spec = spec_with({"title": "Gone", "closed": True})
+    rows = apply.diff(spec, have_one())
+    assert [r[0] for r in rows] == ["skipped"]
+
+
+def test_push_closes_and_a_rerun_skips(monkeypatch):
+    issue = noted_issue("one", labels=["Doing"])
+    spec = spec_with({"title": "one", "labels": ["Doing"], "closed": True})
+    gl = use_project(monkeypatch, writable_project(issue))
+    want = [("closed", "issue", "one (closed from the board file)")]
+    assert apply.plan(gl, spec) == want
+    assert apply.apply(gl, spec) == want
+    assert issue.state_event == "close"
+    issue.state = "closed"
+    assert [r[0] for r in apply.plan(gl, spec)] == ["skipped"]
+
+
+def deletable_project(issue, columns=("Doing", "Blocked", "Review")):
+    project = writable_project(issue)
+    lists = [
+        types.SimpleNamespace(label={"name": n}, delete=lambda: None) for n in columns
+    ]
+    for lst in lists:
+        lst.delete = lambda lst=lst: lists.remove(lst)
+    project.boards.get = lambda _id: types.SimpleNamespace(
+        id=1, name="Dev Board", lists=_lister(lists)
+    )
+    project.lists = lists
+    return project
+
+
+def test_removed_column_plans_a_drop_row_with_base():
+    base = spec_with(columns=("Doing", "Blocked", "Review"))
+    rows = apply.diff(spec_with(), apply.have_from_spec(base), base)
+    assert rows == [("oneway", "drop_column", "Review (0 cards)")]
+
+
+def test_removed_column_without_base_plans_nothing():
+    base = spec_with(columns=("Doing", "Blocked", "Review"))
+    assert apply.diff(spec_with(), apply.have_from_spec(base)) == []
+
+
+@pytest.mark.parametrize("fixed", ["Verify", "Done", "Failed"])
+def test_dropping_a_fixed_column_is_refused(fixed):
+    base = spec_with(columns=("Doing", fixed))
+    with pytest.raises(
+        apply.SpecError, match=f"column {fixed} is fixed and cannot be dropped"
+    ):
+        apply.diff(spec_with(columns=("Doing",)), apply.have_from_spec(base), base)
+
+
+def test_drop_keeps_the_label_and_a_rerun_skips(monkeypatch):
+    project = deletable_project(FakeIssue("one", labels=["Doing"]))
+    base = spec_with(columns=("Doing", "Blocked", "Review"))
+    base["issues"] = [{"title": "one", "labels": ["Doing"]}]
+    edited = spec_with({"title": "one", "labels": ["Doing"]})
+    gl = use_project(monkeypatch, project)
+    want = [("oneway", "drop_column", "Review (0 cards)")]
+    assert apply.plan(gl, edited, base) == want
+    assert apply.apply(gl, edited, base) == want
+    assert [x.label["name"] for x in project.lists] == ["Doing", "Blocked"]
+    assert "Doing" in {x.name for x in project.labels.list()}
+    assert [r[0] for r in apply.plan(gl, edited, base)] == ["skipped"]
+
+
+def test_a_list_gone_on_gitlab_is_skipped(monkeypatch):
+    project = deletable_project(
+        FakeIssue("one", labels=["Doing"]), ("Doing", "Blocked")
+    )
+    base = spec_with(columns=("Doing", "Blocked", "Review"))
+    base["issues"] = [{"title": "one", "labels": ["Doing"]}]
+    edited = spec_with({"title": "one", "labels": ["Doing"]})
+    gl = use_project(monkeypatch, project)
+    want = [("skipped", "drop_column", "Review: list already gone")]
+    assert apply.plan(gl, edited, base) == want
+    assert apply.apply(gl, edited, base) == want
+
+
+def test_closed_and_drop_in_one_push_close_first(monkeypatch):
+    issue = noted_issue("one", labels=["Doing", "Review"])
+    project = deletable_project(issue)
+    log = []
+    project.lists[2].delete = lambda: log.append("drop_list")
+    issue.save = lambda: (log.append("close"), setattr(issue, "state", "closed"))
+    base = spec_with(columns=("Doing", "Blocked", "Review"))
+    base["issues"] = [{"title": "one", "labels": ["Doing", "Review"]}]
+    edited = spec_with({"title": "one", "labels": ["Doing", "Review"], "closed": True})
+    gl = use_project(monkeypatch, project)
+    rows = apply.apply(gl, edited, base)
+    assert log == ["close", "drop_list"]
+    assert rows == [
+        ("closed", "issue", "one (closed from the board file)"),
+        ("oneway", "drop_column", "Review (0 cards)"),
+    ]
