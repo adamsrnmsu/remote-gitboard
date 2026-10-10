@@ -39,7 +39,7 @@ a paste-ready block for the agent's briefing, is the
 
 ```bash
 # host
-gitboard pull group/project --base --notes      # boards/x.yaml (+ .base), with comments
+gitboard pull group/project --notes             # boards/x.yaml (+ .base), with comments
 # -> copy boards/ and any tasks.md into the container
 
 # container (the agent runs these; you review its plan table)

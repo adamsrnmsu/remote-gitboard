@@ -10,7 +10,7 @@ You draft a reformat. You never run it: `gitboard migrate` is not in your
 tools, on purpose. Its ops are one-way (merged labels, dropped columns,
 moved cards); a person reads your table and runs the line you leave.
 
-**Read.** `gitboard pull $ARGUMENTS --base --force -o boards/<name>.yaml`
+**Read.** `gitboard pull $ARGUMENTS --force -o boards/<name>.yaml`
 if the YAML is stale or missing (the `.base` is what `plan` diffs
 against), then `gitboard show $ARGUMENTS --markdown`, `gitboard stats
 $ARGUMENTS`, and `gitboard report $ARGUMENTS` when `snapshots.jsonl` exists.
@@ -55,8 +55,8 @@ The `gitboard plan` output for the new YAML, verbatim.
 ## Run it
 ```
 gitboard migrate boards/<name>.migration.yaml   # shows ! rows first, asks y/n
-gitboard push boards/<name>.yaml               # then the additive rest
-gitboard pull $ARGUMENTS --base --force -o boards/<name>.yaml
+gitboard push boards/<name>.yaml               # then the rest
+gitboard pull $ARGUMENTS --force -o boards/<name>.yaml
 ```
 Then stop. Do not edit `discussion:`, do not invent iids, do not retitle
 cards without an iid. If the board needs no reformat, say that in one line

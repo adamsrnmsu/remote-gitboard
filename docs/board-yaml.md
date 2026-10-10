@@ -29,7 +29,7 @@ labels:                        # non-column labels: colour + description, so
   - name: stale
     color: gray
 
-milestones:                    # optional; push creates and updates, never closes
+milestones:                    # optional; push creates and updates, never closes one
   - title: Beta launch
     due_date: "2026-11-01"
     description: What "beta" means for us.
@@ -168,6 +168,11 @@ List order
   cards since the pull and you did not, `plan` shows `skipped`; when both
   did, `drift`. Cards new on either side go wherever GitLab puts them.
 
+`issues[].closed`
+: Optional bool. `true` closes the issue on `push` (a `closed` row in
+  `plan`, with a `*staged via gitboard*` note). `pull` never writes it: closed
+  issues are left out of the file. Anything but `true`/`false` is a load error.
+
 `issues[].notes`
 : List of strings. Each is posted as a comment on `push`, with a
   `*staged via gitboard*` first line so the team can tell a staged note
@@ -201,14 +206,18 @@ detect: that is the plain two-way plan.
 - **Identity is `iid`, else title.** A retitle with an `iid` is a rename; a
   retitle without one is a second issue. Duplicate titles in one file are
   an error.
-- **Additive.** `push` never deletes or closes an issue or a milestone.
-  Removing an issue from the file leaves it on the board; removing a label
-  leaves it on the issue. A blocker link is the one thing it removes, and
+- **A file edit never deletes an issue.** Removing an issue from the file
+  leaves it on the board; removing a label leaves it on the issue.
+  `closed: true` on an issue closes it (with a `*staged via gitboard*`
+  note); a `closed` entry that is absent or already closed on GitLab is
+  skipped, and `pull` leaves closed issues out of the file. A column removed
+  from `columns:` drops its board list (needs the `.base`; `Verify`, `Done`
+  and `Failed` cannot be dropped): cards lose that column, the label stays.
+  Milestones stay additive: `push` never closes or deletes one. A blocker link is the one thing it removes, and
   only when the card has a `blocked_by` key that no longer lists it.
 - **An absent key is unmanaged.** No `blocked_by`, no `milestone`, no
   `.base` for the order: `push` leaves that part of the board alone.
-  Closing is an explicit act (`migrate-comments --close-source`). Closed
-  issues are skipped, not reopened or recreated.
+  Closed issues are skipped, not reopened or recreated.
 - **Verify is one-way for the agent.** The AI pass may move an issue into
   `Verify`; `Done` and `Failed` come from a person's `verified:` /
   `failed:` comment, read by `ingest`.

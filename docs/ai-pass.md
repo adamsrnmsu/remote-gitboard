@@ -54,8 +54,9 @@ the moves and the plan table is the question.
 Exactly one: edit the board's YAML in `boards/`, run `plan`, show the table,
 wait for a yes in the conversation, then `push --yes`. Never a `push`
 whose `plan` you have not just seen. No MCP write tools, no direct API calls.
-`push` is additive-only, which bounds the blast radius: the worst case is an
-extra issue or a wrong label, never a deletion.
+`push` never deletes an issue, which bounds the blast radius: the worst case
+is an extra issue, a wrong label, a close you approved in the plan table or a
+dropped column list (its label stays).
 
 `migrate-comments` and `--close-source` are deliberately not in the
 command's `allowed-tools`. The AI writes the line; you run it.

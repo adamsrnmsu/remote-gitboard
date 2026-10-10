@@ -12,8 +12,7 @@ gitboard show group/project "Dev Board"     # a named board
 gitboard show --all / -n 20                 # untruncated / 20 per column
 gitboard show -m                            # stable markdown, for pipes and the AI
 gitboard show --from boards/x.yaml          # render the YAML as a board, no network
-gitboard pull group/project                 # live board -> boards/<name>.yaml
-gitboard pull group/project --base          # ...plus an untouched boards/<name>.yaml.base
+gitboard pull group/project                 # live board -> boards/<name>.yaml (+ an untouched .base)
 gitboard pull group/project --force         # overwrite an existing file
 gitboard pull group/project --notes         # also pull each issue's discussion (read-only)
 gitboard pull group/project --force --discard-edits   # overwrite even with unapplied edits
@@ -29,11 +28,11 @@ gitboard config                             # what URL/tokens resolved, and from
 
 # plan / write (api token for push and migrate)
 gitboard plan boards/x.yaml                 # three-way: YAML vs GitLab, with x.yaml.base as the ancestor
-gitboard plan boards/x.yaml --base FILE     # a different ancestor
 gitboard plan boards/x.yaml --against boards/x.yaml.base   # diff YAML against a file, no network
 gitboard push boards/x.yaml                 # write it (--yes skips the prompt)
 gitboard push boards/x.yaml --ignore-drift  # write even where the team moved things since the pull
 gitboard sync boards/x.yaml                 # plan, y/n, push, snapshot, rotate the base (--yes, --ignore-drift)
+gitboard sync boards/x.yaml --project g/p   # the file is missing: pull it first
 
 gitboard estimate boards/x.yaml             # stage due dates from each person's finished history; local file only
 gitboard estimate boards/x.yaml --history h.json  # same from a `stats --dump` file, no network
@@ -81,7 +80,7 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
   and refuses even then when the file has edits that were never pushed
   (`plan` against the base is non-empty); `--discard-edits` overrides.
   Pull-then-plan is always empty. Each issue carries its `iid`, which `push`
-  uses as the match key. `--base` writes a second, untouched copy as
+  uses as the match key. It also writes a second, untouched copy as
   `<file>.base` (gitignored, not a `*.yaml`, so nothing scans it as a spec)
   and rotates the previous one to `<file>.base.old`. `--notes` adds a
   read-only `discussion:` list per issue. Every pull also appends a
@@ -89,8 +88,9 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 
 `plan`
 : A three-way merge: the YAML, the live board, and `<spec>.base` as the
-  ancestor (`--base FILE` for another). Rows are `added`, `changed` (with
-  `old -> new`), `skipped` (closed on GitLab: never recreated) or `drift`
+  ancestor. Rows are `added`, `changed` (with
+  `old -> new`), `closed` (`closed: true`), `drop_column` (a column removed
+  from the file), `skipped` (closed on GitLab: never recreated) or `drift`
   (the board changed since the base and the YAML did not: the board's value
   is kept). Without a base it is the plain two-way diff. The table lists
   notes first, then link and order rows and `blocked_by` changes, then the
@@ -100,9 +100,10 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 : Diffs two YAML files. Never opens a connection or looks for a token.
 
 `push`
-: Additive: creates and updates, never deletes or closes. Matches by `iid`
+: Creates and updates; never deletes an issue. `closed: true` closes one and
+  a column removed from `columns:` drops its list (the label stays). Matches by `iid`
   when present (so a retitle in the YAML is a rename) and by title otherwise;
-  titles are stripped. Labels are truly additive: labels the team added in
+  titles are stripped. Labels are additive: labels the team added in
   the UI survive a push that does not list them. Closed issues are skipped.
   Posts any `notes:` not already on the issue, each with a
   `*staged via gitboard*` first line. `drift` rows are refused unless

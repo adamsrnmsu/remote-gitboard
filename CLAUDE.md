@@ -20,16 +20,18 @@ scripts/bulk_demo.py                # 5 stress boards on the local instance
 ```
 
 CLI-only (no make target): `migrate-comments SRC DST... [--close-source]` —
-destinations are iids or `group/project#iid`; `pull --base` (also writes an
-untouched `<file>.base`), `--notes` (pull comments as `discussion:`),
+destinations are iids or `group/project#iid`; `pull` (always writes an
+untouched `<file>.base`, rotating the old one), `--notes` (pull comments as `discussion:`),
 `--force` (overwrite); `show --from FILE`, `plan FILE --against BASE`,
 `tui --from FILE` — the no-network trio for a container: the pulled YAML is
 the board, the agent edits it, the host runs `plan` then `push`;
 `ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only);
 `estimate SPEC [--history h.json]` stages due dates from history (local only);
 `status` (every local board: pulled ago, staged, notes, oldest in Verify,
-overdue); `sync SPEC` (plan, y/n, push, snapshot, rotate `.base`);
-`--all` on `pull`/`snapshot`/`report`; `report --since SPEC`; `stats`
+overdue); `sync SPEC [--project P]` (pulls first when SPEC is missing; plan, y/n, push,
+snapshot, rotate `.base`);
+`--all` on `pull`/`snapshot`/`report`; path flags `--log`, `--spec`, `--db`,
+`--boards-dir` (see `--help`; the defaults are the old hard-coded paths); `report --since SPEC`; `stats`
 (team markdown: open by column/epic/story, done, cycle time, verify
 queue/times/coverage, stuck, questions, blocker flags; `--dump`/`--from`
 for offline) and `digest` (writes `reports/<date>/<board>/{team,<user>}.md`
@@ -96,8 +98,9 @@ out: Done/Failed are people's verdict comments. It may stage
 `milestone`, `milestones:`, `priority::N`, `blocked_by` additions and
 removals and YAML reorders, proposing one fix per graph flag; it never
 edits a `Blocked by:` footer. The contract is the flow, stated in the command: YAML
-edit -> `plan` -> user go-ahead in conversation -> `push --yes`. `push` is
-additive-only (nothing deleted or closed), which bounds the blast radius;
+edit -> `plan` -> user go-ahead in conversation -> `push --yes`. `push` never
+deletes an issue (`closed: true` closes one, a column removed from `columns:`
+drops its list and keeps the label), which bounds the blast radius;
 `migrate` (board reformats: `migrate.py`, ops in `boards/*.migration.yaml`,
 one-way rows marked `!`, idempotent, `Verify`/`Done`/`Failed` refused as
 targets; `/migrate-board` drafts the file, a person runs it) and

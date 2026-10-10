@@ -20,10 +20,10 @@ Nothing in the right-hand column opens a connection or looks for a token.
 ## Host, before
 
 ```bash
-gitboard pull group/project --base --notes    # boards/x.yaml + boards/x.yaml.base + a snapshot
+gitboard pull group/project --notes           # boards/x.yaml + boards/x.yaml.base + a snapshot
 ```
 
-`--base` keeps an untouched copy for `plan --against`. `--notes` includes each
+`pull` always keeps an untouched `.base` copy for `plan --against`. `--notes` includes each
 issue's discussion as a read-only `discussion:` list, so the agent sees the
 team's comments, not just the labels. `pull` also appends to
 `snapshots.jsonl`, so `report` (and the `age:` suffixes in `show`) work
@@ -124,12 +124,12 @@ Run any `migrate-comments` lines from the Hand back section yourself.
 
 ```bash
 gitboard status                                                # every board: pulled ago, staged, notes, oldest in Verify, overdue
-gitboard pull group/project --force --base --notes             # rotates the old base to x.yaml.base.old
+gitboard pull group/project --force --notes                    # rotates the old base to x.yaml.base.old
 gitboard plan boards/x.yaml --against boards/x.yaml.base.old   # what moved on GitLab
 gitboard report group/project --since boards/x.yaml            # from the snapshot log, since that pull; plus the stuck section
 ```
 
-`pull --base` rotates: the previous `x.yaml.base` becomes `x.yaml.base.old`
+`pull` rotates: the previous `x.yaml.base` becomes `x.yaml.base.old`
 before the new one is written, so the `--against` diff of the new pull
 versus the old base is the team's changes, label by label. `status` is the
 glance before deciding whether a round is worth starting. Then the round
