@@ -90,6 +90,23 @@ Rules for the YAML:
   issue. To close one, set `closed: true` on its entry and say so in Staged
   (the plan table shows a `closed` row); closed issues are skipped by `push`,
   not recreated.
+- A new card's `description:` is one page, these fields in this order,
+  bullets and one-line fields only, never paragraphs:
+
+  ```
+  Goal: one line, what changes for whom
+  Done when:
+  - [ ] checkable outcome
+  Context:
+  - one-line fact or constraint
+  Out of scope:
+  - one line
+  Links:
+  - URL or #iid
+  ```
+
+  Then a last footer line in `ingest`'s grammar `Source: src · person · date`
+  (for a meeting: `Source: meeting · LEAD · YYYY-MM-DD`).
 - Labels you add are additive; labels the team added in the UI survive.
   `stale` (no movement past the threshold), `re-verify` (changed after
   verification) and `followup` (a decision the lead is tracking, staged by
