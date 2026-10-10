@@ -2664,3 +2664,79 @@ def test_tui_r_starts_the_marks_over(tui, tmp_path):
     _arrivals(tui, tmp_path, path, [98])
     tui.run([None, "r", "q"], "--from", path, "--no-guide")
     assert "●" not in tui.last
+
+
+# --- explicit path flags: --log, --spec, --db, --boards-dir ----------------
+
+
+def test_stats_log_and_spec_flags(tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path, _ = history_file(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    spec = elsewhere / "b.yaml"
+    spec.write_text(apply_mod.dump(SPEC))
+    log = elsewhere / "s.jsonl"
+    r = runner.invoke(
+        app, ["stats", "--from", path, "--log", str(log), "--spec", str(spec)]
+    )
+    assert r.exit_code == 0, r.output
+    assert len(log.read_text().splitlines()) == 1
+    assert not (tmp_path / "reports").exists()
+    r = runner.invoke(app, ["stats", "grp/proj", "--weeks", "8", "--log", str(log)])
+    assert r.exit_code == 0 and "2026-09-14" in r.stdout
+    assert not (tmp_path / "reports").exists()
+
+
+def test_digest_uses_log_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a: pytest.fail("network"))
+    path, _ = history_file(tmp_path)
+    boards = tmp_path / "mine"
+    boards.mkdir()
+    (boards / "b.yaml").write_text(apply_mod.dump({**SPEC, "emails": {"alice": "a@x"}}))
+    log, out = tmp_path / "s.jsonl", tmp_path / "out"
+    r = runner.invoke(
+        app,
+        ["digest", "--from", path, "--md-only", "--out", str(out)]
+        + ["--log", str(log), "--boards-dir", str(boards)],
+    )
+    assert r.exit_code == 0, r.output
+    assert log.exists() and not (tmp_path / "reports").exists()
+    assert (
+        out / "2026-09-14/grp-proj/alice.eml"
+    ).exists()  # spec found in --boards-dir
+
+
+def test_status_boards_dir(gl, tmp_path, monkeypatch):
+    write_spec(tmp_path, spec=edited())  # ./boards/x.yaml: must be ignored
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    (mine / "y.yaml").write_text(apply_mod.dump({**SPEC, "project": "other/proj"}))
+    r = runner.invoke(app, ["status", "--boards-dir", str(mine)])
+    assert r.exit_code == 0, r.output
+    assert "other/proj" in r.stdout and "grp/proj" not in r.stdout
+
+
+def test_report_db_flag(gl, tmp_path):
+    now = datetime.now(UTC)
+    db = tmp_path / "elsewhere.jsonl"
+    log_snapshots(tmp_path, [snap(1, ["Doing"], now)])  # ./snapshots.jsonl: a decoy
+    db.write_text((tmp_path / "snapshots.jsonl").read_text())
+    (tmp_path / "snapshots.jsonl").unlink()
+    r = runner.invoke(app, ["report", "grp/proj", "--db", str(db)])
+    assert r.exit_code == 0, r.output
+    assert "need two snapshots of grp/proj" in r.output
+
+
+def test_pull_and_push_write_their_snapshot_to_db(gl, tmp_path):
+    db = tmp_path / "x" / "s.jsonl"
+    db.parent.mkdir()
+    r = runner.invoke(app, ["pull", "grp/proj", "--db", str(db)])
+    assert r.exit_code == 0, r.output
+    assert db.exists() and not (tmp_path / "snapshots.jsonl").exists()
+    path = write_spec(tmp_path)
+    gl["pending"]["plan"] = [("changed", "issue", "one: labels")]
+    db.unlink()
+    r = runner.invoke(app, ["push", path, "--yes", "--db", str(db)])
+    assert r.exit_code == 0, r.output
+    assert db.exists() and not (tmp_path / "snapshots.jsonl").exists()
