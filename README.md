@@ -91,8 +91,8 @@ security add-generic-password -a "$USER" -s gitlab-write-token -w '<api PAT>'
 ```bash
 # .env
 GITLAB_URL=https://gitlab.YOURCO.com
-GITLAB_READ_TOKEN=glpat-…
-GITLAB_WRITE_TOKEN=glpat-…
+GITLAB_READ_TOKEN=<key-from-gitlab>
+GITLAB_WRITE_TOKEN=<key-from-gitlab>
 ```
 
 `.env` is the lazy option and fine for a local instance. For a work instance

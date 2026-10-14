@@ -9,6 +9,7 @@ import datetime
 import types
 
 import pytest
+import yaml
 from gitlab.exceptions import GitlabGetError
 
 from gitboard import apply, client
@@ -1638,3 +1639,32 @@ def test_pull_omits_closed_issues_so_the_next_plan_has_no_close_row():
     spec["issues"][0]["closed"] = True  # now closed via the file, pushed, re-pulled
     pulled = apply.spec_from_board(project, board, board_columns(project, board))
     assert apply.diff(pulled, apply.have_from_spec(pulled), pulled) == []
+
+
+def _spec_file(tmp_path, **extra):
+    spec = {"project": "g/p", "board": "B", "issues": [], **extra}
+    path = tmp_path / "b.yaml"
+    path.write_text(yaml.safe_dump(spec))
+    return str(path)
+
+
+def test_load_refuses_an_issue_title_gitlab_would_refuse(tmp_path):
+    path = _spec_file(tmp_path, issues=[{"title": "x" * 256}])
+    with pytest.raises(apply.SpecError, match="256 characters.*255"):
+        apply.load(path)
+
+
+def test_load_refuses_a_milestone_title_gitlab_would_refuse(tmp_path):
+    path = _spec_file(tmp_path, milestones=[{"title": "m" * 256}])
+    with pytest.raises(apply.SpecError, match="milestone title"):
+        apply.load(path)
+
+
+def test_load_takes_255_and_long_titles_lists_what_is_over_100(tmp_path):
+    path = _spec_file(
+        tmp_path,
+        milestones=[{"title": "m" * 101}],
+        issues=[{"title": "x" * 255}, {"title": "short"}, {"title": "y" * 100}],
+    )
+    spec = apply.load(path)
+    assert apply.long_titles(spec) == ["m" * 101, "x" * 255]

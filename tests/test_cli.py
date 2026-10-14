@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 import typer
+import yaml
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -2752,3 +2753,14 @@ def test_pull_and_push_write_their_snapshot_to_db(gl, tmp_path):
     r = runner.invoke(app, ["push", path, "--yes", "--db", str(db)])
     assert r.exit_code == 0, r.output
     assert db.exists() and not (tmp_path / "snapshots.jsonl").exists()
+
+
+def test_plan_warns_about_long_titles_and_escapes_markup(tmp_path):
+    title = "[x] " + "t" * 120
+    spec = {**SPEC, "issues": [{"title": title, "iid": 1, "labels": ["Doing"]}]}
+    path = tmp_path / "long.yaml"
+    path.write_text(yaml.safe_dump(spec))
+    r = runner.invoke(app, ["plan", str(path), "--against", str(path)])
+    assert r.exit_code == 0, r.output
+    assert "long title (124 characters; keep under 100)" in r.output
+    assert "[x] " in r.output  # rich wraps at 80 columns, so the rest is not contiguous

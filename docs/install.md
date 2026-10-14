@@ -55,8 +55,8 @@ board YAML also creates labels or the project). Set the expiry your instance
 allows and note it. Then:
 
 ```bash
-GITLAB_READ_TOKEN=glpat-...    # your read_api PAT: the board is read as you
-GITLAB_WRITE_TOKEN=glpat-...   # the project token: writes are the bot
+GITLAB_READ_TOKEN=<key-from-gitlab>    # your read_api PAT: the board is read as you
+GITLAB_WRITE_TOKEN=<key-from-gitlab>   # the project token: writes are the bot
 ```
 
 Project tokens need Premium on gitlab.com; on a self-hosted CE instance they
@@ -75,8 +75,8 @@ security add-generic-password -a "$USER" -s gitlab-write-token -w '<api PAT>'
 
 ```bash
 GITLAB_URL=https://gitlab.example.com
-GITLAB_READ_TOKEN=glpat-...
-GITLAB_WRITE_TOKEN=glpat-...
+GITLAB_READ_TOKEN=<key-from-gitlab>
+GITLAB_WRITE_TOKEN=<key-from-gitlab>
 ```
 
 Gitignored, and shared with docker compose. Fine for a local instance; for a
