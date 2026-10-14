@@ -50,9 +50,12 @@ class FakeIssue:
         self.assignee = self.due_date = self.web_url = None
 
 
-def fake_board(project="grp/proj", name="Dev Board"):
+def fake_board(project="grp/proj", name="Dev Board", people=()):
     milestones = types.SimpleNamespace(list=lambda **k: [])
-    proj = types.SimpleNamespace(path_with_namespace=project, milestones=milestones)
+    members_all = types.SimpleNamespace(list=lambda **k: list(people))
+    proj = types.SimpleNamespace(
+        path_with_namespace=project, milestones=milestones, members_all=members_all
+    )
     return proj, types.SimpleNamespace(name=name)
 
 
@@ -2018,6 +2021,7 @@ def live_tui(tui, gl, monkeypatch, tmp_path):
         gl["fetch"].append((path, name))
         proj = types.SimpleNamespace(
             path_with_namespace=path,
+            members_all=types.SimpleNamespace(list=lambda **k: []),
             boards=types.SimpleNamespace(list=lambda **k: boards),
         )
         return proj, types.SimpleNamespace(name=name or "Dev Board")
@@ -2047,7 +2051,9 @@ def test_tui_board_switch_cancel_and_nothing_to_switch_to(
 
     def fetch(path, name=None):
         proj = types.SimpleNamespace(
-            path_with_namespace=path, boards=types.SimpleNamespace(list=lambda **k: one)
+            path_with_namespace=path,
+            members_all=types.SimpleNamespace(list=lambda **k: []),
+            boards=types.SimpleNamespace(list=lambda **k: one),
         )
         return proj, types.SimpleNamespace(name="Dev Board")
 
@@ -2764,3 +2770,59 @@ def test_plan_warns_about_long_titles_and_escapes_markup(tmp_path):
     assert r.exit_code == 0, r.output
     assert "long title (124 characters; keep under 100)" in r.output
     assert "[x] " in r.output  # rich wraps at 80 columns, so the rest is not contiguous
+
+
+ALICE = types.SimpleNamespace(username="alice", name="Alice Ng", state="active")
+
+
+def test_pull_force_keeps_people_emails_estimates_and_adds_members(
+    gl, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(board_mod, "fetch", lambda *a, **k: fake_board(people=[ALICE]))
+    hand = {
+        "people": {"Bob": "bruiz"},
+        "emails": {"bruiz": "b@x"},
+        "estimates": {"method": "p85"},
+    }
+    path = write_spec(tmp_path, spec={**SPEC, **hand})
+    r = runner.invoke(app, ["pull", "grp/proj", "--force", "-o", path])
+    assert r.exit_code == 0, r.output
+    spec = apply_mod.load(path)
+    assert spec["people"] == {"Bob": "bruiz", "Alice Ng": "alice"}
+    assert spec["emails"] == {"bruiz": "b@x"} and spec["estimates"] == {"method": "p85"}
+    assert "people" not in apply_mod.load(path + ".base")
+
+
+def test_members_updates_the_spec_people_in_place(gl, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        client, "get_project", lambda g, path: fake_board(people=[ALICE])[0]
+    )
+    path = write_spec(tmp_path)
+    r = runner.invoke(app, ["members", path])
+    assert r.exit_code == 0, r.output
+    assert apply_mod.load(path)["people"] == {"Alice Ng": "alice"}
+    assert "1 added" in r.output
+
+
+def test_members_out_writes_only_the_map(gl, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        client, "get_project", lambda g, path: fake_board(people=[ALICE])[0]
+    )
+    out = tmp_path / "people.yaml"
+    r = runner.invoke(app, ["members", "--project", "grp/proj", "--out", str(out)])
+    assert r.exit_code == 0, r.output
+    assert yaml.safe_load(out.read_text()) == {"people": {"Alice Ng": "alice"}}
+
+
+def test_pull_still_writes_when_members_cannot_be_read(gl, tmp_path, monkeypatch):
+    def refuse(**k):
+        raise client.GitlabProblem("403 Forbidden")
+
+    proj, board = fake_board()
+    proj.members_all = types.SimpleNamespace(list=refuse)
+    monkeypatch.setattr(board_mod, "fetch", lambda *a, **k: (proj, board))
+    path = write_spec(tmp_path, spec={**SPEC, "people": {"Bob": "bruiz"}})
+    r = runner.invoke(app, ["pull", "grp/proj", "--force", "-o", path])
+    assert r.exit_code == 0, r.output
+    assert apply_mod.load(path)["people"] == {"Bob": "bruiz"}
+    assert "members: 403 Forbidden" in r.output

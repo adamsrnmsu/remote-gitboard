@@ -24,6 +24,7 @@ Moved from the root `CLAUDE.md`. Read before changing a module here.
   as one line and exits 1. No tracebacks for a typo'd path.
   `write_errors()` turns a 401/403 during `push` into a message naming the
   scope, since a `read_api` token reads fine and fails only there.
+- **`members.py`** — `fetch(project)` (members_all, active, bots dropped) and pure `merge(people, found)` (adds unknown usernames only; a name clash gets ` (username)`). `_pull_spec(people=True)` carries `KEEP` keys over and merges members on the board file, never the `.base`.
 - **`doctor.py`** — `gitboard doctor`: `Check(status, what, fix)` with status
   ok/warn/fail (warns never fail the exit code). Read only; `http` and `resolve`
   are injected so tests fake them and `--offline` skips both. Messages never carry

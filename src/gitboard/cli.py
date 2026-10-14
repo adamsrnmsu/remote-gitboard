@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
+import yaml
 from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
@@ -35,6 +36,7 @@ from gitboard import gantt as gantt_mod
 from gitboard import graph as graph_mod
 from gitboard import ingest as ingest_mod
 from gitboard import mail as mail_mod
+from gitboard import members as members_mod
 from gitboard import migrate as migrate_mod
 from gitboard import replay as replay_mod
 from gitboard import report as report_mod
@@ -563,7 +565,7 @@ def _refresh_spec(spec_path, parsed, base, proj=None, board=None):
     columns = board_mod.board_columns(proj, board)
     notes = any("discussion" in i for i in (base or parsed)["issues"])
     _rotate_base(spec_path)
-    _pull_spec(proj, board, columns, spec_path, notes=notes, force=True)
+    _pull_spec(proj, board, columns, spec_path, notes=notes, force=True, people=True)
     _pull_spec(proj, board, columns, f"{spec_path}.base", notes=notes)
 
 
@@ -785,8 +787,13 @@ def _write_snapshot(proj, board, out_path=SNAPSHOTS):
     return len(records)
 
 
-def _pull_spec(proj, board, columns, out_file, notes=False, force=False):
-    """Write the live board as YAML. Refuses to clobber unless told to."""
+def _pull_spec(proj, board, columns, out_file, notes=False, force=False, people=False):
+    """Write the live board as YAML. Refuses to clobber unless told to.
+
+    `people=True` (the board file, never its .base) carries the local-only
+    keys over from the file being replaced and adds the project's members to
+    `people:`, so a re-pull keeps them and a first pull fills them.
+    """
     if Path(out_file).exists() and not force:
         raise ConfigError(
             f"{out_file} already exists — edit it, pass a different --out, "
@@ -794,8 +801,34 @@ def _pull_spec(proj, board, columns, out_file, notes=False, force=False):
         )
     Path(out_file).parent.mkdir(parents=True, exist_ok=True)
     spec = apply_mod.spec_from_board(proj, board, columns, notes=notes)
+    if people:
+        import gitlab as gitlab_pkg
+
+        old = _raw_or_empty(out_file)
+        spec.update({k: old[k] for k in members_mod.KEEP if old.get(k)})
+        try:
+            found = members_mod.fetch(proj)
+        except (client.GitlabProblem, gitlab_pkg.exceptions.GitlabError) as exc:
+            # A read token that can see the board may not see its members
+            # (not a member, an old scope): the pull still succeeds.
+            err().print(
+                f"[muted]members: {escape(str(exc))}; people: left as it was[/]"
+            )
+            found = {}
+        merged, _ = members_mod.merge(spec.get("people"), found)
+        if merged:
+            spec["people"] = merged
     Path(out_file).write_text(apply_mod.dump(spec))
     return out_file
+
+
+def _raw_or_empty(path):
+    """The file as plain YAML, or {} when it is missing or unreadable."""
+    try:
+        data = yaml.safe_load(Path(path).read_text())
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _staged_edits(target, existing):
@@ -829,7 +862,7 @@ def _pull_board(
             )
     proj, board = board_mod.fetch(path, name)
     columns = board_mod.board_columns(proj, board)
-    _pull_spec(proj, board, columns, target, notes=notes, force=force)
+    _pull_spec(proj, board, columns, target, notes=notes, force=force, people=True)
     # .base, not .yaml: find_spec and the TUI glob boards/*.yaml,
     # and the /board command may only edit *.yaml — the copy
     # stays pristine. The previous one becomes .base.old.
@@ -942,6 +975,47 @@ def estimate(
                 "[muted]nothing to estimate: every assigned card has a date, or "
                 "too little finished history stands behind it[/]"
             )
+
+    _run(go)
+
+
+@app.command()
+def members(
+    spec: str | None = typer.Argument(
+        None, help="Board YAML whose people: to update. Defaults to the config spec."
+    ),
+    project: str | None = typer.Option(
+        None, "--project", help="group/project. Default: the spec's project:."
+    ),
+    out: str | None = typer.Option(
+        None, "--out", help="Write people: here instead of into the spec."
+    ),
+):
+    """Add the project's GitLab members to the board YAML's people:. Reads only.
+
+    Never renames or drops an entry, so a name changed to match another
+    tool's roster survives.
+    """
+
+    def go():
+        spec_path = spec or (
+            None if project and out else _need(None, "spec", "spec file")
+        )
+        parsed = apply_mod.load(spec_path) if spec_path else {}
+        path = project or parsed.get("project") or _need(None, "project", "project")
+        target = out or spec_path
+        with err().status(f"reading {path} members…"):
+            found = members_mod.fetch(client.get_project(client.gitlab(), path))
+        current = _raw_or_empty(target)
+        merged, added = members_mod.merge(current.get("people"), found)
+        if out and not current.get("board"):
+            current = {}  # --out to a plain file holds the map alone
+        current["people"] = merged
+        Path(target).write_text(apply_mod.dump(current))
+        err().print(
+            f"[added]{len(added)} added[/], {len(found) - len(added)} already in "
+            f"people: -> {_shortest(target)}"
+        )
 
     _run(go)
 
