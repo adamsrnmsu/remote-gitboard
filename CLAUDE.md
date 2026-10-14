@@ -15,7 +15,7 @@ or verification cheaper, it does not belong here.
 ## Commands
 
 Install is perch's: `git clone https://github.com/adamsrnmsu/perch.git && cd perch &&
-make install`. This repo's `make install` only builds its own `.venv` for development.
+make install`. Inside a perch checkout this repo's `make install` runs perch's (one `perch/.venv` for all three apps, nothing built); standalone it builds its own `.venv`.
 
 ```bash
 make up wait install && scripts/seed.py   # local GitLab + demo board
@@ -69,7 +69,7 @@ itself carries it (`/bin/ls -lOd .venv`). Check the `.pth` with `/bin/ls -lO`
 on site-packages; `chflags nohidden <file>` clears it. Budgie avoids it with a
 venv outside the repo. Every make target therefore runs
 `PYTHONPATH=src .venv/bin/python -m gitboard.cli`, which names `src` directly
-and makes edits live with no reinstall. `make link` writes a
+and makes edits live with no reinstall. Inside perch, `VENV` is perch's `.venv`, and `make clean` never deletes it. `make link` writes a
 `~/.local/bin/gitboard` wrapper doing the same. **Do not "simplify" the
 PYTHONPATH away.**
 
