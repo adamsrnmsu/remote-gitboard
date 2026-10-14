@@ -432,6 +432,15 @@ def show(
     _run(go)
 
 
+def _warn_long_titles(parsed):
+    """One muted line per title over TITLE_SHORT; never stops a plan or push."""
+    for title in apply_mod.long_titles(parsed):
+        err().print(
+            f"[muted]long title ({len(title)} characters; keep under "
+            f"{apply_mod.TITLE_SHORT}): {escape(title[:60])}[/]"
+        )
+
+
 @app.command()
 def plan(
     spec: str | None = typer.Argument(None, help="Path to a board YAML file."),
@@ -451,6 +460,7 @@ def plan(
     def go():
         spec_path = _need(spec, "spec", "spec file")
         parsed = apply_mod.load(spec_path)
+        _warn_long_titles(parsed)
         if against:
             old = apply_mod.load(against)
             _print_changes(
@@ -526,6 +536,7 @@ def _write_spec(parsed, base, yes, ignore_drift, db=SNAPSHOTS):
     Returns (changes, project, board); the last two are None when nothing was
     written, so the caller knows whether the board was fetched.
     """
+    _warn_long_titles(parsed)
     gl = client.gitlab(write=True)
     with err().status(f"reading {parsed['project']}…"):
         pending = apply_mod.plan(gl, parsed, base=base)

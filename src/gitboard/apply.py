@@ -83,6 +83,26 @@ def norm_color(value):
     )
 
 
+TITLE_MAX = 255  # GitLab refuses a longer issue or milestone title
+TITLE_SHORT = 100  # past this a title stops reading at a glance
+
+
+def _check_title(path, what, title):
+    if len(title) > TITLE_MAX:
+        raise SpecError(
+            f"{path}: {what} title is {len(title)} characters; GitLab's limit is "
+            f"{TITLE_MAX}: {title[:40]!r}... Shorten it and put the detail in "
+            "the description."
+        )
+
+
+def long_titles(spec):
+    """Milestone then issue titles over TITLE_SHORT: legal, but slow to read."""
+    titles = [m["title"] for m in spec.get("milestones") or []]
+    titles += [i["title"] for i in spec["issues"]]
+    return [t for t in titles if len(t) > TITLE_SHORT]
+
+
 def load(path):
     try:
         with open(path) as f:
@@ -121,6 +141,7 @@ def load(path):
         title = str(m.get("title") or "").strip() if isinstance(m, dict) else ""
         if not title:
             raise SpecError(f"{path}: every entry under milestones: needs a title")
+        _check_title(path, "milestone", title)
         if title in milestones:
             raise SpecError(f"{path}: duplicate milestone {title!r}")
         m["title"] = title
@@ -130,6 +151,7 @@ def load(path):
         title = str(issue.get("title") or "").strip() if isinstance(issue, dict) else ""
         if not title:
             raise SpecError(f"{path}: every issue needs a title")
+        _check_title(path, "issue", title)
         issue["title"] = title
         if title.casefold() in seen:
             raise SpecError(f"{path}: duplicate issue title {title!r}")

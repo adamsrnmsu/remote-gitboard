@@ -83,6 +83,7 @@ Rules for the YAML:
   (`ingest` reads them). A `[x]` in a tasks.md is advisory, not a verdict.
 - Never retitle an entry without an `iid`. With one, a new title is a
   **rename** of that issue: allowed, but the Staged row must say "rename".
+- Keep issue and milestone titles under 100 characters (GitLab refuses over 255); put the detail in the description.
 - Never edit `discussion:` (the team's comments, read-only). Reply by
   appending a string to that issue's `notes:`; `push` posts each once with
   a `*staged via gitboard*` first line.
