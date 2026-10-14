@@ -30,6 +30,7 @@ untouched `<file>.base`, rotating the old one), `--notes` (pull comments as `dis
 the board, the agent edits it, the host runs `plan` then `push`;
 `ingest TASKS.md --into SPEC` folds a tasks.md into the YAML (local only);
 `estimate SPEC [--history h.json]` stages due dates from history (local only);
+`members [SPEC] [--project P] [--out FILE]` (add GitLab members to `people:`; pull and sync do it too and keep `people`/`emails`/`estimates`);
 `status` (every local board: pulled ago, staged, notes, oldest in Verify,
 overdue); `sync SPEC [--project P]` (pulls first when SPEC is missing; plan, y/n, push,
 snapshot, rotate `.base`);

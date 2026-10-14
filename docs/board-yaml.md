@@ -69,6 +69,9 @@ issues:                        # list order = GitLab board order (with a .base)
 `people`
 : Map of display name to GitLab username. `ingest` uses it to turn
   "Alice Ng" in a tasks file into `assignee: alice`. Not sent to GitLab.
+  `gitboard members [SPEC]` adds the project's GitLab members here (display
+  name -> username; never renames or drops one), and every `pull`/`sync`
+  keeps this map, `emails` and `estimates` and adds new members.
 
 `emails`
 : Map of GitLab username to email address. `digest` writes a `.eml` for
