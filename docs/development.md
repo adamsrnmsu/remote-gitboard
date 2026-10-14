@@ -4,14 +4,15 @@ To use gitboard, install perch (`git clone https://github.com/adamsrnmsu/perch.g
 && cd perch && make install`); the commands below are for working on this repo.
 
 ```bash
-make test        # PYTHONPATH=src .venv/bin/pytest -q
+make test        # PYTHONPATH=src $(VENV)/bin/pytest -q; VENV is perch/.venv inside perch, else .venv
 make lint        # ruff check
 make fmt         # ruff format
 make docs        # sphinx-build -W into docs/_build/html
 make activate    # subshell with .venv on PATH (exit to leave)
 ```
 
-Single test: `PYTHONPATH=src .venv/bin/pytest tests/test_board.py -k backlog`.
+Single test: `PYTHONPATH=src .venv/bin/pytest tests/test_board.py -k backlog`
+(inside perch: `../../.venv/bin/pytest`).
 
 Plain venv and pip. No uv (removed after `uv run` proved unreliable here),
 no lockfile. Five dependencies; `pip freeze` is the whole story if you ever

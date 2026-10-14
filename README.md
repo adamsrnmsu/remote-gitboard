@@ -33,8 +33,10 @@ perch gb show group/project        # gitboard, run from the perch checkout
 
 The rest of this README writes `gitboard` for `perch gb`. Working on gitboard
 itself (this repo, at `apps/remote-gitboard` in a perch checkout): `make
-install` builds this repo's `.venv`, and the targets (`make show`, `make plan`,
-`make push`) run `PYTHONPATH=src .venv/bin/python -m gitboard.cli`.
+install` runs perch's (one `perch/.venv` for all three apps, nothing built),
+and the targets (`make show`, `make plan`, `make push`) run
+`PYTHONPATH=src <venv>/bin/python -m gitboard.cli` with that venv. A
+standalone clone builds its own `.venv` instead.
 
 ## Pointing it at your instance
 

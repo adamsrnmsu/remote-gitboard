@@ -1,7 +1,8 @@
 # Commands
 
-`gitboard` below means `PYTHONPATH=src .venv/bin/python -m gitboard.cli`
-or the `make link` wrapper. Full option reference: {doc}`reference`.
+`gitboard` below is the `gitboard` command perch's `make install` links
+(or, in a standalone checkout, `PYTHONPATH=src .venv/bin/python -m gitboard.cli`
+or the `make link` wrapper). Full option reference: {doc}`reference`.
 
 ## Cheat sheet
 
@@ -17,6 +18,8 @@ gitboard pull group/project --force         # overwrite an existing file
 gitboard pull group/project --notes         # also pull each issue's discussion (read-only)
 gitboard pull group/project --force --discard-edits   # overwrite even with unapplied edits
 gitboard pull --all                         # every board that has a boards/*.yaml
+gitboard members boards/x.yaml              # add the project's GitLab members to people:
+gitboard members --project g/p --out f.yaml # the map alone, into another file
 gitboard snapshot group/project             # append board state to snapshots.jsonl (--all: every board)
 gitboard status                             # per board: pulled ago, staged, notes, Q: waiting, oldest in Verify, overdue, snapshot ago
 gitboard tui group/project                  # interactive loop, see below
@@ -85,6 +88,19 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
   and rotates the previous one to `<file>.base.old`. `--notes` adds a
   read-only `discussion:` list per issue. Every pull also appends a
   snapshot. `--all` pulls every board that has a `boards/*.yaml`.
+  A pull over an existing file keeps its `people:`, `emails:` and
+  `estimates:` (local keys GitLab knows nothing of) and adds any new project
+  members to `people:`. If the token cannot list members, the pull still
+  writes the board and says so in one line.
+
+`members [SPEC] [--project GROUP/PROJ] [--out FILE]`
+: Adds the project's GitLab members (active people, bots left out,
+  inherited members included) to the board YAML's `people:` map, display
+  name -> username. It only adds: a name you changed, say to match another
+  tool's roster, is never renamed or dropped, and a display name already
+  taken gets ` (username)` after it. SPEC defaults to the config's `spec`
+  and the project to SPEC's `project:`. `--out` writes the map to another
+  file instead. Reads only (read token).
 
 `plan`
 : A three-way merge: the YAML, the live board, and `<spec>.base` as the
@@ -98,6 +114,12 @@ Global flags go before the command: `--url`, `--read-token`, `--write-token`,
 
 `plan --against FILE`
 : Diffs two YAML files. Never opens a connection or looks for a token.
+
+Titles
+: An issue or milestone title over 255 characters (GitLab's limit) makes the
+  YAML refuse to load, naming the title. `plan`, `push` and `sync` print a
+  muted line for each title over 100 characters: legal, but too long to read
+  at a glance. Keep the detail in the description.
 
 `push`
 : Creates and updates; never deletes an issue. `closed: true` closes one and

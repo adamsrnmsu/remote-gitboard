@@ -7,13 +7,17 @@ git clone https://github.com/adamsrnmsu/perch.git && cd perch && make install
 perch gb show group/project
 ```
 
-`make install` in perch clones this repo into `apps/remote-gitboard`, builds
-the environments and links the commands. Nothing here is installed by hand.
+`make install` in perch clones this repo into `apps/remote-gitboard`, puts
+the dependencies of all three apps into one `perch/.venv` (nothing of ours
+is built) and links a `gitboard` command that runs this checkout's `src/`.
+Nothing here is installed by hand.
 
 ## Working on gitboard
 
-In `apps/remote-gitboard`, `make install` builds this repo's own `.venv` and
-every `make` target depends on it. The CLI from a checkout is:
+Inside a perch checkout, `make install` here runs perch's, and every `make`
+target uses `perch/.venv`; `make clean` never deletes it. Run the CLI as
+`gitboard` (or `perch gb SUB -p NAME`). Standalone, `make install` builds
+this repo's own `.venv` and the CLI from the checkout is:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m gitboard.cli show group/project
@@ -29,7 +33,7 @@ GitLab: avatar, **Edit profile**, **Access**, **Personal access tokens**. Mint t
 
 | Slot | Scope | Used by |
 |---|---|---|
-| `GITLAB_READ_TOKEN` | `read_api` | `show`, `pull`, `snapshot`, `tui`, the `/board` AI pass |
+| `GITLAB_READ_TOKEN` | `read_api` | `show`, `pull`, `members`, `snapshot`, `tui`, the `/board` AI pass |
 | `GITLAB_WRITE_TOKEN` | `api` | `push`, `migrate-comments` |
 
 `api` is the only scope that writes issues and labels; it is broad, which is
@@ -82,6 +86,12 @@ GITLAB_WRITE_TOKEN=<key-from-gitlab>
 Gitignored, and shared with docker compose. Fine for a local instance; for a
 work instance prefer the keychain, since gitignore does not survive `cp -r`
 or a folder sync.
+
+`.env` is found by walking up from the directory gitboard runs in. Through
+perch that is `projects/NAME/`, so each project's `projects/NAME/.env`
+(written by `perch init` with these placeholders) carries its own URL and
+keys, and `perch/.env` is the fallback for a project without one. Only the
+first `.env` found is read.
 
 Resolution order: `--read-token` / `--write-token`, then the env var, then
 `.env`, then the keychain item. `GITLAB_TOKEN` and the `gitlab-token` keychain
